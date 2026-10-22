@@ -334,8 +334,8 @@
 //     write: the Prompt 14 hook is a no-op tonight); the conflicts list renders;
 //     the panel is screenshotted with one range in each state in both themes at
 //     desktop and 390 px (eastvac-panel*.png; dark: navy body, active segment
-//     white on its tone); the calendar shows a dashed / hollow / filled diamond
-//     on the three days and NO Silvis dot; the day editor's East line carries the
+//     white on its tone); the calendar's vacation bar shows 'Khan?' (unreviewed) and
+//     'Khan' (away) and nothing on the home day, with NO Silvis vacation entry (10/21); the day editor's East line carries the
 //     state and Khan's primary reason reads 'on vacation (East vacation,
 //     unreviewed ...)', while on the home Tuesday he is eligible (Tue lifted); the
 //     coverage strip reads 'unreviewed East vacations: 1 (Khan)' and opens Setup
@@ -361,7 +361,7 @@
 //     (nothing written); the
 //     last-refresh line names the newest in-app run and the harness's server
 //     run; an office page reads the derived rows with its own token and shows
-//     Khan's dot (no diamond), "Off: Khan" and a read-only "set by the scheduler"
+//     Khan in the vacation bar (no East entry), "Off: Khan" and a read-only "set by the scheduler"
 //     line (p31a-office-timeoff.png); ?public=1 never calls either function.
 //   - smoke clean on main (Faraz 9/29): no premise is a dated fact about a
 //     surgeon or a day - each is derived from the rows / blob / East tables the
@@ -2508,12 +2508,12 @@ try {
       const problems = [];
       if (got.join() !== want.join()) problems.push(`header ${got.join(" ")}`);
       if (wkCols.join() !== wantWk.join()) problems.push(`weekend tint on columns ${wkCols.join(",") || "none"} (want ${wantWk.join(",")})`);
-      if (labelOn.join() !== "Fri") problems.push(`'weekend unit' label on ${labelOn.join(",") || "no header"} (want Fri)`);
+      if (labelOn.length) problems.push(`'weekend unit' label on ${labelOn.join(",")} (none since 10/21 - the tint and the legend say it)`);
       if (cells.length % 7 !== 0 || firstDow !== (mode === "mon" ? 1 : 0)) problems.push(`${cells.length} cells from ${cells[0].day} (getDay ${firstDow})`);
       if ((await modeOf()) !== mode) problems.push(`data-week-start ${await modeOf()}`);
       if ((await storedMode()) !== mode) problems.push(`localStorage silvis-week-start ${await storedMode()}`);
       if (problems.length) fail(`Item A week start ${where}: ${problems.join("; ")}`);
-      else ok(`Item A week start ${where}: header ${got.join(" ")}, weekend tint on columns ${wkCols.join(",")}, 'weekend unit' label on Fri, ${cells.length} cells from ${cells[0].day}, data-week-start + localStorage '${mode}'`);
+      else ok(`Item A week start ${where}: header ${got.join(" ")}, weekend tint on columns ${wkCols.join(",")}, no header label, ${cells.length} cells from ${cells[0].day}, data-week-start + localStorage '${mode}'`);
     };
     await expectHdr("sun", "default (October 2026, nothing stored yet but the effect wrote 'sun')");
     const setWeekStart = async (mode) => { await page.click('button[data-tab="settings"]'); await page.click(`[data-testid=week-start-${mode}]`); await page.waitForTimeout(150); const p = await pressed(); if (p !== (mode === "mon" ? "sun:false,mon:true" : "sun:true,mon:false")) fail(`Item A Settings control after ${mode}: aria-pressed reads ${p}`); await showMonth(2026, 9); };
@@ -3021,7 +3021,7 @@ try {
   // them off the grid for everyone ("it makes it busy ... just want to improve readability"): no [data-badge="E"] / "F"
   // / "f" in any cell, no "East-derived:" in any cell title, no "East-derived week" / "East forecast" legend line -
   // proven on a grid that actually LOADED (cells and filled cells > 0), so a clean grid is never an empty one. The
-  // confirm badge and the East-vacation diamonds are not part of it and keep their own checks. The East information
+  // confirm badge and the East-vacation entries (diamonds until 10/21, the vacation bar since) are not part of it and keep their own checks. The East information
   // must still reach the scheduler through the day editor - the block after the screenshot proves that.
   await showMonth(2026, 10);
   const novCells = await readCells();
@@ -3250,7 +3250,7 @@ try {
   //    "locked holder breaks" line, while the served row holds that lock), (d) the first served row from November 2026
   //    whose source is 'east-derived' (the 9/23 publish's derived primary locks, 12/7-12/13): 'Source: east-derived' for
   //    the scheduler, 'Source: generated' for everyone else (review 9/25; a console line when no such row is served);
-  //  - the month grid + legend of November 2026 and of the East-vacation month (the scheduler's diamonds + legend line);
+  //  - the month grid + legend of November 2026 and of the East-vacation month (the scheduler's East entries in the vacation bar + legend line);
   //    on ?public=1 the grid never drew an East-vacation marker (eastVacPeople is empty in public mode since 9/23), so the
   //    public grid check is a no-op by construction - that page's day editor is its E3 proof;
   //  - the coverage strip (the scheduler's "forecast-busy as primary", "East feed through", "unreviewed East vacations");
@@ -3263,7 +3263,7 @@ try {
   // surface's visible text or in any title / aria-label inside it, and no [data-eastvac] element. A day's NOTE is data,
   // not an E3 code surface (the importer's 11/9-11/16 seed notes said "East primary week ..." until Faraz's 9/26
   // rewording - the seed is neutral since 9/26, the live rows follow with the seed apply + a note-only rewrite): the grid's
-  // "note: ..." hover bit, the NOTE marker's hover and the editor's read-only "Note: ..." line (editor-note-view) are left
+  // "note: ..." hover bit (the NOTE marker until 10/21) and the editor's read-only "Note: ..." line (editor-note-view) are left
   // out of the match and reported by day as PENDING (live rows not yet reworded) - never silently. The
   // main page (the scheduler) is checked on the same surfaces and must still show every one of them. The grid goes back
   // to November 2026 afterwards.
@@ -3290,7 +3290,6 @@ try {
       [root].concat(Array.from(root.querySelectorAll("[title],[aria-label]"))).forEach(el => ["title", "aria-label"].forEach(a => {
         let v = el.getAttribute(a);
         if (!v) return;
-        if (a === "title" && el.classList && el.classList.contains("cal-note")) { noteAt(el, v); return; }   // the NOTE marker's hover = the note
         if (a === "title") { const bits = v.split(" | "); bits.filter(b => b.indexOf("note: ") === 0).forEach(b => noteAt(el, b.slice(6))); v = bits.filter(b => b.indexOf("note: ") !== 0).join(" | "); }
         if (RE.test(v)) hits.push(a + " '" + v.slice(0, 140) + "'");
       }));
@@ -3334,7 +3333,8 @@ try {
       const legend = await e3Scan(pg, ".cal-legend");
       const legendText = await pg.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
       grid.noteKeys.forEach(k => e3NoteDays.add(k));
-      return { cells: cells.length, filled: cells.filter(c => c.p || c.ext).length, hits: grid.hits.concat(legend.hits), diamonds: await pg.$$eval("[data-testid=cal-grid] [data-eastvac]", els => els.length), legendText };
+      const lk = await pg.$$eval("[data-testid=cal-grid] .cal-lock", els => ({ n: els.length, offOpen: els.filter(e => { const ln = e.closest(".cal-line"); return !ln || !ln.querySelector(".cal-open"); }).length }));
+      return { cells: cells.length, filled: cells.filter(c => c.p || c.ext).length, hits: grid.hits.concat(legend.hits), diamonds: await pg.$$eval("[data-testid=cal-grid] [data-eastvac]", els => els.length), legendText, locks: lk.n, locksOffOpen: lk.offOpen };
     };
     const e3Editor = async (pg, day) => {
       const y = Number(day.slice(0, 4)), m0 = Number(day.slice(5, 7)) - 1;
@@ -3428,8 +3428,11 @@ try {
       else ok(`Item E3 (scheduler): the coverage strip keeps its three East items (${want.join(", ")}) - '${strip.text.slice(0, 160)}'`);
       const vacM = [Number(E3_VAC_DAY.slice(0, 4)), Number(E3_VAC_DAY.slice(5, 7)) - 1];
       const gV = await e3Grid(page, vacM[0], vacM[1]);
-      if (!gV.diamonds || !/= East vacation/.test(gV.legendText)) fail(`Item E3 (scheduler): ${E3_MONTHS[vacM[1]]} ${vacM[0]} lost the East-vacation diamonds (${gV.diamonds}) or their legend line: '${gV.legendText.slice(0, 200)}'`);
-      else ok(`Item E3 (scheduler): ${E3_MONTHS[vacM[1]]} ${vacM[0]} keeps ${gV.diamonds} East-vacation diamond(s) and the legend's '= East vacation' line`);
+      if (!gV.diamonds || !/an East vacation not reviewed yet/.test(gV.legendText)) fail(`Item E3 (scheduler): ${E3_MONTHS[vacM[1]]} ${vacM[0]} lost the East-vacation entries in the vacation bar (${gV.diamonds}) or their legend line: '${gV.legendText.slice(0, 200)}'`);
+      else ok(`Item E3 (scheduler): ${E3_MONTHS[vacM[1]]} ${vacM[0]} keeps ${gV.diamonds} East-vacation entr(ies) in the vacation bar and the legend's 'name? ... an East vacation not reviewed yet' line`);
+      const gNs = await e3Grid(page, 2026, 10);
+      if (!gNs.locks) fail("Item E3 (scheduler): November 2026 shows no padlock - the served rows carry import locks to 11/29 and the scheduler keeps the grid's padlock");
+      else ok(`Item E3 (scheduler): November 2026 keeps ${gNs.locks} padlock(s) on the grid (the scheduler's)`);
       const eD = await e3Editor(page, factsS.derivedDay);
       const eV = await e3Editor(page, E3_VAC_DAY);
       const eL = await e3Editor(page, E3_LOCK_DAY);
@@ -3599,6 +3602,9 @@ try {
         else if (gN.hits.length || gV.hits.length) fail(`${T}: the month grid / legend shows East detail - November 2026: ${hitsText(gN.hits) || "none"}; ${E3_MONTHS[vacM[1]]} ${vacM[0]}: ${hitsText(gV.hits) || "none"}`);
         else if (R.kind === "public") ok(`${T}: November 2026 (${gN.cells} cells, ${gN.filled} filled) and ${E3_MONTHS[vacM[1]]} ${vacM[0]} (${gV.cells} cells) - no diamond, no East hover, no East legend line (a no-op here by construction: public mode never drew an East-vacation marker, eastVacPeople is empty there since 9/23; this page's day editor below is its E3 proof)`);
         else ok(`${T}: November 2026 (${gN.cells} cells, ${gN.filled} filled) and ${E3_MONTHS[vacM[1]]} ${vacM[0]} (${gV.cells} cells; the rules on this page hold ${facts.eastVac[E3_VAC_DAY] ? E3_VAC_DAY + " as " + facts.eastVac[E3_VAC_DAY] + " East vacation - before E3 this grid drew its diamond" : "no East vacation on " + E3_VAC_DAY}) - no diamond, no East hover, no East legend line`);
+        // 10/21: the grid's padlock is the scheduler's; everyone else sees one only on a locked slot that is still OPEN, ?public=1 none
+        if (R.kind === "public" ? gN.locks : gN.locksOffOpen) fail(`${T}: November 2026 shows ${R.kind === "public" ? gN.locks + " padlock(s) on ?public=1" : gN.locksOffOpen + " padlock(s) on an assigned slot"} - since 10/21 the grid's padlock is the scheduler's (a non-scheduler sees one only on a locked OPEN slot)`);
+        else ok(`${T}: November 2026 shows no padlock on an assigned slot (${gN.locks} on a locked OPEN slot)`);
         if (!facts.eastVac[E3_VAC_DAY]) fail(`${T}: this page's rules hold no East vacation on ${E3_VAC_DAY} - the harness's east_feed overlay did not reach it, so the East-vacation checks prove nothing`);
         // the day editor: the derived day, the East-vacation day, 10/15, the first served east-derived row
         const days = [facts.derivedDay || sched.derivedDay, E3_VAC_DAY, E3_LOCK_DAY, E3_SRC_DAY].filter(Boolean).filter((d, i, a) => a.indexOf(d) === i);
@@ -3838,8 +3844,8 @@ try {
     const e3NoteList = Array.from(e3NoteDays).sort();
     const e3NoteFierce = e3NoteList.every((d) => d >= "2026-11-09" && d <= "2026-11-16");
     if (e3NoteDays.size) console.log(`     E3 PENDING - live rows (data, not an E3 code surface): ${e3NoteDays.size} served day note(s) name East (${e3NoteList.join(", ")})` + (e3NoteFierce
-      ? ` - the 11/9-11/16 rows' pre-9/26 notes ("Fierce 9/22: East primary week 11/9 = Silvis backup ..."). Every role, ?public=1 included, reads them in the grid hover, the NOTE marker and the editor's Note line. Faraz decided 9/26 (neutral text: who and which days): the seed is reworded (docs/silvis-seed.json existingAssignments notes); the live rows follow with the seed apply (seed-owned days) and a snapshot-first note-only rewrite (the days the app owns).`
-      : ` - not only the 11/9-11/16 rows reworded 9/26: every role, ?public=1 included, reads these notes in the grid hover, the NOTE marker and the editor's Note line; each day needs Faraz's decision (reword the seed and the live row).`));
+      ? ` - the 11/9-11/16 rows' pre-9/26 notes ("Fierce 9/22: East primary week 11/9 = Silvis backup ..."). Every role, ?public=1 included, reads them in the grid hover and the editor's Note line. Faraz decided 9/26 (neutral text: who and which days): the seed is reworded (docs/silvis-seed.json existingAssignments notes); the live rows follow with the seed apply (seed-owned days) and a snapshot-first note-only rewrite (the days the app owns).`
+      : ` - not only the 11/9-11/16 rows reworded 9/26: every role, ?public=1 included, reads these notes in the grid hover and the editor's Note line; each day needs Faraz's decision (reword the seed and the live row).`));
     else ok("Item E3: no served day note names East in the months and days checked");
     // the main page's own session token back (each role page above stored its own in the shared origin storage)
     await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
@@ -4663,8 +4669,8 @@ try {
     const entries = Array.from(document.querySelectorAll("[data-testid=week-rows] [data-kind=surgeon]"));
     const byName = {};
     for (const e of entries) { const nm = (e.textContent.trim().split(" ").pop() || ""); if (!byName[nm]) byName[nm] = probe(e); }
-    const dots = Array.from(document.querySelectorAll("[data-testid=cal-grid] [data-vac]")).map(d => { const bg = parseRgb(getComputedStyle(d).backgroundColor); const cell = bgOf(d.parentElement); return { who: d.getAttribute("data-vac"), ratio: bg ? Math.round(ratio(bg, cell) * 100) / 100 : null }; });
-    return { h1: probe(document.querySelector("h1")), rows: byName, bodyBg: getComputedStyle(document.body).backgroundColor, dots };
+    const vacBars = Array.from(document.querySelectorAll("[data-testid=cal-grid] [data-testid=cal-vac]")).map(b => { const fg = parseRgb(getComputedStyle(b).color), bg = parseRgb(getComputedStyle(b).backgroundColor); return { day: b.closest("[data-day]").getAttribute("data-day"), who: b.getAttribute("data-vac-ids"), ratio: fg && bg ? Math.round(ratio(fg, bg) * 100) / 100 : null }; });
+    return { h1: probe(document.querySelector("h1")), rows: byName, bodyBg: getComputedStyle(document.body).backgroundColor, vacBars };
   });
   await page.click('button[data-tab="settings"]');
   await page.click("button:has-text('Dark')");
@@ -4688,8 +4694,8 @@ try {
     if (unmeasured.length) fail(`dark mode: no week-row entry measured for ${unmeasured.join(", ")} although the served rows put them in the October 2026 weeks`);
   }
   if (!darkProbe.h1 || darkProbe.h1.ratio === null || darkProbe.h1.ratio < 3) fail("dark mode: header title low contrast: " + JSON.stringify(darkProbe.h1)); else ok(`dark mode: h1 '${darkProbe.h1.text}' ${darkProbe.h1.ratio}:1 on the header`);
-  const dimDots = darkProbe.dots.filter(d => d.ratio === null || d.ratio < 2);
-  if (dimDots.length) fail("dark mode: vacation dots invisible on their cell: " + JSON.stringify(dimDots.slice(0, 4))); else ok(`dark mode: ${darkProbe.dots.length} vacation dot(s) visible on their cells`);
+  const dimBars = darkProbe.vacBars.filter(d => d.ratio === null || d.ratio < 4.5);
+  if (dimBars.length) fail("dark mode: vacation bar names below 4.5:1 on the bar: " + JSON.stringify(dimBars.slice(0, 4))); else ok(darkProbe.vacBars.length ? `dark mode: ${darkProbe.vacBars.length} vacation bar(s) in October 2026, the names readable on the bar` : "dark mode: no vacation bar in October 2026 (live time_off) - the East-vacation fixture check measures the bar's colours in both themes");
   await page.screenshot({ path: path.join(OUT, "calendar-oct-dark.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-oct-dark.png");
   // Prompt 16 B9 (b) at 390 px in the dark theme
@@ -9531,14 +9537,45 @@ try {
       await shotPanel("eastvac-panel-390-dark.png");
       await page.setViewportSize({ width: 1180, height: 900 });
       await setTheme(false);
-      // calendar markers on the three first days (one per state): a diamond - dashed / hollow / filled - and no Silvis dot
-      const markerOn = async (d) => { const [y, m] = d.split("-"); await showMonth(Number(y), Number(m) - 1); return page.$eval(`[data-day="${d}"]`, el => { const mk = el.querySelector("[data-eastvac]"); const cs = mk ? getComputedStyle(mk) : null; return { state: mk ? mk.getAttribute("data-eastvac-state") : null, who: mk ? mk.getAttribute("data-eastvac") : null, border: cs ? cs.borderTopStyle : null, bg: cs ? cs.backgroundColor : null, transform: cs ? cs.transform : null, dot: !!el.querySelector("[data-vac=s1]") }; }); };
+      // calendar (10/21): the vacation bar on the three first days (one per state) - 'name?' unreviewed, 'name' away, nothing on
+      // the home day (its hover keeps the state) - and no Silvis vacation entry for s1 (a derived vacation must not write time_off)
+      const markerOn = async (d) => { const [y, m] = d.split("-"); await showMonth(Number(y), Number(m) - 1); return page.$eval(`[data-day="${d}"]`, el => { const mk = el.querySelector("[data-eastvac]"); const nm = mk ? mk.querySelector(".cal-name") : null; return { state: mk ? mk.getAttribute("data-eastvac-state") : null, who: mk ? mk.getAttribute("data-eastvac") : null, name: nm ? nm.textContent : null, title: el.getAttribute("title") || "", dot: !!el.querySelector("[data-vac=s1]") }; }); };
       const mk = {};
       for (const [st, r] of want) mk[st] = await markerOn(r.start);
-      if (want.some(([st]) => !mk[st] || mk[st].state !== st || mk[st].who !== "s1")) fail("calendar East-vacation markers: expected unreviewed / away / home on the three fixture days for s1, got " + JSON.stringify(mk));
-      else if (mk.unreviewed.border !== "dashed" || mk.away.border !== "solid" || mk.away.bg !== "rgba(0, 0, 0, 0)" || mk.home.bg === "rgba(0, 0, 0, 0)" || !/matrix/.test(mk.home.transform)) fail("calendar East-vacation markers: unreviewed = dashed, away = hollow, home = filled, all rotated diamonds: " + JSON.stringify(mk));
-      else if (Object.values(mk).some(x => x.dot)) fail("calendar East-vacation markers: a Silvis vacation dot for s1 sits on a fixture day (a derived vacation must not write time_off)");
-      else ok(`calendar: East-vacation markers ${want.map(([st, r]) => r.start + " " + st).join(", ")} - dashed / hollow / filled diamonds, no Silvis dot`);
+      if (mk.unreviewed.state !== "unreviewed" || mk.unreviewed.who !== "s1" || mk.away.state !== "away" || mk.away.who !== "s1" || mk.home.state !== null) fail("calendar East vacations: expected s1 unreviewed and away in the vacation bar and nothing on the home day, got " + JSON.stringify(mk));
+      else if (!/\?$/.test(mk.unreviewed.name || "") || /\?$/.test(mk.away.name || "") || !/East vacation: [^|]*\(home/.test(mk.home.title)) fail("calendar East vacations: 'name?' when unreviewed, a plain name when away, the home day's state in its hover: " + JSON.stringify(mk));
+      else if (Object.values(mk).some(x => x.dot)) fail("calendar East vacations: a Silvis vacation entry for s1 sits on a fixture day (a derived vacation must not write time_off)");
+      else ok(`calendar: East vacations in the bar - ${want.map(([st, r]) => r.start + " " + st + " '" + (mk[st].name || "-") + "'").join(", ")} (home: hover only), no Silvis vacation entry`);
+      // 10/21 review: the bar joins the next / previous day inside a week row when it shows the same people (and the two days are both
+      // preview or both not) - the expectation derived from the drawn bars of April 2027 (the fixture's unreviewed run Tue 4/6 - Fri 4/9)
+      {
+        await showMonth(2027, 3);
+        const jn = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map((e, i) => { const b = e.querySelector("[data-testid=cal-vac]"); const key = b ? Array.from(b.querySelectorAll("[data-vac],[data-eastvac]")).map(x => (x.getAttribute("data-vac") || x.getAttribute("data-eastvac")) + (/\?$/.test((x.querySelector(".cal-name") || {}).textContent || "") ? "?" : "")).sort().join(",") : null; return { day: e.getAttribute("data-day"), col: i % 7, pv: e.classList.contains("cal-preview"), key, l: !!b && b.classList.contains("cal-vac-l"), r: !!b && b.classList.contains("cal-vac-r") }; }));
+        const bad = [], joins = [];
+        jn.forEach((c, i) => { if (!c.key) return; const p = jn[i - 1], n = jn[i + 1]; const wl = c.col > 0 && !!p && p.key === c.key && p.pv === c.pv, wr = c.col < 6 && !!n && n.key === c.key && n.pv === c.pv; if (wl !== c.l || wr !== c.r) bad.push(c.day + " l=" + c.l + "/" + wl + " r=" + c.r + "/" + wr); if (c.r) joins.push(c.day); });
+        const fx = jn.filter(c => c.day >= "2027-04-06" && c.day <= "2027-04-09");
+        if (bad.length) fail("calendar vacation bar: the joins differ from the drawn people (day l=got/want r=got/want): " + bad.join("; "));
+        // the fixture's unreviewed run 4/6-4/9 shows "Khan?" on all four days; whether two of them join depends on who else is off
+        // (the served time_off) - the derived check above holds every join to the drawn people, so here: Khan? on each day, and at
+        // least one join in the month (the check above is never vacuous)
+        else if (fx.length !== 4 || !fx.every(c => /(^|,)s1\?(,|$)/.test(c.key || "")) || !joins.length) fail("calendar vacation bar: the fixture's unreviewed run 4/6-4/9 should show 'Khan?' (s1?) in each day's bar, and April 2027 should have a join: " + JSON.stringify(fx) + " joins " + joins.length);
+        else ok(`calendar vacation bar: April 2027's ${jn.filter(c => c.key).length} bar(s) join exactly where the same people are off inside a week row (${joins.length} join(s); the fixture's 4/6-4/9 run ${fx.map(c => c.day.slice(5) + (c.l ? "<" : "") + (c.r ? ">" : "")).join(" ")})`);
+        // the bar's colours are the theme's tokens, light then dark (the fixture day, so the check never depends on live rows)
+        const barColours = () => page.$eval(`[data-day="${EV[0].start}"] [data-testid=cal-vac]`, el => ({ bg: getComputedStyle(el).backgroundColor, fg: getComputedStyle(el).color }));
+        const lightC = await barColours();
+        await setTheme(true); await showMonth(2027, 3);
+        const darkC = await barColours();
+        await setTheme(false); await showMonth(2027, 3);
+        if (lightC.bg !== "rgb(211, 218, 227)" || lightC.fg !== "rgb(47, 60, 79)" || darkC.bg !== "rgb(42, 58, 92)" || darkC.fg !== "rgb(210, 220, 234)") fail("calendar vacation bar: the colours are not the theme's vacBar / vacText (light #D3DAE3 / #2F3C4F, dark #2A3A5C / #D2DCEA): " + JSON.stringify({ lightC, darkC }));
+        else ok("calendar vacation bar: light " + lightC.fg + " on " + lightC.bg + ", dark " + darkC.fg + " on " + darkC.bg + " - the theme's vacText on vacBar (7.93:1 / 8.16:1)");
+        // at 390 px the bar shows codes, never names: 'FAK?' while unreviewed, 'FAK' while away
+        await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+        const phone = (d) => page.$eval(`[data-day="${d}"] [data-testid=cal-vac] [data-eastvac]`, el => { const c = el.querySelector(".cal-code"), n = el.querySelector(".cal-name"); return { code: c && getComputedStyle(c).display !== "none" ? c.textContent : null, nameShown: !!n && getComputedStyle(n).display !== "none" }; }).catch(() => null);
+        const pU = await phone(EV[0].start), pA = await phone(EV[1].start);
+        await page.setViewportSize({ width: 1180, height: 900 }); await page.waitForTimeout(300);
+        if (!pU || !pA || pU.nameShown || pA.nameShown || !/^[A-Z]{2,4}\?$/.test(pU.code || "") || !/^[A-Z]{2,4}$/.test(pA.code || "")) fail("calendar vacation bar at 390 px: codes, not names - 'CODE?' unreviewed, 'CODE' away: " + JSON.stringify({ pU, pA }));
+        else ok(`calendar vacation bar at 390 px: codes, no names - '${pU.code}' (unreviewed) / '${pA.code}' (away)`);
+      }
       await showMonth(2027, 3);
       await page.screenshot({ path: path.join(OUT, "calendar-eastvac-2027-04.png"), fullPage: false });
       ok("screenshot test/ui/out/calendar-eastvac-2027-04.png");
@@ -9677,7 +9714,7 @@ try {
     //      the strip's total - that counts RANGES with a short or held day, and the schedule_days here are the live project's:
     //      once a later period is published Khan may hold a role inside EV[0] (or primary the day before), EV[0] then carries
     //      a warning before the vacations and the total would not move;
-    //  (b) the office coordinator: the derived read went out with ITS token; an s1 dot (no diamond) on EV[0].start; the day
+    //  (b) the office coordinator: the derived read went out with ITS token; Khan in the vacation bar (no East entry) on EV[0].start; the day
     //      summary "Off: Khan"; its Time off list's s1 line "set by the scheduler" with no button (item 3 - it may edit every
     //      time_off row, never these); no East card; no East word there. (A surgeon's Time off list shows his own vacations only.)
     {
@@ -9778,9 +9815,9 @@ try {
         if ((await sa.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2027") await sa.fill("[data-testid=cal-year-input]", "2027");
         await sa.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "April 2027"; }, null, { timeout: 10000 });
         await sa.waitForTimeout(400);
-        const cell = await sa.$eval(`[data-day="${EV[0].start}"]`, el => ({ dot: !!el.querySelector("[data-vac=s1]"), diamond: el.querySelectorAll("[data-eastvac]").length, dotsTitle: ((el.querySelector(".cal-dots") || {}).getAttribute ? el.querySelector(".cal-dots").getAttribute("title") : "") || "" })).catch(() => null);
-        if (!cell || !cell.dot || cell.diamond || !/On vacation: .*Khan/.test(cell.dotsTitle) || EASTWORD_A3.test(cell.dotsTitle)) fail(`P31A A3 (office): ${EV[0].start} should carry Khan's round vacation dot (no diamond, no East word): ` + JSON.stringify(cell));
-        else ok(`P31A A3 (office): ${EV[0].start} carries Khan's vacation dot ('${cell.dotsTitle}') - no diamond, no East word`);
+        const cell = await sa.$eval(`[data-day="${EV[0].start}"]`, el => ({ dot: !!el.querySelector("[data-testid=cal-vac] [data-vac=s1]"), diamond: el.querySelectorAll("[data-eastvac]").length, dotsTitle: ((el.querySelector("[data-testid=cal-vac]") || {}).getAttribute ? el.querySelector("[data-testid=cal-vac]").getAttribute("title") : "") || "" })).catch(() => null);
+        if (!cell || !cell.dot || cell.diamond || !/On vacation: .*Khan/.test(cell.dotsTitle) || EASTWORD_A3.test(cell.dotsTitle)) fail(`P31A A3 (office): ${EV[0].start} should carry Khan in the vacation bar (no East entry, no East word): ` + JSON.stringify(cell));
+        else ok(`P31A A3 (office): ${EV[0].start} carries Khan in the vacation bar ('${cell.dotsTitle}') - no East entry, no East word`);
         await sa.click(`[data-day="${EV[0].start}"]`);
         await sa.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
         await sa.waitForTimeout(300);
@@ -10408,7 +10445,7 @@ try {
     if (monthLabel !== genMonthLabel || previewCells.length !== genDays || previewCells[0] !== genStart || previewStyled !== "dashed") fail(`Calendar preview: month ${monthLabel}, ${previewCells.length} preview cells (${previewCells[0]}..), outline ${previewStyled} - expected ${genMonthLabel}, ${genDays} cells from ${genStart}, dashed`); else ok(`Calendar preview: ${genMonthLabel}, ${genDays} cells ${mdOf(genStart)}..${mdOf(genEnd)} drawn with the dashed preview outline + banner`);
     await page.screenshot({ path: path.join(OUT, "generate-preview.png"), fullPage: true });
     ok("screenshot test/ui/out/generate-preview.png");
-    // Prompt 11 mobile: at 390px the PREVIEW tag fits its cell and clears the B line and the vacation dots
+    // Prompt 11 mobile: at 390px the PREVIEW tag fits its cell and clears the B line and the vacation bar
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(300);
     const tagCheck = await page.evaluate(() => {
@@ -10419,7 +10456,7 @@ try {
         const t = tag.getBoundingClientRect(), c = cell.getBoundingClientRect();
         if (t.right > c.right + 0.5 || t.left < c.left - 0.5 || t.bottom > c.bottom + 0.5 || tag.scrollWidth > tag.clientWidth + 0.5) { out.clipped++; out.example = out.example || { day: cell.getAttribute("data-day"), tag: [Math.round(t.left), Math.round(t.right)], cell: [Math.round(c.left), Math.round(c.right)] }; }
         const lines = cell.querySelectorAll(".cal-line"); const b = lines[lines.length - 1] ? lines[lines.length - 1].getBoundingClientRect() : null;
-        const dots = cell.querySelector(".cal-dots"); const d = dots ? dots.getBoundingClientRect() : null;
+        const dots = cell.querySelector("[data-testid=cal-vac]"); const d = dots ? dots.getBoundingClientRect() : null;
         const hit = (r) => r && !(t.right <= r.left || t.left >= r.right || t.bottom <= r.top || t.top >= r.bottom);
         if (hit(b)) out.overB++;
         if (hit(d)) out.overDots++;
@@ -10427,7 +10464,7 @@ try {
       return out;
     });
     if (!tagCheck.cells || tagCheck.clipped || tagCheck.overB || tagCheck.overDots) fail("mobile 390px preview: PREVIEW tag clipped / overlapping in the preview cells: " + JSON.stringify(tagCheck));
-    else ok(`mobile 390px preview: the PREVIEW tag fits and clears the B line and the vacation dots in all ${tagCheck.cells} preview cells`);
+    else ok(`mobile 390px preview: the PREVIEW tag fits and clears the B line and the vacation bar in all ${tagCheck.cells} preview cells`);
     await page.locator("[data-testid=cal-grid]").screenshot({ path: path.join(OUT, "mobile-calendar-generate-preview-grid.png") });
     await page.setViewportSize({ width: 1180, height: 900 });
     await page.waitForTimeout(200);
@@ -12069,12 +12106,12 @@ try {
         // weeks compared (a per-cell max always met the APP cells' own week-mates); a week without an APP line must also stay at
         // the phone min-height, or a taller plain week could hide the APP week's growth. Re-check (10/3): the heights must not read
         // live content - the APP pages' time_off answer leaves out every row overlapping this month's grid (appTimeOff above), so
-        // a cell with vacation dots here means that control did not hold and the check FAILS (a dotted week is not measurable).
+        // a cell with a vacation bar here means that control did not hold and the check FAILS (a week with a vacation bar is not measurable).
         {
           const names = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); if (!a) return null; const code = a.querySelector("[data-testid=cal-app-code]"), nm = a.querySelector(".cal-app-name"); return { day: e.getAttribute("data-day"), code: code ? code.textContent : null, codeShown: !!code && getComputedStyle(code).display !== "none", cut: !!code && code.scrollWidth > code.clientWidth + 0.5, w: code ? Math.round(code.scrollWidth * 10) / 10 : null, nameShown: !!nm && getComputedStyle(nm).display !== "none" }; }).filter(Boolean));
           const wk = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => {
             const by = {}, dotDays = [];
-            els.forEach(e => { const r = e.getBoundingClientRect(), k = Math.round(r.top); const w = by[k] || (by[k] = { top: k, n: 0, app: 0, dots: 0, h: 0 }); w.n++; if (e.querySelector("[data-testid=cal-app]")) w.app++; if (e.querySelector(".cal-dots")) { w.dots++; dotDays.push(e.getAttribute("data-day")); } w.h = Math.max(w.h, Math.round(r.height * 10) / 10); });
+            els.forEach(e => { const r = e.getBoundingClientRect(), k = Math.round(r.top); const w = by[k] || (by[k] = { top: k, n: 0, app: 0, dots: 0, h: 0 }); w.n++; if (e.querySelector("[data-testid=cal-app]")) w.app++; if (e.querySelector("[data-testid=cal-vac]")) { w.dots++; dotDays.push(e.getAttribute("data-day")); } w.h = Math.max(w.h, Math.round(r.height * 10) / 10); });
             return { weeks: Object.keys(by).map(Number).sort((a, b) => a - b).map(k => by[k]), minH: els.length ? parseFloat(getComputedStyle(els[0]).minHeight) : NaN, dotDays };
           });
           const appWeeks = wk.weeks.filter(w => w.app), plainWeeks = wk.weeks.filter(w => !w.app);
@@ -12083,7 +12120,7 @@ try {
           if (!n10 || !n13) fail(`${P} 1 H (${theme}): ${D10} (Appleton) and ${D13H} (Applegate) should both carry an APP line: ${JSON.stringify(names)}`);
           else if (names.some(x => !x.codeShown || x.nameShown || x.cut)) fail(`${P} 1 H (${theme}): at 390 px every APP line should show its short label whole (cal-app-code shown, the name hidden, nothing cut): ${JSON.stringify(names)}`);
           else if (n10.code !== "P.App" || n13.code !== "J.App" || n10.code === n13.code) fail(`${P} 1 H (${theme}): Appleton and Applegate should read apart ("P.App" / "J.App"), got '${n10.code}' / '${n13.code}'`);
-          else if (wk.dotDays.length) fail(`${P} 1 H (${theme}): ${wk.dotDays.length} cell(s) of the month carry vacation dots (${wk.dotDays.slice(0, 6).join(", ")}) although the APP pages' time_off answer leaves out every row overlapping ${NM_GRID_LO}..${NM_GRID_HI} - a dotted week is not measurable (the heights would read live content), so the week comparison cannot run: ${JSON.stringify(wk.weeks)}`);
+          else if (wk.dotDays.length) fail(`${P} 1 H (${theme}): ${wk.dotDays.length} cell(s) of the month carry a vacation bar (${wk.dotDays.slice(0, 6).join(", ")}) although the APP pages' time_off answer leaves out every row overlapping ${NM_GRID_LO}..${NM_GRID_HI} - a week with a vacation bar is not measurable (the heights would read live content), so the week comparison cannot run: ${JSON.stringify(wk.weeks)}`);
           else if (!appWeeks.length || !plainWeeks.length || !(wk.minH > 0)) fail(`${P} 1 H (${theme}): the month should have weeks with and without an APP line and a phone min-height to compare: ${JSON.stringify(wk)}`);
           else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a week with an APP line is ${maxApp}px tall, the month's weeks without one at most ${maxPlain}px - the APP line grew its row: ${JSON.stringify(wk.weeks)}`);
           else if (maxPlain > wk.minH + 0.5) fail(`${P} 1 H (${theme}): a week without an APP line is ${maxPlain}px, over the phone min-height ${wk.minH}px - it would hide an APP week's growth: ${JSON.stringify(wk.weeks)}`);

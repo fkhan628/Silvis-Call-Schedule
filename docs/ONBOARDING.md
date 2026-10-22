@@ -151,8 +151,8 @@ view or in **My schedule**: **away** keeps it a Silvis vacation; **home** makes 
 preferred for primary (no East call, no OR block, so the Tue/Thu rule is lifted there). No Silvis vacation row is ever
 written for an East range — a change of mind is one tap and leaves nothing behind — and their own Silvis vacations in
 **Time off** are entered exactly as before. If Davenport changes or cancels a range, the next refresh resets that range
-to unreviewed and the toast says so. On the scheduler's calendar an East range is a small diamond (dashed = unreviewed, outline =
-away, filled green = home), the day editor names the state, and the coverage strip counts the unreviewed ranges until
+to unreviewed and the toast says so. On the scheduler's calendar an East vacation sits in the day's vacation bar (since 10/21: "Khan?" =
+unreviewed, "Khan" = away, nothing on a home day - its hover keeps the state), the day editor names the state, and the coverage strip counts the unreviewed ranges until
 they are decided - since 9/25 (item E3) those three are the scheduler's view only; the person's own Time off view and
 My schedule keep the list and the control. Since Prompt 31 Part A (decision 11) those two East cards are the scheduler's too -
 nothing changes for Khan, who is the scheduler; an East-code surgeon who is not the scheduler would see his away / unreviewed
@@ -160,11 +160,11 @@ ranges as read-only lines "set by the scheduler" in My vacations, like everyone 
 
 **Vacations set by the scheduler - what everyone else sees (Prompt 31 Part A, Faraz 10/9; live since 2026-10-19 - tell the group).** Since
 the database part was applied on 2026-10-19 (the Part A client has been live since 2026.10.18b), the East-code person's ranges that are *away* or still *unreviewed* show to
-every other signed-in account - surgeons, the office coordinator, viewers, followers and APPs - exactly like a vacation: a dot on
-the calendar, "Off: Khan" in the day summary and "on vacation" in the open-shifts board, claim and trade reasons. Where a Time off
+every other signed-in account - surgeons, the office coordinator, viewers, followers and APPs - exactly like a vacation: in the
+calendar's vacation bar at the bottom of the day, "Off: Khan" in the day summary and "on vacation" in the open-shifts board, claim and trade reasons. Where a Time off
 list shows other people's vacations - the office coordinator's, a viewer's, a follower's, an APP's - such a range is a line that
 reads "set by the scheduler" (read-only: no Edit and no Remove - the office cannot change or delete it). A surgeon's own Time off
-list shows no one else's vacations, as it always has, so the other surgeons see those ranges by the dot and "Off: Khan", not as a
+list shows no one else's vacations, as it always has, so the other surgeons see those ranges in the vacation bar and "Off: Khan", not as a
 line there. They count toward the 2 surgeons around rule as they already do, so a vacation that would leave fewer than 2 around on
 such a day is refused
 (the scheduler gets a confirm instead). Where a range comes from stays the scheduler's: the app shows them no East or Davenport word

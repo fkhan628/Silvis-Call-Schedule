@@ -60,7 +60,7 @@
        inline so dark mode's selectors keep working. */
     .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
     .cal-hdr { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; text-align: center; padding: 4px 0; }
-    .cal-cell { min-height: 84px; border: 1px solid #DCE3EC; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
+    .cal-cell { display: flex; flex-direction: column; min-height: 84px; border: 1px solid #DCE3EC; border-radius: 6px; padding: 4px 5px 3px; position: relative; font-size: 11.5px; line-height: 1.3; overflow: hidden; cursor: pointer; background: #fff; }
     .cal-cell:focus-visible { outline: 2px solid #FF5F05; outline-offset: 1px; }
     .cal-line { display: flex; align-items: center; gap: 3px; margin-top: 2px; min-width: 0; }
     .cal-pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; padding: 0 5px; font-weight: 600; border: 1px solid transparent; }
@@ -72,7 +72,16 @@
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
     /* Prompt 32 step 4: the over-soft-limit badge reads "over 7"; on a phone (below) ">7" */
     .cal-os-short { display: none; }
-    .cal-dots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+    /* 10/21 (Faraz: "put the people on vacation in the bottom of each day ... similar to how the Davenport calendar looks"):
+       the vacation bar - one grey bar at the bottom of the day, the names inside (codes on a phone), joined to the next
+       day's bar when the same people are off (cal-vac-l / cal-vac-r: it reaches into the cell's padding on that side). */
+    .cal-vac { margin: auto -5px -3px; padding: 2px 5px; font-size: 9.5px; font-weight: 600; line-height: 1.25; border-radius: 6px; white-space: normal; overflow-wrap: anywhere; border-top: 2px solid transparent; background-clip: padding-box; }
+    .cal-vac.cal-vac-l { margin-left: -5px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+    .cal-vac.cal-vac-r { margin-right: -5px; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .cal-vac:not(.cal-vac-l) { margin-left: 0; }
+    .cal-vac:not(.cal-vac-r) { margin-right: 0; }
+    .cal-cell.cal-preview .cal-vac { margin-bottom: 0; }
+    .cal-vac-who { white-space: nowrap; }
     /* Prompt 29: the APP line - the grid's third line "A <name>", no pill, italic, in the theme's appText colour (inline). The
        "A" is not a .cal-role, so it stays on a phone; a long name ellipsizes and the line itself never overflows. */
     .cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }
@@ -87,6 +96,7 @@
        saved assignment. Nothing is written until Accept & Publish. */
     .cal-cell.cal-preview { outline: 2px dashed #7a4fbf; outline-offset: -2px; background-image: repeating-linear-gradient(135deg, rgba(122,79,191,0.08) 0 6px, transparent 6px 12px) !important; }
     .cal-preview-tag { position: absolute; bottom: 2px; left: 4px; font-size: 8px; font-weight: 800; letter-spacing: 0.6px; color: #7a4fbf; }
+    .cal-cell.cal-preview { padding-bottom: 13px; }
     .setup-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .setup-table th { text-align: left; padding: 6px 8px; color: #5B6B82; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
     .setup-table td { padding: 5px 8px; border-top: 1px solid #e8ecf0; vertical-align: top; }
@@ -115,13 +125,17 @@
        as the grid's .cal-hol gives way - "Thanksgiving" + an offer tag do not fit beside the date and role at 390 px. */
     .mine-hol-letter { display: none; }
     /* Phone (<= 600px): a 7-column grid leaves ~43px per cell, so the P/B
-       role letter, holiday name, weekend label and NOTE tag give way (line
+       role letter and holiday name give way (the weekend label and NOTE tag are gone since 10/21) (line
        order = role, the cell title still spells everything out), the pill
        shows the 3-letter code and never shrinks below its text (vis-001; the
        harness asserts no pill is clipped), the padlock shrinks to 7px. */
     @media (max-width: 600px) {
       .cal-grid { gap: 2px; }
       .cal-cell { min-height: 66px; padding: 3px 2px 2px; font-size: 10px; border-radius: 4px; }
+      .cal-vac { margin-bottom: -2px; padding: 1px 2px; font-size: 8.5px; border-radius: 4px; }
+      .cal-vac.cal-vac-l { margin-left: -2px; }
+      .cal-vac.cal-vac-r { margin-right: -2px; }
+      .cal-vac-icon { display: none; }
       .cal-line { gap: 1px; }
       .cal-pill { padding: 0 1px; flex-shrink: 0; max-width: none; }
       .cal-pill.cal-open { padding: 0; letter-spacing: 0 !important; font-size: 9.5px; }
@@ -129,7 +143,7 @@
       .cal-lock { width: 6px; height: 6px; }
       .cal-name { display: none; }
       .cal-code { display: inline; }
-      .cal-hol, .cal-wk-label, .cal-note { display: none; }
+      .cal-hol { display: none; }
       .cal-mobile-note { display: inline; }
       .cal-badges { top: 2px; right: 2px; }
       .cal-os-long { display: none; }
@@ -145,7 +159,7 @@
       /* Day-click summary (9/27): the day editor's "Esc closes - arrow keys move a day" hint means nothing on a touch screen. */
       .editor-kbd-hint { display: none; }
       /* Prompt 11 mobile pass: the PREVIEW tag no longer clips or sits on the
-         B line / vacation dots (smaller, no tracking, and the cell grows). */
+         B line / vacation bar (smaller, no tracking, and the cell grows). */
       .cal-cell.cal-preview { min-height: 78px; padding-bottom: 12px; }
       .cal-preview-tag { font-size: 7px; letter-spacing: 0; left: 2px; bottom: 1px; }
       /* Tables wider than the phone scroll INSIDE their card (never the page):
@@ -847,7 +861,7 @@ function CallSchedule() {
   const canEnterForAnyone = isScheduler || isCoordinator;
   // Item E3 (Faraz 9/25: "East and override details are the scheduler's business"): ONE flag for everything E3 shows to
   // the scheduler only - the day editor's East lines (eastStatusLines, the East-vacation review state included) and its
-  // "locked holder breaks: ..." line, the grid's East-vacation diamonds with their "East vacation:" hover bits and legend
+  // "locked holder breaks: ..." line, the grid's East-vacation entries (diamonds until 10/21, the vacation bar since) with their "East vacation:" hover bits and legend
   // line, the coverage strip's "forecast-busy as primary", "East feed through" and "unreviewed East vacations" items, and
   // Totals' East days column (header tooltip, cells, the fairness row's " + N East P-week", the footnote, the cap
   // wording) and the same column in its CSV export. Surgeons, coordinators, viewers, followers and ?public=1 get none of
@@ -6246,23 +6260,23 @@ function CallSchedule() {
   const goToday = () => { const n = parse(todayCentral()); setCalMonth(n.getMonth()); setCalYear(n.getFullYear()); };
   const toggleCalFilter = (id) => setCalSurgeonFilters(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
   const colorOf = (id) => rosterColors(sMap[id], sMap[id] ? sMap[id].idx : 0);
-  // Text colour for a surgeon's name written straight on the page (week rows,
-  // vacation dots): tx in light mode, the per-id dk colour in dark mode
+  // Text colour for a surgeon's name written straight on the page (week rows;
+  // the vacation dots until 10/21): tx in light mode, the per-id dk colour in dark mode
   // (app-styles.js rosterNameColor; vis-003). Pills keep tg/tx in both modes.
   const textColorOf = (id) => rosterNameColor(colorOf(id), dk);
   // Prompt 31 Part A (A3, Faraz 10/9 item 1: "shows to every signed-in role exactly like a Silvis vacation"; decisions 10/14):
   // the East person's away / unreviewed ranges for the display, one source per audience (critic A5). derivedVacMap = the
   // database's derived rows (helpers.derivedVacationMap: { id: [{ start, end }] } - no state, no East word) for everyone
-  // signed in but the scheduler; {} for the scheduler (he keeps the diamond and his own picture with the review state -
+  // signed in but the scheduler; {} for the scheduler (he keeps his own picture with the review state - the diamond until 10/21, "name?" in the bar since -
   // decision 6; vacListExtra below), on ?public=1 and signed out. vacShown = the time_off map + derivedVacMap
-  // (helpers.vacationMapWithExtra - a new map, neither input changed): the grid's dots. (The day editor's names read the
+  // (helpers.vacationMapWithExtra - a new map, neither input changed): the grid's vacation bar (the dots until 10/21). (The day editor's names read the
   // lists' map, vacListMap below - A3 review 10/16.)
   // Never timeOffRows / vacations: ?public=1, the share page, print, the ER export, the feeds, the digest, e-mails and pay keep
   // reading time_off only (item 4).
   const derivedVacMap = useMemo(() => (isPublicMode || !authUser || eastDetailsVisible) ? {} : derivedVacationMap(derivedVacRows), [derivedVacRows, isPublicMode, authUser, eastDetailsVisible]);
   const vacShown = useMemo(() => vacationMapWithExtra(vacations, derivedVacMap), [vacations, derivedVacMap]);
-  // Vacation dots: who is off on each visible day (time_off via the vacations map; since Prompt 31 Part A the derived
-  // ranges too, for everyone but the scheduler - one dot per person a day, a time_off row and a derived range may overlap).
+  // Who is off on each visible day - the vacation bar's people (the dots until 10/21) (time_off via the vacations map; since
+  // Prompt 31 Part A the derived ranges too, for everyone but the scheduler - one entry per person a day, a time_off row and a derived range may overlap).
   const vacByDay = useMemo(() => {
     const map = {};
     if (!gridDays.length) return map;
@@ -6346,7 +6360,7 @@ function CallSchedule() {
   // picture - time_off + vacListExtra - so the scheduler's editor names Khan on his away / unreviewed East days as his lists
   // and the editor's own "Not eligible ... on vacation" lines do (decision 8: "Vacations: Khan"; it read vacShown, where
   // derivedVacMap is {} for him, and said "nobody off"). Everyone else's names are unchanged (vacListExtra = derivedVacMap;
-  // {} on ?public=1 and signed out). The dots stay on vacShown (decision 6: the scheduler's diamond only).
+  // {} on ?public=1 and signed out). The bar stays on vacShown (decision 6: the scheduler's own East entries only).
   const vacListMap = useMemo(() => vacationMapWithExtra(vacations, vacListExtra), [vacations, vacListExtra]);
   const vacNamesOn = (d) => Object.keys(vacListMap).filter(pid => onVac(pid, d, vacListMap)).map(nameOf);
   // Review 10/1 item 1: while the East review rows are not loaded (eastVacReviewState other than 'ok' - pending, skipped, failed,
@@ -6386,10 +6400,10 @@ function CallSchedule() {
   // day editor shows): unreviewed / away from P.eastVacationDays, home from P.eastClear;
   // a home day the East feed says busy keeps the home marker with feedBusy (the feed
   // wins - no east-clear, ctx warning); a Silvis time_off day inside a range carries
-  // no East marker (the Silvis dot stands; the day editor shows no East line there).
+  // no East marker (his Silvis entry stands; the day editor shows no East line there).
   // Without a ctx (rules error) the range state is drawn as is.
-  // Item E3 (Faraz 9/25): the scheduler's only - an empty map for everyone else, so no diamond, no "East vacation:"
-  // cell / dots hover bit and no .cal-dots row of its own is drawn (the round Silvis vacation dots stay for everyone).
+  // Item E3 (Faraz 9/25): the scheduler's only - an empty map for everyone else, so no East entry and no "East vacation:"
+  // cell / bar hover bit (since 10/21 the vacation bar draws these days: "name?" unreviewed, "name" away, nothing home).
   const eastVacByDay = useMemo(() => {
     const map = {};
     if (!eastDetailsVisible || !gridDays.length) return map;
@@ -6414,6 +6428,16 @@ function CallSchedule() {
     });
     return map;
   }, [eastVacPeople, gridDays, rulesCtx, eastDetailsVisible]);
+  // 10/21 - the calendar's vacation bar: the people off on a day, in one list - everyone's vacByDay ids (time_off, and the derived
+  // East ranges for everyone signed in but the scheduler) and, for the scheduler, his East people while away or unreviewed
+  // (eastVacByDay; a home day is not a vacation). calVacKey says whether two days show the same people (the bar joins them) - keyed on
+  // what the bar shows, so his time_off day and his East-away day join; "Khan?" and "Khan" do not.
+  const calVac = (d) => {
+    const out = (vacByDay[d] || []).map(id => ({ id, east: null }));
+    (eastVacByDay[d] || []).forEach(m => { if (m.state !== "home" && !out.some(v => v.id === m.id)) out.push({ id: m.id, east: m.state }); });
+    return out;
+  };
+  const calVacKey = (d) => calVac(d).map(v => v.id + (v.east === "unreviewed" ? "?" : "")).sort().join(",");
   // The time_off trigger mirrored for the DERIVED ranges (rules.eastVacationConflicts):
   // published days the person holds inside an unreviewed / away range (and a
   // published primary the day before one) - a report, never a block on a lock.
@@ -7821,7 +7845,7 @@ function CallSchedule() {
             else if (!holder) body = <span className="cal-pill cal-open" style={{color:T.open,fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
             else if (isExt) { const ext = holder.slice(4); body = <span className="cal-pill cal-ext" title={ext + " (external cover, outside the roster)"} style={{color:dk?"#a0a8b0":"#6a7a88",fontStyle:"italic",background:dk?"#1e2a44":"#eef1f4",borderColor:dk?"#24406B":"#d8dee6"}}><span className="cal-name">{ext}</span><span className="cal-code">{ext.slice(0, 3).toUpperCase()}</span></span>; }
             else { const c = colorOf(holder); body = <span className="cal-pill" title={nameOf(holder)} style={{background:c.tg,color:c.tx,borderColor:c.bd,borderStyle:c.dashed?"dashed":"solid"}}><span className="cal-name">{nameOf(holder)}</span><span className="cal-code">{codeOf(holder)}</span></span>; }
-            return <div className="cal-line"><span className="cal-role">{role}</span>{body}{locked ? <Padlock className="cal-lock" title={(role === "P" ? "Primary" : "Backup") + " locked"}/> : null}</div>;
+            return <div className="cal-line"><span className="cal-role">{role}</span>{body}{locked && !isPublicMode && (isScheduler || (!holder && slotIsOpen(day, holder, todayStr))) ? <Padlock className="cal-lock" title={(role === "P" ? "Primary" : "Backup") + " locked"}/> : null}</div>;
           };
           const badge = (solid, color) => ({ display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:3,fontSize:9,fontWeight:800,lineHeight:1,
             background: solid ? color : "transparent", color: solid ? "#fff" : color, border: "1px solid " + color });
@@ -7962,7 +7986,7 @@ function CallSchedule() {
                 const wk = h === "Fri" || h === "Sat" || h === "Sun";
                 const radius = h === "Fri" ? "6px 0 0 6px" : i === 6 ? "0 6px 6px 0" : (h === "Sun" && i === 0) ? 6 : 0;
                 return (
-                <div key={h} data-dow={h} data-weekend={wk ? "1" : "0"} className="cal-hdr" style={{color: wk ? (dk ? T.muted : T.title) : dkSubtext, background: wk ? (dk ? "#0F2140" : "#eef3f8") : "transparent", borderRadius: radius}}>{h}{h === "Fri" ? <span className="cal-wk-label" style={{fontWeight:500,letterSpacing:0,textTransform:"none",marginLeft:4,fontSize:9}}>weekend unit</span> : null}</div>
+                <div key={h} data-dow={h} data-weekend={wk ? "1" : "0"} className="cal-hdr" style={{color: wk ? (dk ? T.muted : T.title) : dkSubtext, background: wk ? (dk ? "#0F2140" : "#eef3f8") : "transparent", borderRadius: radius}}>{h}</div>
                 );
               })}
               {gridDays.map(d => {
@@ -7994,12 +8018,19 @@ function CallSchedule() {
                 // Prompt 32 step 4: the day's primary is over its holder's soft limit this month (overSoftByDay is {} on ?public=1)
                 const ovS = overSoftByDay[d] || null;
                 if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));
-                // Item E3 (9/25): eastVacByDay is empty unless eastDetailsVisible, so this bit (and the dots row's) is the scheduler's only
+                // Item E3 (9/25): eastVacByDay is empty unless eastDetailsVisible, so this bit (and the vacation bar's) is the scheduler's only
                 if ((eastVacByDay[d] || []).length) titleBits.push("East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", but the East feed says busy - the feed wins" : "") + ")").join(", "));
                 // The header reserves 15px per 13px badge shown, at least 30px, so a badge never covers the holiday label. Since
                 // Item E2 (9/25) the confirm "?" is the grid's only badge (the E / F / f badges are gone), so nBadges counts just
                 // that one; a future cell badge adds its own term here. Prompt 32 step 4: the over-soft-limit "over 7" takes two.
                 const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);
+                // 10/21: the vacation bar's people (calVac) and whether the same people are off the day before / after in the same week row
+                const vacHere = calVac(d);
+                const col = gridDays.indexOf(d) % 7;
+                const pvAt = (dd) => !!(previewGen && previewGen.schedule && previewGen.schedule[dd]);
+                const dPrev = fmt(addD(dt, -1)), dNext = fmt(addD(dt, 1));
+                const vacJoin = { l: vacHere.length > 0 && col > 0 && pvAt(dPrev) === isPreview && calVacKey(dPrev) === calVacKey(d), r: vacHere.length > 0 && col < 6 && pvAt(dNext) === isPreview && calVacKey(dNext) === calVacKey(d) };
+                const vacTitle = [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ");
                 return (
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
                     onClick={()=>openCellDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCellDay(d); } }}
@@ -8017,14 +8048,16 @@ function CallSchedule() {
                     <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
                     {/* Prompt 29: the third line "A <name>" - the APP on call (italic, no pill, appText); the full name is in the hover and the day summary */}
                     {appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[appE.profileId] || appE.short}</span></div>}
-                    {((vacByDay[d] || []).length > 0 || (eastVacByDay[d] || []).length > 0) && (
-                      <div className="cal-dots" title={[(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ")}>
-                        {(vacByDay[d] || []).map(pid => <span key={pid} data-vac={pid} style={{width:6,height:6,borderRadius:3,background:textColorOf(pid),display:"inline-block"}}/>)}
-                        {/* Prompt 15 part 3: the East-vacation marker - a diamond, distinct from the round dot, in the review state (app-styles.js eastVacMarkStyle) */}
-                        {(eastVacByDay[d] || []).map(m => <span key={"ev" + m.id} data-eastvac={m.id} data-eastvac-state={m.state} data-eastvac-feedbusy={m.feedBusy ? "1" : undefined} title={nameOf(m.id) + ": East (Davenport) vacation - " + (m.state === "home" ? (m.feedBusy ? "home, but the East feed says busy that day - the feed wins (no east-clear; check the Davenport schedule or the override)" : "home: available at Silvis (no East call)") : m.state === "away" ? "away: a Silvis vacation" : "unreviewed: treated as a Silvis vacation until decided")} style={eastVacMarkStyle(m.state, dk, textColorOf(m.id))}/>)}
+                    {/* 10/21: the vacation bar (calVac above) - who is off that day, at the bottom of the cell, joined to the next day's bar when
+                        the same people are off; no dots or diamonds any more. The scheduler's East people show while away or unreviewed
+                        ("?" = not reviewed yet), never while home; their hover keeps the review state. */}
+                    {vacHere.length > 0 && (
+                      <div className={"cal-vac" + (vacJoin.l ? " cal-vac-l" : "") + (vacJoin.r ? " cal-vac-r" : "")} data-testid="cal-vac" data-vac-ids={vacHere.map(v => v.id).join(",")}
+                        title={vacTitle} style={{background:T.vacBar,color:T.vacText}}>
+                        <span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>
+                        {vacHere.map((v, i) => <React.Fragment key={v.id}>{i ? " " : ""}<span className="cal-vac-who" data-vac={v.east ? undefined : v.id} data-eastvac={v.east ? v.id : undefined} data-eastvac-state={v.east ? v.east : undefined}><span className="cal-name">{nameOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span><span className="cal-code">{codeOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span>{i < vacHere.length - 1 ? "," : ""}</span></React.Fragment>)}
                       </div>
                     )}
-                    {a && a.note && <span className="cal-note" title={a.note} style={{position:"absolute",bottom:2,right:4,fontSize:8,color:"#9aa4ae",fontWeight:700,letterSpacing:0.5}}>NOTE</span>}
                     {isPreview && <span className="cal-preview-tag" title="Generated preview - not saved">PREVIEW</span>}
                   </div>
                 );
@@ -8039,11 +8072,11 @@ function CallSchedule() {
               <span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>
               <span><span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
               <span><span style={{fontStyle:"italic"}}>Atwell</span> = external cover</span>
-              <span style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot</span>
+              {!isPublicMode && (isScheduler || gridDays.some(gd => { const g = schedule[gd]; return !!g && slotIsOpen(gd, null, todayStr) && ((g.primaryLocked && !dayHolder(g, "primary")) || (g.backupLocked && !g.backup)); })) && <span data-testid="legend-lock" style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot{isScheduler ? "" : " (ask the scheduler)"}</span>}
               {/* Item E2 (9/25): no "E East-derived week" / "F East forecast" line - the grid draws neither badge any more */}
               <span>Fri-Sun tinted = weekend unit</span>
               <span>gold = holiday unit</span>
-              <span>dots = vacations</span>
+              <span data-testid="legend-vac"><span style={{background:T.vacBar,color:T.vacText,borderRadius:4,padding:"0 5px",fontWeight:600}}><span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>name</span> = on vacation</span>
               {/* Prompt 32 step 4: the over-soft-limit badge's legend - only when a day of this grid carries one (signed-in; never ?public=1);
                   its words name the limits the grid's badges carry (overSoftLimitLegend: "over 7", "over 7 / over 9") - never a hard-coded 7 */}
               {gridDays.some(gd => overSoftByDay[gd]) && <span data-testid="legend-over-soft"><span style={{color:T.accentText,fontWeight:800}}>{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))}</span> = the primary is past his soft limit of primary days this month (the group's, or his own)</span>}
@@ -8054,7 +8087,7 @@ function CallSchedule() {
               {!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP days not loaded yet - the A lines may be missing</span>}
               {!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = the APP on call that day (third line)</span>}
               {/* Item E3 (9/25): the East-vacation legend line follows the diamonds - the scheduler's only */}
-              {eastDetailsVisible && eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"><span style={eastVacMarkStyle("unreviewed", dk)}/> unreviewed <span style={eastVacMarkStyle("away", dk, dkSubtext)}/> away <span style={eastVacMarkStyle("home", dk)}/> home = East vacation</span>}
+              {eastDetailsVisible && eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"><strong>name?</strong> in the vacation bar = an East vacation not reviewed yet (an away range shows as a plain name; home shows nothing - the hover keeps the state)</span>}
               <span>orange outline = today</span>
               {isScheduler && !isPublicMode && <span>Click a day to edit (eligibility-checked); saves per day with compare-and-swap.</span>}
             </div>

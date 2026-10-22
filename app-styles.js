@@ -58,6 +58,9 @@ const THEME = {
     // on the weekend tint / raised box, 5.76 on the holiday tint, 5.86 on the page, 5.33 on appTint; dark 7.59 / 8.37 / 6.52 /
     // 9.08 / 7.55 (test/ui/contrast.mjs measures every pair).
     appText: "#86506A", appTint: "#F6EAF0",
+    // The calendar's vacation bar (10/21): who is off that day, at the bottom of the day cell (Davenport's look). Light vacText
+    // 7.93:1 on vacBar; dark 8.16 (test/ui/contrast.mjs measures both).
+    vacBar: "#D3DAE3", vacText: "#2F3C4F",
     // The painters' orange words (fix/painter-dark-mode, 10/3): "unsaved", "will clear", "will lift No primary", a one-role
     // reason ("backup only - ..."), the hint, the paste preview, the weekend day name, "range starts here", the unsaved count - in
     // the offer painter, the vacation painter and on My APP days (its unsaved mark). The light value is the literal the painters
@@ -83,6 +86,7 @@ const THEME = {
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
     noticeText: "#F2D08A", noticeBg: "#2E2612", noticeBorder: "#7A5A20",
     appText: "#DDAFC2", appTint: "#3A2232",
+    vacBar: "#2A3A5C", vacText: "#D2DCEA",
     paintText: "#FF8A4C",
     paintOpen: "#FF8A8A",
   },

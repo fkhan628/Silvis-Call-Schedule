@@ -104,6 +104,8 @@ export const contrastTable = (mod) => {
     add(theme, "APP line on the holiday tint", T.appText, T.holiday, "text");
     add(theme, "APP line on page", T.appText, T.bg, "text");
     add(theme, "APP text on its tint (My APP days)", T.appText, T.appTint, "text");
+    // 10/21: the calendar's vacation bar - its names (600 at 9.5 / 8.5 px, held to the text class) on the bar's own grey
+    add(theme, "vacation bar names on the bar", T.vacText, T.vacBar, "text");
     // fix/painter-dark-mode (10/3): the painters' orange words (T.paintText: unsaved, will clear, the hint, a one-role reason,
     // the weekend day name, "range starts here") and My APP days' unsaved mark "*", on the card / a free row and the weekend
     // tint; then the day rows' text on every painter row tint (app-styles.js PAINT_ROWS - the greyed row is a disabled control

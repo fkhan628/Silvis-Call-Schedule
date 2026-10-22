@@ -72,8 +72,8 @@ approvals, Davenport's split-shift accounting (Silvis weighs whole days instead 
 The East-code surgeon (Khan today) sees a "My call - Silvis + Davenport" card in Mine (Prompt 31 Part B): Silvis days plus
 Davenport call counted by `call-totals.js`, the Davenport app's own counter ported verbatim, so both apps' cards agree.
 His East vacations (his away / unreviewed Davenport ranges; Prompt 31 Part A, decisions 10/14 - rules doc §8 item 26,
-build guide §25): the calendar dots, "Off: Khan" and the read-only Time off / My vacations lines every signed-in role but the
-scheduler (who keeps the diamond) sees come from ONE database reading, `silvis_derived_vacations()`, which revision x's
+build guide §25): the calendar's vacation bar, "Off: Khan" and the read-only Time off / My vacations lines every signed-in role but the
+scheduler (who sees the review state instead - "Khan?" in the bar while unreviewed) sees come from ONE database reading, `silvis_derived_vacations()`, which revision x's
 `time_off` guard trigger reads too (the client check keeps `vacEastAway`, the same reading in JS) -
 revision x applied 2026-10-19 22:53:18Z (Faraz's `apply-east-vacations.sh`; `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"),
 so the live client (since 2026.10.18b) shows them; a missing function (404 - after a rollback) reads as "unavailable": no derived

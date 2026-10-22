@@ -1259,7 +1259,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(fn.length > 200, "addNotification not found");
     assert.ok(fn.includes('if (insertErr) { console.warn("Notification insert failed:", insertErr); if (!auth.sessionExpired) showToast("Couldn\'t save that notification.", "error"); }'), "the insert-error toast is gated on !auth.sessionExpired");
   });
-  check("Item A pins: weekStartsOn state reads 'silvis-week-start' through normalizeWeekStart (Sunday default) and persists it; gridDays = monthGridDays(calYear, calMonth, weekStartsOn); the header row comes from weekdayLabels with the weekend-unit label on Fri; the Settings control is two buttons (week-start-sun / week-start-mon); the share page and the printable get weekStartsOn; monOf still drives the week rows", () => {
+  check("Item A pins: weekStartsOn state reads 'silvis-week-start' through normalizeWeekStart (Sunday default) and persists it; gridDays = monthGridDays(calYear, calMonth, weekStartsOn); the header row comes from weekdayLabels (no Fri label since 10/21); the Settings control is two buttons (week-start-sun / week-start-mon); the share page and the printable get weekStartsOn; monOf still drives the week rows", () => {
     assert.strictEqual(count('localStorage.getItem("silvis-week-start")'), 1, "one read of the week-start key");
     assert.ok(src.includes('normalizeWeekStart(localStorage.getItem("silvis-week-start"))'), "the stored value is normalised (a missing or garbage value is Sunday)");
     assert.strictEqual(count('localStorage.setItem("silvis-week-start", weekStartsOn)'), 1, "persisted from the state, once");
@@ -1267,7 +1267,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/const gridDays = useMemo\(\(\) => monthGridDays\(calYear, calMonth, weekStartsOn\), \[calYear, calMonth, weekStartsOn\]\);/.test(src), "gridDays is the shared builder, keyed on the setting");
     assert.strictEqual(count('["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((h, i) => ('), 0, "the hard-coded Mon..Sun header row is gone");
     assert.ok(src.includes("{weekdayLabels(weekStartsOn).map((h, i) => {"), "the header row follows the setting");
-    assert.ok(src.includes('{h === "Fri" ? <span className="cal-wk-label"'), "the small 'weekend unit' label sits on the Fri header wherever Fri falls");
+    // pin moved deliberately 10/21 (Faraz: "the unnecessary labels can be removed"): the Fri header's small "weekend unit" label is
+    // gone - the Fri-Sun tint stays and the legend names it
+    assert.strictEqual(count('className="cal-wk-label"'), 0, "no 'weekend unit' label on the Fri header (10/21)");
     assert.ok(src.includes('data-week-start={weekStartsOn}'), "the grid announces its mode");
     assert.strictEqual(count('data-testid="week-start-sun"'), 1); assert.strictEqual(count('data-testid="week-start-mon"'), 1);
     assert.ok(src.includes('onClick={()=>setWeekStartsOn("sun")}') && src.includes('onClick={()=>setWeekStartsOn("mon")}'));
@@ -2485,7 +2487,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // (2) the legend: no E / F line; the East-vacation line and the ordinary lines stay
     assert.ok(!/East-derived|East forecast/.test(legend), "the grid legend still carries an 'East-derived week' / 'East forecast' line");
     assert.ok(legend.includes("locked slot") && legend.includes("Fri-Sun tinted = weekend unit"), "the legend's ordinary lines are gone too - the slice is wrong");
-    assert.ok(legend.includes(" home = East vacation</span>}"), "the legend's East-vacation line (out of scope, Faraz 9/25) must stay");
+    // pin moved deliberately 10/21: the legend's East line explains the vacation bar's "name?" (no diamonds any more)
+    assert.ok(legend.includes("<strong>name?</strong> in the vacation bar = an East vacation not reviewed yet"), "the legend's East-vacation line (out of scope, Faraz 9/25) must stay");
     // (3) whole file: the removed flag / map / lookups are declared and read nowhere in code
     assert.strictEqual(count("const eastBadgesVisible"), 0, "the eastBadgesVisible flag is still declared");
     assert.strictEqual(count("eastBadgesVisible &&") + count("eastBadgesVisible ?"), 0, "something still reads eastBadgesVisible");
@@ -2493,13 +2496,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count("forecastByDay["), 0, "something still reads forecastByDay");
     assert.strictEqual(count("rulesCtx.derivedByDay["), 0, "a new app-side reader of rulesCtx.derivedByDay appeared - the grid's E badge was its only reader until Item E2 (9/25); if the new reader is on purpose and is NOT the month grid, update this pin (the grid-slice check in (1) is the one that guards the grid)");
     assert.strictEqual(count('titleBits.push("East-derived: "'), 0, "the 'East-derived: ...' hover bit is still pushed");
-    // (4) kept: the confirm badge, the gutter, the East-vacation diamonds and their hover
+    // (4) kept: the confirm badge, the gutter, the scheduler's East vacations (since 10/21 in the vacation bar, not diamonds) and their hover
     assert.strictEqual(count('<span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler\'s confirmation" style={badge(true, "#c2410c")}>?</span>'), 1, "the grid's confirm badge must stay");
     // pin moved deliberately 10/11: Prompt 32 step 4 - nBadges also counts the over-soft-limit badge, as two 15px widths
     // ("over 7" at 8px is ~26px; the header keeps the holiday label clear of it); the confirm '?' still counts one
     assert.ok(grid.includes("const nBadges = (awaitingConfirmation(a) ? 1 : 0) + (ovS ? 2 : 0);"), "nBadges counts the confirm badge (one width) and the over-soft-limit badge (two widths, Prompt 32 step 4)");
     assert.ok(grid.includes("paddingRight:Math.max(30, 4 + 15 * nBadges)"), "the header still reserves the holiday-label gutter from nBadges");
-    assert.ok(grid.includes("data-eastvac={m.id}") && grid.includes('titleBits.push("East vacation: "'), "the East-vacation diamond and its 'East vacation:' hover (out of E2's scope; the scheduler's only since Item E3, 9/25) must stay");
+    // pin moved deliberately 10/21: the diamond became the scheduler's name in the vacation bar ("?" while unreviewed)
+    assert.ok(grid.includes("data-eastvac={v.east ? v.id : undefined}") && grid.includes('titleBits.push("East vacation: "'), "the scheduler's East vacation in the bar and its 'East vacation:' hover (out of E2's scope; the scheduler's only since Item E3, 9/25) must stay");
     // (5) the day editor's East status and Setup > East feed are unchanged
     assert.ok(src.includes("const east = ctx && eastDetailsVisible ? eastStatusLines(ctx, ctxInputs, day, nameOf) : [];"), "the day editor no longer builds its East lines (for the scheduler - Item E3, 9/25)");
     assert.ok(src.includes('data-testid="east-status" data-eastvac={l.eastVac || undefined}'), "the day editor no longer renders its East status lines");
@@ -4086,8 +4090,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(rb.includes("East vacation review(s) reset:"), "the toast names the resets");
   });
   check("P15: where it shows - calendar marker with the state (data-eastvac-state), the day-editor East line, the coverage strip item opening the panel, My schedule and the Time off view lists, the East feed card section", () => {
-    assert.ok(src.includes('data-eastvac-state={m.state}'), "calendar day cells: marker per person with the state");
-    assert.ok(src.includes("eastVacMarkStyle(m.state, dk, textColorOf(m.id))"), "the marker style comes from app-styles.js (never a name-keyed colour)");
+    // pin moved deliberately 10/21: the calendar's marker is the person's name in the vacation bar with the state as data, "?" while unreviewed
+    assert.ok(src.includes('data-eastvac-state={v.east ? v.east : undefined}'), "calendar day cells: the bar's East entry carries the state");
+    assert.ok(src.includes('{nameOf(v.id)}{v.east === "unreviewed" ? "?" : ""}'), "an unreviewed East vacation reads 'name?' in the bar");
     assert.ok(src.includes('data-eastvac={l.eastVac || undefined}'), "the day editor's East line carries the state");
     assert.ok(src.includes('data-testid="cov-eastvac-unreviewed"'), "coverage strip item");
     assert.ok(src.includes("unreviewed East vacations: "), "the strip wording");
@@ -4600,7 +4605,75 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(mb.includes("feedBusy: true"), "a home day the feed says busy is flagged");
     assert.ok(mb.includes("P.vacation.has(d)"), "a Silvis time_off day inside the range: no East marker (the Silvis dot stands, as the day editor shows no East line)");
     assert.ok(mb.includes("[eastVacPeople, gridDays, rulesCtx, eastDetailsVisible]"), "the memo depends on the rules ctx (and on eastDetailsVisible, Item E3)");
-    assert.ok(src.includes('data-eastvac-feedbusy={m.feedBusy ? "1" : undefined}'), "the cell marker carries the feed-busy flag");
+    // pin moved deliberately 10/21: a home day is never in the vacation bar; its hover keeps the state and the feed-busy flag
+    assert.ok(src.includes('(m.feedBusy ? ", feed says busy" : "")'), "the cell's hover carries the feed-busy flag");
+    assert.ok(src.includes('if (m.state !== "home" && !out.some(v => v.id === m.id)) out.push({ id: m.id, east: m.state });'), "a home day stays out of the bar");
+  });
+
+  check("10/21 calendar (Faraz: vacations at the bottom of each day like Davenport; no dots; fewer labels): the vacation bar per day (names, codes on a phone), joined across days that show the same people inside a week row (never across a preview edge); no dots / diamonds, no NOTE tag, no Fri label; the padlock the scheduler's (and on a locked OPEN slot for everyone signed in); the theme's vacBar / vacText in both themes", () => {
+    assert.strictEqual(count('{vacHere.length > 0 && ('), 1, "the bar renders whenever someone is off - for every role");
+    assert.ok(src.includes('data-testid="cal-vac" data-vac-ids={vacHere.map(v => v.id).join(",")}'), "the bar, with its ids");
+    assert.ok(src.includes("title={vacTitle} style={{background:T.vacBar,color:T.vacText}}>"), "the bar's colours are the theme's tokens (no literal)");
+    assert.ok(src.includes('<div className={"cal-vac" + (vacJoin.l ? " cal-vac-l" : "") + (vacJoin.r ? " cal-vac-r" : "")} data-testid="cal-vac"'), "the bar's classes read vacJoin (l / r)");
+    assert.ok(src.includes('<span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>') && src.includes('{i ? " " : ""}<span className="cal-vac-who"') && src.includes('{i < vacHere.length - 1 ? "," : ""}</span></React.Fragment>'), "the icon glued to the first person; a comma ends each person but the last; a plain space between people (the bar wraps between people, never before a comma)");
+    assert.ok(src.includes("      .cal-vac-icon { display: none; }\n") && src.includes("border-top: 2px solid transparent; background-clip: padding-box; }"), "no icon on a phone; a 2 px gap above the bar");
+    assert.ok(src.includes('data-vac={v.east ? undefined : v.id} data-eastvac={v.east ? v.id : undefined}'), "data-vac = a time_off / derived entry, data-eastvac = the scheduler's East entry");
+    assert.ok(src.includes('<span className="cal-name">{nameOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span><span className="cal-code">{codeOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span>'), "names, codes on a phone; '?' only while unreviewed, in both");
+    // the CSS: the cell is a column (the bar at its bottom), the joined sides, one entry never broken, the icon gone at <= 360 px
+    assert.ok(src.includes(".cal-cell { display: flex; flex-direction: column;"), "the cell is a column");
+    assert.ok(src.includes(".cal-vac.cal-vac-l { margin-left: -5px; border-top-left-radius: 0; border-bottom-left-radius: 0; }") && src.includes(".cal-vac.cal-vac-r { margin-right: -5px; border-top-right-radius: 0; border-bottom-right-radius: 0; }"), "a joined side reaches the cell's edge, square");
+    assert.ok(src.includes(".cal-vac-who { white-space: nowrap; }"), "one person's entry never breaks");
+    assert.ok(src.includes(".cal-cell.cal-preview { padding-bottom: 13px; }"), "a preview cell clears its PREVIEW tag's line box (8px x 1.3 from bottom 2px)");
+    // behaviour: the page's own calVac / calVacKey and the cell's vacHere..vacJoin lines, run on a Sunday-first and a Monday-first grid
+    const c0 = src.indexOf("  const calVac = (d) => {"), c1 = src.indexOf("\n", src.indexOf("  const calVacKey = (d) =>", c0));
+    const j0 = src.indexOf("                const vacHere = calVac(d);"), j1 = src.indexOf("\n", src.indexOf("                const vacJoin = { l: ", j0));
+    assert.ok(c0 > 0 && c1 > c0 && j0 > 0 && j1 > j0, "calVac / calVacKey and the cell's join lines are where the test expects them");
+    const lifted = src.slice(j0, j1);
+    assert.ok(lifted.includes("const col = gridDays.indexOf(d) % 7;") && lifted.includes("pvAt(dPrev) === isPreview") && lifted.includes("pvAt(dNext) === isPreview"), "the lifted lines carry the row column and the preview guard");
+    const mk = new Function("vacByDay", "eastVacByDay", "previewGen", "gridDays", "fmt", "addD", "parse",
+      src.slice(c0, c1) + "\n  return (d) => { const dt = parse(d); const isPreview = !!(previewGen && previewGen.schedule && previewGen.schedule[d]);\n" + lifted + "\n  return { show: vacHere.map(v => v.id + (v.east === \"unreviewed\" ? \"?\" : \"\")).join(\",\"), l: vacJoin.l, r: vacJoin.r }; };");
+    const run = (opts) => { const g = H.monthGridDays(2026, 10, opts.ws || "sun"); const f = mk(opts.vac || {}, opts.east || {}, opts.pv ? { schedule: opts.pv } : null, g, H.fmt, H.addD, H.parse); const o = {}; g.forEach(d => { o[d] = f(d); }); return o; };
+    // Sunday-first November 2026: rows Sun 11/1..Sat 11/7, Sun 11/8..; Acton (s3) off Thu 11/5 - Mon 11/9 (crosses Sat|Sun)
+    const vac = {}; ["2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"].forEach(d => { vac[d] = ["s3"]; });
+    vac["2026-11-06"] = ["s3", "s4"];                                       // Philip too on Fri: the people change - two bars meet
+    let o = run({ vac });
+    assert.deepStrictEqual([o["2026-11-05"].l, o["2026-11-05"].r], [false, false], "Thu: the next day shows other people (s3,s4) - no join");
+    assert.deepStrictEqual([o["2026-11-06"].l, o["2026-11-06"].r], [false, false], "Fri: s3,s4 alone - no join either side");
+    assert.deepStrictEqual([o["2026-11-07"].l, o["2026-11-07"].r], [false, false], "Sat ends the row - never joined outward, even though Sun shows s3");
+    assert.deepStrictEqual([o["2026-11-08"].l, o["2026-11-08"].r], [false, true], "Sun starts a row - never joined left; joined to Mon");
+    assert.deepStrictEqual([o["2026-11-09"].l, o["2026-11-09"].r], [true, false], "Mon joins Sun; Tue shows nobody");
+    assert.strictEqual(o["2026-11-10"].show, "", "nobody off - no bar");
+    // the same people in another order still join; the grid's first / last cells never join outward
+    const vac2 = { "2026-11-02": ["s3", "s4"], "2026-11-03": ["s4", "s3"], "2026-11-01": ["s5"], "2026-12-05": ["s5"] };
+    o = run({ vac: vac2 });
+    assert.ok(o["2026-11-02"].r && o["2026-11-03"].l, "the same people in another order join");
+    assert.ok(!o["2026-11-01"].l && !o["2026-12-05"].r, "the grid's first and last cells never join outward");
+    // Monday-first: Sun ends a row, Mon starts one
+    o = run({ vac, ws: "mon" });
+    assert.deepStrictEqual([o["2026-11-07"].r, o["2026-11-08"].l, o["2026-11-08"].r, o["2026-11-09"].l], [true, true, false, false], "Monday-first: Sat joins Sun, Sun ends the row, Mon starts a new one");
+    // the scheduler's East entries: a time_off day and an East-away day of the same person join (both read 'Khan'); 'Khan?' does not join 'Khan'; home never shows
+    const east = { "2026-11-17": [{ id: "s1", state: "away" }], "2026-11-18": [{ id: "s1", state: "unreviewed" }], "2026-11-19": [{ id: "s1", state: "unreviewed" }], "2026-11-20": [{ id: "s1", state: "home" }] };
+    o = run({ vac: { "2026-11-16": ["s1"] }, east });
+    assert.deepStrictEqual([o["2026-11-16"].show, o["2026-11-17"].show, o["2026-11-18"].show, o["2026-11-20"].show], ["s1", "s1", "s1?", ""], "time_off 'Khan', away 'Khan', unreviewed 'Khan?', home nothing");
+    assert.ok(o["2026-11-16"].r && o["2026-11-17"].l && !o["2026-11-17"].r && !o["2026-11-18"].l && o["2026-11-18"].r && o["2026-11-19"].l, "time_off + away join; away | unreviewed split; the unreviewed days join");
+    // a preview edge: the same people, but one day previewed and the next not - no join (a preview cell's bar sits higher)
+    o = run({ vac: { "2026-11-24": ["s2"], "2026-11-25": ["s2"], "2026-11-26": ["s2"] }, pv: { "2026-11-25": {}, "2026-11-26": {} } });
+    assert.ok(!o["2026-11-24"].r && !o["2026-11-25"].l && o["2026-11-25"].r && o["2026-11-26"].l, "no join across a preview edge; two preview days join");
+    // gone: the dots, the diamonds, the NOTE tag, the Fri label - by what the grid draws, not only by a class name
+    const gridAt = src.indexOf('<div className="cal-grid" data-testid="cal-grid"'), legendAt = src.indexOf("{/* Legend */}", gridAt);
+    const noJsxComments = (x) => x.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'])\/\/[^\n]*/g, "$1");
+    const gridJsx = noJsxComments(src.slice(gridAt, legendAt));
+    assert.ok(gridAt > 0 && legendAt > gridAt, "the grid slice");
+    assert.ok(!/>\s*NOTE\s*</.test(gridJsx) && !gridJsx.includes('"NOTE"'), "no NOTE tag in the grid, whatever its class");
+    assert.ok(!gridJsx.includes("eastVacMarkStyle(") && !gridJsx.includes("cal-dots"), "no diamond and no dots row in the grid");
+    assert.ok(!/weekend unit/.test(gridJsx.slice(0, gridJsx.indexOf("{gridDays.map("))), "no 'weekend unit' label in the header");
+    assert.ok(src.includes('if (a && a.note) titleBits.push("note: " + a.note);'), "the note stays in the hover");
+    // the padlock: the scheduler's; anyone signed in sees it on a locked slot that is still OPEN (the board will not let them take it)
+    assert.ok(src.includes('{locked && !isPublicMode && (isScheduler || (!holder && slotIsOpen(day, holder, todayStr))) ? <Padlock className="cal-lock"'), "the grid's padlock: the scheduler's, and a locked OPEN slot's for everyone signed in");
+    assert.ok(src.includes('<span data-testid="legend-lock" style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot{isScheduler ? "" : " (ask the scheduler)"}</span>}') && src.includes('{!isPublicMode && (isScheduler || gridDays.some(gd => { const g = schedule[gd]; return !!g && slotIsOpen(gd, null, todayStr) &&'), "its legend line when the grid can show one (today onward for a non-scheduler)");
+    assert.ok(src.includes('data-testid="legend-vac"') && !src.includes("<span>dots = vacations</span>"), "the legend names the bar, not dots");
+    const st = fs.readFileSync(path.join(ROOT, "app-styles.js"), "utf8");
+    assert.ok(st.includes('vacBar: "#D3DAE3", vacText: "#2F3C4F",') && st.includes('vacBar: "#2A3A5C", vacText: "#D2DCEA",'), "the bar's colours in both themes (test/ui/contrast.mjs measures them)");
   });
 
   /* ---------------- P15 part 4: docs pins (E4) ---------------- */
@@ -14817,7 +14890,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // the rules doc: section 1's Time off row (its 10/14 entry) and section 3 Khan's Part A bullet
       const row1 = (rulesDoc.match(/^\| Time off \|[^\n]*/m) || [""])[0];
       const r1 = row1.slice(Math.max(0, row1.indexOf(MARK + " **10/14 (Faraz 10/9, Prompt 31 Part A)")));
-      assert.ok(r1.includes("the calendar dot and \"Off: Khan\" for everyone but the scheduler") && r1.includes("decision 6") && r1.includes("where a Time off list shows " + OTHERS) && OWN.test(r1), "the rules doc's section 1 row: the dot for everyone but the scheduler (decision 6); the line where a Time off list shows other people's vacations; a surgeon's own list shows no one else's");
+      assert.ok(r1.includes("the calendar's vacation bar and \"Off: Khan\" for everyone but the scheduler") /* pin moved deliberately 10/21: the vacation bar replaced the dot */ && r1.includes("decision 6") && r1.includes("where a Time off list shows " + OTHERS) && OWN.test(r1), "the rules doc's section 1 row: the dot for everyone but the scheduler (decision 6); the line where a Time off list shows other people's vacations; a surgeon's own list shows no one else's");
       const khan5 = rulesDoc.slice(rulesDoc.indexOf("\n### Khan (s1)"), rulesDoc.indexOf("\n### Burchett (s2)"));
       const pk = flat5((khan5.match(/^  - \u27f6 \*\*10\/14 \(Faraz 10\/9, Prompt 31 Part A[^\n]*(\n    [^\n]+)*/m) || [""])[0]);
       assert.ok(pk.includes("now shows to every signed-in role but the scheduler - a surgeon, the office coordinator, a viewer / follower, an APP -") && pk.includes("where a Time off list shows " + OTHERS) && OWN.test(pk) && pk.includes("decision 6"), "section 3 Khan's Part A bullet: every signed-in role but the scheduler; the line where a Time off list shows other people's vacations; a surgeon's own list shows no one else's; the diamond, no dot (decision 6)");
