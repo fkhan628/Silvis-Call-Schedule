@@ -4341,12 +4341,16 @@ check("revision z (4) source pins - daily-reminder: the push fan-out sits AFTER 
   });
   drSrc.split("\n").filter((l) => /console\.(log|warn|error|info)\(/.test(l)).forEach((l) => assert.ok(!/\$\{[^}]*(endpoint|p256dh|\.auth\b|payloadText|\.line\b|followerLine)/.test(l) && !/\+\s*[\w.]*(endpoint|p256dh)/.test(l), "no console line interpolates an endpoint / key / the words: " + l.trim().slice(0, 120)));
   const head = drSrc.slice(0, drSrc.indexOf("import "));
-  assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - prepared, NOT deployed; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the header: prepared, NOT deployed, the record named");
+  // pin kept deliberately 10/22 (the deploy's record step): this source IS the deployed daily-reminder v10 (deployed 2026-10-22
+  // 23:18:10 UTC by Faraz; the uploaded copy and the re-download both hashed e7a345da...), so its header stays as deployed - README
+  // section 3 ("Deploy record - push reminders (revision z)") says the NOT DEPLOYED wording flips, with this pin, at the next source change
+  assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - prepared, NOT deployed; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the header keeps its as-deployed 'prepared, NOT deployed' until the next source change, the record named");
+  assert.strictEqual(require("crypto").createHash("sha256").update(fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"))).digest("hex"), "e7a345dab1b6ec2e68db2ed370c439a61a79484cec0078947bc582d2de22e82b", "edge-functions/daily-reminder/index.ts must stay byte-identical to the deployed v10 (sha256 of the 10/22 upload and re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
   assert.ok(!/OneSignal push \(send-push/.test(head) && /shift_reminders_push/.test(head) && /VAPID_PUBLIC_KEY,\n\/\/ VAPID_PRIVATE_KEY, VAPID_SUBJECT/.test(head), "the header no longer says push was dropped; it names the switch and the three secrets");
   assert.ok(/^\/\/ Deploy: supabase functions deploy daily-reminder --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api$/m.test(head), "the deploy line");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(drSrc), "the source is ASCII");
 });
-// the PREPARED record's deploy block (Faraz's PowerShell, one line at a time; the workdir on every supabase line)
+// the record's deploy block, as prepared and as run on 10/22 (Faraz's PowerShell, one line at a time; the workdir on every supabase line)
 const ZR_WD = EFR_WD;
 const ZR_DST = "\"$env:USERPROFILE\\projects\\supa-silvis\\supabase\\functions\\daily-reminder\\index.ts\"";
 const ZR_BAK_DIR = "\"$env:USERPROFILE\\projects\\supa-silvis\\backup-daily-reminder-v9\"";
@@ -4360,12 +4364,39 @@ const ZR_HASH = (f) => "(Get-FileHash " + f + " -Algorithm SHA256).Hash.ToLower(
 // emulated (% any run, _ any one character; the pattern carries no escape) - the handler checks run it against the real answers
 const ZR_DRY_LIKE = "{\"date_tomorrow\":\"%\",\"current_hour\":%,\"dry_run\":true,%";
 const zLike = (pat, text) => new RegExp("^" + pat.split("").map((c) => (c === "%" ? "[\\s\\S]*" : c === "_" ? "[\\s\\S]" : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("") + "$").test(String(text));
-check("revision z (4): edge-functions/README.md - section 3's 'Deploy record - push reminders (revision z)' is PREPARED, NOT deployed, sits first among the records, and carries the order (the SQL apply, the client, this deploy LAST, the dryRun), the deploy block line for line (list; back up the live v9 by download + hash; copy the merged source + hash; deploy --no-verify-jwt --use-api; list; remove the uploaded copy; download + hash; the 401), the dryRun through pg_net and the rollback (the backup FIRST, then the SQL); section 1 names daily-reminder beside send-notification for the VAPID secrets; section 5 shows the dryRun's push object; section 7 the rollback; ASCII, no placeholder, no machine path", () => {
+check("revision z (4): edge-functions/README.md - section 3's 'Deploy record - push reminders (revision z)' is DEPLOYED 2026-10-22 23:18:10 UTC by Faraz (v9 -> v10; the observed paragraph - the backup's hash, both hashes of the source, the list after, the 401, the dryRun's push - the first live push not observed yet), sits first among the records, and keeps the plan as prepared: the order (the SQL apply, the client, this deploy LAST, the dryRun), the deploy block line for line (list; back up the live v9 by download + hash; copy the merged source + hash; deploy --no-verify-jwt --use-api; list; remove the uploaded copy; download + hash; the 401), the dryRun through pg_net and the rollback (the backup FIRST, then the SQL); section 1 names daily-reminder beside send-notification for the VAPID secrets; section 5 shows the dryRun's push object; section 7 the rollback; ASCII, no placeholder, no machine path", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### Deploy record - push reminders (revision z)");
   assert.ok(i > 0 && i === s3.indexOf("### Deploy record"), "the record, first among section 3's records");
-  const rec = s3.slice(i, s3.indexOf("\n### ", i + 10));
-  assert.ok(/^### Deploy record - push reminders \(revision z\) - PREPARED, NOT deployed$/m.test(rec), "the heading says PREPARED, NOT deployed");
+  const rec0 = s3.slice(i, s3.indexOf("\n### ", i + 10));
+  // pin moved deliberately 10/22: the deploy's record step - DEPLOYED 2026-10-22 23:18:10 UTC by Faraz (v9 -> v10); the observed paragraph
+  // first, then the plan kept as prepared (the Part A and Prompt 30 layout) - the plan's pins below read the plan alone
+  assert.ok(/^### Deploy record - push reminders \(revision z\) - DEPLOYED 2026-10-22 23:18:10 UTC by Faraz \(v9 -> v10\)$/m.test(rec0) && !/PREPARED, NOT deployed/.test(rec0), "the heading says DEPLOYED 2026-10-22 23:18:10 UTC by Faraz (v9 -> v10)");
+  const asp = rec0.indexOf("*As prepared (2026-10-20 - Claude Code, from the push follow-ups report's decisions D8-D17;");
+  assert.ok(asp > 0, "the plan is kept, marked as prepared");
+  const obs = rec0.slice(0, asp), rec = rec0.slice(asp), obsFlat = obs.replace(/\s+/g, " ");
+  [
+    "**Observed (Faraz, 2026-10-22 - the evening, Central time;", "Supabase CLI 2.120.0; pasted back)", "steps 3 and 4 done, the first live push NOT observed yet.**",
+    "the first `functions list` (before) was not pasted",
+    "`030a1366e7d31feb6665034687c2bc3c4e142c136b936841a998342cf85df1b6` - the expected v9 hash", "so the backup holds the live v9",
+    "`e7a345dab1b6ec2e68db2ed370c439a61a79484cec0078947bc582d2de22e82b` - the repo file's", "its own output was not pasted",
+    "`daily-reminder` **v10 ACTIVE (2026-10-22 23:18:10)**",
+    "`calendar-sync` v7 (2026-09-25 13:20:14), `office-notifications` v6 (2026-09-24 07:52:16), `send-notification` v12 (2026-10-03 16:37:59) and `east-feed-refresh` v1 (2026-10-20 01:42:59), all ACTIVE",
+    "The re-download's hash read `e7a345da...` again", "that it followed the second `Remove-Item` and the download is the order of step 3's block below, not shown in the paste",
+    "The POST without a secret -> `401`", "`status_code` 200, created 2026-10-23 00:18:57.97322+00 (19:18 CDT on 10/22 - not a reminder hour, so nobody composed)",
+    "NOT observed yet: the first live reminder push", "(17:00 Central by default - so most likely 2026-10-23)", "nobody on call on 10/23 (nor a follower of theirs) has reminder hour 19", "if it did, the source the project serves is byte-identical to the repo file",
+    "The source's own header still reads `v10 on base v9 - prepared, NOT deployed`", "that wording flips, with its pin, at the next source change",
+  ].forEach((s) => assert.ok(obsFlat.includes(s), "the observed paragraph says: " + s));
+  // the dryRun's push as the read printed it, verbatim on a line of its own - and its keys in jsonb's own order (shorter keys first,
+  // then bytewise), derived from reminderPushDryRun's object, so the paste agrees with the deployed source
+  const PUSH_OBS = "{\"tags\": [\"silvis-reminder-20261023-primary\", \"silvis-reminder-20261023-backup\"], \"error\": null, \"dry_run\": true, \"results\": [], \"composed\": 0, \"followers\": [], \"devices_found\": 0, \"skipped_pref_off\": 0, \"skipped_no_device\": 0}";
+  assert.ok(obs.split("\n").indexOf(PUSH_OBS) >= 0, "the dryRun's push, verbatim on a line of its own");
+  {
+    const lit = (drSrc.match(/function reminderPushDryRun\([^)]*\) \{[\s\S]*?const out = \{ ([^}]*) \};/) || [])[1] || "";
+    const keys = lit.split(",").map((p) => p.trim().split(":")[0].trim()).filter(Boolean);
+    assert.deepStrictEqual(Object.keys(JSON.parse(PUSH_OBS)), keys.slice().sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0)), "the observed push lists reminderPushDryRun's keys in jsonb's order");
+  }
+  assert.ok(!/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(obs) && !/[A-Za-z]:\\+Users\\/i.test(obs) && !/\$env:USERPROFILE/.test(obs), "no function id (a uuid) and no machine path in the observed paragraph");
   const psAt = rec.indexOf("```powershell\n") + 14, ps = rec.slice(psAt, psAt + rec.slice(psAt).search(/\n[ \t]*```/));
   assert.deepStrictEqual(ps.split("\n").map((l) => l.trim()), [
     ZR_LIST,
@@ -4396,8 +4427,11 @@ check("revision z (4): edge-functions/README.md - section 3's 'Deploy record - p
   assert.ok(flat.includes("the hourly job's live answers (`\"dry_run\":false`) never match") && flat.includes("`select status_code, created, left(content::text, 200) from net._http_response order by created desc limit 3;`"), "the bracket says why the filter is the dryRun's own and how to read a no-row / nobody-on-call answer");
   assert.ok(flat.includes("words `docs/ONBOARDING.md`'s phone lines live"), "step 5's record step words ONBOARDING's phone lines live (the day-before reminder on the phone)");
   // pins moved deliberately 10/22 (revision z's record step): the database half is applied and recorded (step 1 Done); the client shipped
-  // first (step 2 - 2026.10.20b, falling back until the apply); the deploy stays PREPARED (steps 3-5 the plan)
-  assert.ok(flat.includes("The database half is applied - step 1, 2026-10-22 04:33:15Z, recorded; nothing is deployed or set: steps 3-5 are the plan, to be filled in by the deploy's record step after Faraz runs them.") && !flat.includes("Nothing is deployed, applied or set"), "the record's intro: the database half applied (step 1), the deploy still the plan");
+  // first (step 2 - 2026.10.20b, falling back until the apply)
+  // pin moved deliberately 10/22 (the deploy's record step): the plan's intro says prepared and kept as the plan - steps 3 and 4 Done
+  // (v10 at 23:18:10 UTC; the dryRun 200), step 5 Done with the first live push NOT observed yet; was "nothing is deployed or set"
+  assert.ok(flat.includes("*As prepared (2026-10-20 - Claude Code, from the push follow-ups report's decisions D8-D17; Faraz's go \"finish the backlog\"; kept as the plan, each step with its Done or NOT observed note):*") && !flat.includes("nothing is deployed or set") && !flat.includes("Nothing is deployed, applied or set"), "the plan's intro: kept as prepared, each step with its Done or NOT observed note");
+  assert.ok(flat.includes("Done: 2026-10-22 - v10 at 23:18:10 UTC, the backup `030a1366...`, the upload and the re-download both `e7a345da...` (the repo file's; the re-download's order as listed here, not shown in the paste), `401`") && flat.includes("Done: 2026-10-23 00:18:57Z (19:18 CDT on 10/22) - `200`, `push` with the two tags of 10/23 and `error` null") && flat.includes("the first live push NOT observed yet (above)."), "steps 3, 4 and 5 carry their Done notes (the first live push NOT observed yet)");
   assert.ok(flat.includes("Done: applied 2026-10-22 04:33:15Z (log `apply-push-followups-20261022T043032Z.log`, `APPLIED AND VERIFIED`, after a `--dry-run` at 04:27Z that applied nothing) and recorded (`docs/SCHEMA-REVIEW.md` \"2026-10-20 - phone push follow-ups (revision z)\") - the function and the column exist since, every existing prefs row reads on (2 of 2), probe AFTER 46 / 46, leftover 0, the Prompt 30 probe's 51 cases the same before and after."), "step 1: Done - applied 2026-10-22 04:33:15Z, the log by its file name, recorded");
   assert.ok(flat.includes("2. The client - shipped first: live since 2026.10.20b (built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date), about 25 hours before the apply, and it fell back until the apply") && readme.replace(/\s+/g, " ").includes("as run, the client shipped first (2026.10.20b, built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date; falling back until the apply), the apply followed at 2026-10-22 04:33:15Z,") && !/2\. Then the client, on Faraz's go/.test(rec), "step 2: the client shipped first (2026.10.20b) and fell back until the apply - never 'Then the client, on Faraz's go'");
   // the dryRun read-back prints content::jsonb -> 'push': jsonb orders an object's keys by length, then bytewise - so the README states

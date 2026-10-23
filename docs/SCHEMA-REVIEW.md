@@ -4334,8 +4334,9 @@ filled the observed lines at the end of this section and added verify-rls sectio
 then the client, then the `daily-reminder` deploy LAST, then its dryRun with the cron secret. As run, the client went first: it
 shipped in 2026.10.20b (built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date), before the apply, and fell back
 until it (a missing function or column reads as unavailable - the plain save, no third switch); this apply followed
-(2026-10-22 04:33:15Z, about 25 hours later); the `daily-reminder` v10 deploy and its dryRun are still to come, LAST, after Faraz
-tells the group.
+(2026-10-22 04:33:15Z, about 25 hours later); the `daily-reminder` v10 deploy and its dryRun followed, LAST - deployed 2026-10-22
+23:18:10 UTC by Faraz, the dryRun `200` at 2026-10-23 00:18:57Z (`edge-functions/README.md` section 3, "Deploy record - push reminders
+(revision z)").
 
 **Why.** Two follow-ups of Prompt 30 - the report-first findings `REPORT-PUSH-FOLLOWUPS-2026-10-20.md` (private folder,
 `docs/HISTORY.md`); Faraz 10/20: "finish the backlog" with every recommended decision. (B) Every silent re-arm - a new endpoint, or a
@@ -4429,8 +4430,8 @@ answers anything but 404 / 410 is still never deleted (the 10/3 rule - D6); the 
 (`reminder_push_on=2 reminder_push_off=0`); `devices=3 accounts=1 most_on_one_account=3` with `label_pairs_seen_twice=1` (the
 pre-check's stale-row signature) and `push_rows=3`, unchanged. The apply wrote no row (the probe rolled back, leftover 0). The
 client had shipped first (2026.10.20b), so since the apply its own probe can read the column - the third switch shows on its next
-read - and its re-arm and Enable save through the wrapper (not observed in the app by the record step); nothing pushes the day-before
-reminder until `daily-reminder` v10 is deployed.*
+read - and its re-arm and Enable save through the wrapper (not observed in the app by the record step); nothing pushed the day-before
+reminder until `daily-reminder` v10 was deployed (2026-10-22 23:18:10 UTC).*
 
 **Proof.** `sql/probes/push-followups-probe.sql` (rolled back; 46 cases in its header - P1-P3 the catalog, H1 the client's hash, R1-R7
 a re-arm and the hashes that replace nothing, K1 the answer's keys, O1-O2 another account's row, M1-M2a the move as save makes it, B1-B4
@@ -4533,7 +4534,7 @@ body; the facts printed), 2 probe BEFORE, 3 the Prompt 30 probe BEFORE (its 51 c
 block, the list's step 8, unnumbered in the log; the list above and the log number the steps alike. Across the follow-ups the client
 went first: 2026.10.20b (built 2026-10-21 03:29:56Z - 10/20 in Central time, the version's date) shipped before the apply and fell
 back until 2026-10-22 04:33:15Z, about 25 hours later (a missing function or column reads as
-unavailable); the `daily-reminder` deploy and its dryRun are still to come, LAST, after Faraz tells the group. One earlier run applied
+unavailable); the `daily-reminder` v10 deploy and its dryRun followed, LAST (2026-10-22 23:18:10 UTC). One earlier run applied
 nothing (the observed lines). The record step changes three of the five graded files (the migration through its trailer - its body's
 sha256 `4e5185d7061f6729a214decca0a3442b7e494ed5c7429259bd297fa22a4f0146` unchanged - the probe's and the pre-check's headers), so the
 script is one-shot: a re-run or `--dry-run` needs its pins refreshed (`push-notifications-probe.sql` and `daily-reminder/index.ts` keep
@@ -4568,7 +4569,11 @@ never through PostgREST. A plain `bash scripts/verify-rls.sh` with no token is t
 the 535 of the 2026-10-20 run (sections 1-20), section 21's 34 and section 22's 51 (neither run live yet). `config.js` changes in
 three comments only (the function and the column applied since 2026-10-22 04:33:15Z), so merging this step to `main` is a client
 build: CI bumps `APP_VERSION` and Pages redeploys, with no change in behaviour. `docs/ONBOARDING.md` words the three switches live;
-the reminder push itself waits for the `daily-reminder` deploy's record step.*
+the reminder push itself waited for the `daily-reminder` deploy's record step (2026-10-22: v10 deployed 23:18:10 UTC; ONBOARDING words
+it live since).*
+
+*(The observed paragraph below is the apply's, as of 2026-10-22 04:33Z; the `daily-reminder` v10 deploy ran later the same day,
+23:18:10 UTC - `edge-functions/README.md` section 3.)*
 
 observed (apply, 2026-10-22): applied 2026-10-22 04:33:15Z (`apply-push-followups.sh` step 4: the migration file through
 `supabase db query --linked`, exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz (log `apply-push-followups-20261022T043032Z.log`,

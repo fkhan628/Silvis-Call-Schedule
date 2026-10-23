@@ -263,7 +263,10 @@ set under "Which events reach your phones" (three switches, independent of the e
 turned on, so they stay editable even on a device that is blocked). The third, **Reminder the day before my call** (a follower's
 reads "... their call"), is in Settings since the evening of 2026-10-21 (Central time) and on for everyone - turn it off to keep
 the day-before shift reminder off your phones (the e-mail reminder has its own switch under Email). The reminder reaches the phones
-from the next `daily-reminder` update on, at the hour set under Email; until then it stays e-mail only. The **Pop-ups on this
+since the `daily-reminder` update of 2026-10-22 (v10, deployed 23:18:10 UTC): a surgeon with phone notifications on and this switch on
+gets it on his phones the day before his call, at his reminder hour (the hour set under Email - 17:00 Central by default), and a
+follower gets it for the surgeons he follows at his own hour; turning the switch off stops it (not
+observed yet - the first goes out at the first matching reminder hour, 17:00 Central by default). The **Pop-ups on this
 device** box below is a different thing (pop-ups while the app is open): its buttons read **Allow pop-ups** and **Show a test pop-up**. To check that e-mail
 reaches you, use **Send a test e-mail** in the Email box (surgeons linked to the roster).
 

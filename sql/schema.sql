@@ -1850,7 +1850,7 @@ comment on column public.notification_preferences.trade_updates_push is 'Prompt 
 comment on column public.notification_preferences.schedule_updates_push is 'Prompt 30: phone notifications for schedule published, manual edit, open shifts, shift taken, vacation logged, offers heads-up / frozen. Default on; only an explicit false opts out. Independent of schedule_updates_email.';
 -- revision z (phone push follow-ups, sql/migrations/2026-10-20-push-followups.sql - report-first; applied 2026-10-22 04:33:15Z): the day-before shift
 -- reminder's phone switch on an EXISTING table (a constant default: no rewrite; every existing row - a surgeon's or a follower's - reads
--- on). prefs_own covers it; the daily-reminder edge function reads it with the service role once its push fan-out is deployed.
+-- on). prefs_own covers it; the daily-reminder edge function reads it with the service role (its push fan-out, v10 - deployed 2026-10-22 23:18:10 UTC).
 alter table public.notification_preferences add column if not exists shift_reminders_push boolean not null default true;
 comment on column public.notification_preferences.shift_reminders_push is 'Revision z: phone notifications for the day-before shift reminder (daily-reminder, at reminder_hour_central). Default on; only an explicit false opts out. Independent of shift_reminders_email.';
 
