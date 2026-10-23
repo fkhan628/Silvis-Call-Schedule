@@ -166,14 +166,15 @@
 -- notification_preferences gains shift_reminders_push (boolean not null default true: the day-before shift reminder's phone switch,
 -- independent of shift_reminders_email; prefs_own unchanged). No table, policy, trigger, existing function, row or anon surface changes.
 -- Letter u stays taken by the weekend pair claim; y was the last applied before it (2026-10-20 00:41:25Z; independent - either apply order).
--- Revision 2026-10-21 aa (East reset backstop, sql/migrations/2026-10-21-east-reset-backstop.sql, report-first, NOT yet applied): Faraz
+-- Revision 2026-10-21 aa (East reset backstop, sql/migrations/2026-10-21-east-reset-backstop.sql, applied 2026-10-22 04:50:53Z after the probe): Faraz
 -- 10/20 ("finish the backlog" - the recommended decisions of the private report that drafted it as z) - east_vacation_reset_stale(p_from)
 -- is re-created with a backstop behind the callers' silent-empty guard (critic A7): an East person with reviews ending on or after
 -- p_from but no merged cached range ending then keeps every review (none deleted or returned) and gets ONE eastvac.reset.kept audit
 -- row; everyone else is reset exactly as before. The body is revision x's plus three insertions (two declarations; the held reading
 -- and the kept loop after the advisory lock; one predicate in the delete loop); the signature, the result, security definer, the
 -- grants, EV001 / EV002 and the lock are unchanged. No table, column, policy, trigger, row or anon surface changes. Letter u stays
--- taken by the weekend pair claim and z by the push follow-ups (prepared in parallel) - this revision's records follow z's.
+-- taken by the weekend pair claim and z by the push follow-ups (prepared in parallel) - this revision's records follow z's; z was the
+-- last applied before it (2026-10-22 04:33:15Z; independent - either apply order).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -537,7 +538,7 @@ create index if not exists east_vacation_reviews_person_idx on public.east_vacat
 -- silvis_vacation_short_days(p_from, p_to) - the ONE SQL definition of the days under the vacation minimum by the guard's reading (time_off
 -- rows plus the derived rows; the service role only - the server refresh's east.refresh audit and sql/probes/vacation-short-days.sql read it;
 -- critic A12). Kept after east_feed, the reviews and time_off: a sql body is validated when it is created.
--- Revision aa (2026-10-21, sql/migrations/2026-10-21-east-reset-backstop.sql - report-first, NOT yet applied) re-creates the reset below
+-- Revision aa (2026-10-21, sql/migrations/2026-10-21-east-reset-backstop.sql - report-first; applied 2026-10-22 04:50:53Z) re-creates the reset below
 -- with its backstop: an East person whose reviews end on or after p_from but whom the cache holds no merged range of ending then keeps
 -- them all, with one eastvac.reset.kept audit row (behind the callers' silent-empty guard, critic A7); everyone else is reset as before.
 create or replace function public.silvis_east_people() returns table (person_id text, code text, name text, ord bigint)

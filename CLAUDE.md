@@ -146,7 +146,8 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   caches into `east_feed`. Fetch failure keeps the cache and warns — never "no East call". Its Davenport `time_off` read is
   guarded the same way (`eastVacationReadGuard`: a failed or suspiciously empty read keeps the cached ranges and resets no
   review - never "no vacations"), and the review resets go through ONE SQL function, `east_vacation_reset_stale` (the 9/23
-  client loop while it is missing).
+  client loop while it is missing); since revision aa (applied 2026-10-22 04:50:53Z) it keeps every review of an East person the
+  cache holds no range of ending on or after its first day, with one `eastvac.reset.kept` audit row.
 
 ## Rules engine + generator contract
 

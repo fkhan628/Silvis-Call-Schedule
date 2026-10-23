@@ -1,10 +1,18 @@
 -- ============================================================================
 -- Silvis Call Schedule - East reset backstop PRE-CHECK (2026-10-21, revision aa; sql/migrations/2026-10-21-east-reset-backstop.sql,
--- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
+-- REPORT-FIRST; APPLIED 2026-10-22 04:50:53Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
 -- after it (Faraz's apply script, kept outside the repo, does both): rows 1-4 are the gate, rows 5-6 are facts for the record (they
 -- never stop the run - but would_keep above 0 means revision x would delete those reviews at the next reset unless that run's read
 -- brings his ranges back: report it at once).
 -- Row 5 runs the revision x functions only through query_to_xml, after to_regprocedure finds them.
+-- As run (2026-10-22): before the apply rows 1-2 read reset_fn=yes ranges_fn=yes people_fn=yes backstop=no and definer=t volatile=v
+-- path=yes body_md5=ecd1e0de45cc01e127617fb943e7d99e (revision x's body), right after it reset_fn=yes ranges_fn=yes people_fn=yes
+-- backstop=yes and definer=t volatile=v path=yes body_md5=cf8a2882f00f3d81f6c3ca111a1ca1ae (this revision's); rows 3 (public=f anon=f
+-- authenticated=t service_role=t, the result as below) and 4 (owner_match=yes reviews_force=f audit_force=f) the same both times; row 5
+-- p_from=2026-09-21 east_people=1 held=1 would_keep=0/0 would_reset=0 and row 6 resets_since_x=0 by_cron=0 kept_rows=0 refreshes_since_x=2
+-- both times - docs/SCHEMA-REVIEW.md "2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of
+-- his (revision aa)" quotes them. This header was kept byte for byte as reviewed until the apply (the apply script pinned its sha256);
+-- the record step turned it APPLIED.
 --
 --   supabase db query --linked --workdir <dir> -o json -f <abs>/sql/probes/east-reset-backstop-precheck.sql
 --

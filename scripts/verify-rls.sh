@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i, 22c-22e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) + push follow-ups anon checks and probe (22) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i, 22c-22e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) + push follow-ups anon checks and probe (22) + East reset backstop probe (23) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
@@ -2104,6 +2104,106 @@ case "$line" in
               else bad "anon GET notification_preferences shift_reminders_push: HTTP 400 without 42703 ($(head -c 160 $T/vr22e.json))"; fi;;
   *) bad "anon GET notification_preferences shift_reminders_push: $line (expected 200 [])";;
 esac
+
+echo "== 23. East reset backstop (2026-10-21, revision aa): east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his - rolled-back probe =="
+# Section 23 (17 = the weekend pair claim, taken on its own branch; 22 = revision z's push follow-ups, the section above).
+# sql/migrations/2026-10-21-east-reset-backstop.sql (report-first; applied 2026-10-22 04:50:53Z, revision aa): east_vacation_reset_stale(p_from)
+# (security definer, volatile; EXECUTE for authenticated and the service role, never anon - unchanged) is revision x's body plus the backstop:
+# an East person with reviews ending on or after p_from but no merged cached range of his ending then (silvis_east_ranges()) keeps every
+# review - none deleted, none returned - with ONE eastvac.reset.kept audit row; everyone else is reset exactly as before. Nothing here goes
+# over REST: aa changes no grant, and section 20 already asks anon (20b, refused 401/403) and a surgeon (20e, EV001) for the reset; 20f
+# re-runs revision x's probe, unchanged (the apply script read its 56 cases the same before and after the apply). 23a runs
+# sql/probes/east-reset-backstop-probe.sql through the linked CLI (rolls itself back; 15 cases graded by name - its header lists each AFTER
+# string - and the number of case lines it reports, whatever their names, must be exactly 15, so with the 15 graded names the set is exactly
+# its header's). The backstop exists since the apply, so the probe's PROBE_SETUP (east_vacation_reset_stale has no backstop) is a FAIL -
+# strict from the start: the record step added this section after the apply, with no flag; its other raises (the collision guard, revision x
+# absent, no East person on the roster, the profile row) are FAILs too. 23b counts the probe's leftovers either way, by the probe's own
+# identity - docs/SCHEMA-REVIEW.md's leftover count, term for term, in two columns: tagged = rows only the probe writes, each with its
+# DELETE - its auth users (probe-eastreset32-<uuid>@example.test; their profiles cascade), its east_feed rows (data.probe eastreset32) and
+# its reviews (decided_by probe-eastreset32); audit = eastvac.review / eastvac.reset.kept audit rows whose start / from lies in 2032-01 ..
+# 2032-06 - the reset writes them with the run's actor and no tag of the probe's. The collision guard refuses to start while such an audit
+# row exists, so after a run that wrote its fixtures (PROBE_RESULTS) an audit row of the window can only be the probe's - a FAIL. Every
+# PROBE_SETUP raise of the probe sits in its setup block, before its first call of the reset (the only writer of those audit rows), and the
+# probe raises none anywhere else, so after one they are rows this run never wrote - real rows, or an earlier run's leak (see any tagged
+# rows); a PROBE_SETUP counts as the run's end only when no PROBE_RESULTS came back. After a run that reported neither (a setup error or
+# cut-off output) nobody can tell. Those two are listed for review, never counted as a leftover and never given a DELETE (audit history is
+# reviewed, never deleted blindly).
+if linked; then
+  # 23a. the graded probe
+  PROBE23="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/east-reset-backstop-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE23" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: east_vacation_reset_stale has no backstop'; then
+    bad "East reset backstop probe: PROBE_SETUP - east_vacation_reset_stale has no backstop (the backstop exists since the 2026-10-22 apply)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then
+    bad "East reset backstop probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (revision x absent, a fixture collision, the roster or the profile row - ask Claude Code)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "East reset backstop probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    # no trailing-whitespace trim (section 22's reader): the ;END cut already drops everything the CLI adds after the raised text, so a
+    # trim could only reach the last case's value (B9 - the cases come sorted by name) - graded value for value like the other 14
+    results23=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//')
+    echo "$results23" | tr ';' '\n' | sed 's/^/   /'
+    # one case per line, the CLI's JSON escapes decoded ONCE (no AFTER string carries < > & or a double quote, a wrong value may); the
+    # graders then read a case in plain bash (no process per case)
+    lines23=$(echo "$results23" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
+    case_val23()   { CV23=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV23="${l#"$1="}"; return 0;; esac; done <<< "$lines23"; }
+    expect_eq23()  { case_val23 "$1"; v="$CV23"; [ "$v" = "$2" ] && ok "East reset backstop probe $1: $3" || bad "East reset backstop probe $1: $3 (got '$v', expected '$2')"; }
+    n23=$(echo "$lines23" | grep -c .)
+    [ "$n23" = "15" ] && ok "East reset backstop probe: 15 cases reported (with the 15 graded below, exactly its header's B1-B15)" || bad "East reset backstop probe: $n23 cases reported, not the 15 of its header (B1-B15 - a case lost, doubled or added without a grade here)"
+    expect_eq23 B1  "reset=definer/volatile path=yes result=TABLE(person_id text, start_date date, end_date date, decision text, reason text) exec=authenticated,service_role public=no backstop=yes" "east_vacation_reset_stale: security definer, volatile, search_path public, pg_temp, its five result columns; EXECUTE for authenticated and the service role, never anon or PUBLIC; the backstop in its body"
+    expect_eq23 B2  "anon=EV001 null=EV002 kept_rows=0" "each refused call (an anon role claim, no p_from) raises EV001 / EV002 and leaves no kept row"
+    expect_eq23 B3  "n=0 reviews=E 01-12..01-13 away,E 02-02..02-03 away,E 02-09..02-10 home,E 03-01..03-02 away" "the service role over a cache holding no range of E ending on or after p_from: nothing deleted or returned, every review kept"
+    expect_eq23 B4  "kept_rows=1 review_rows=0 actor=cron name=east-feed-refresh (cron) kept=3 from=2032-01-19 reviews=02-02..02-03/away,02-09..02-10/home,03-01..03-02/away keys=from,kept,person_id,reviews,summary pid=E sum=East vacation reviews of E kept: the cache holds no East vacation of his ending on or after 2032-01-19, so his 3 review(s) ending then were not reset (a blocked or emptied Davenport read looks the same)" "... ONE eastvac.reset.kept row as the cron job - his three reviews in scope (dates and decisions), its five keys, his person_id, its summary"
+    expect_eq23 B5  "n=0 kept_rows=1 actor=self name=probe admin" "the scheduler keeps them too - his kept row carries his own id and display name"
+    expect_eq23 B6  "n=0 kept_rows=1 actor=cron name=no signed-in user (SQL)" "a session with no signed-in user keeps them - its kept row names it"
+    expect_eq23 B7  "n=0 kept_rows=0" "no review of his ends on or after a later p_from: nothing kept, no audit row"
+    expect_eq23 B8  "n=3 02-02..02-03/away/removed,02-09..02-10/home/removed,03-01..03-02/away/removed kept_rows=0 review_rows=3" "a cached range of his ending ON p_from holds him: the normal reset, revision x's rows"
+    expect_eq23 B9  "n=0 kept_rows=1" "a cached range ending the day before p_from does not hold him: kept"
+    expect_eq23 B10 "n=0 kept_rows=1" "a forecast row's range never holds him: kept"
+    expect_eq23 B11 "n=2 02-09..02-10/home/removed,03-01..03-02/away/removed kept_rows=0 state=02-02..02-03/away" "a range of his shows again with a kept review's exact dates: the normal reset, and that range's kept decision is back"
+    expect_eq23 B12 "review_rows=2 actor=cron name=east-feed-refresh (cron) keys=decision,end,person_id,reason,removed,start,summary,was was=home,away" "... its eastvac.review rows in revision x's shape, unchanged"
+    expect_eq23 B13 "kept=E 01-12..01-13 away,E 02-02..02-03 away" "the reviews left: the one ending before p_from and the re-added range's"
+    expect_eq23 B14 "time_off=same east_feed=same other_audit=0" "the resets wrote no vacation, changed no live east_feed row and wrote no other audit row"
+    expect_eq23 B15 "n=2 02-02..02-03/away/removed,03-01..03-02/away/removed kept_rows=0 review_rows=2" "a cached range of his reviewed home holds him too: the normal reset keeps that exact review"
+  fi
+  # 23b. leftovers, by the probe's own identity: tagged (its users, its east_feed rows, its reviews) and audit (the window's eastvac.review /
+  # eastvac.reset.kept rows) - together docs/SCHEMA-REVIEW.md's leftover count
+  LEFTOVER23_SQL="select ((select count(*) from auth.users where email like 'probe-eastreset32-%@example.test') + (select count(*) from public.east_feed where data->>'probe' = 'eastreset32') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastreset32'))::int as tagged, (select count(*) from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30')::int as audit"
+  r=$(q "$LEFTOVER23_SQL")
+  rflat23=$(echo "$r" | tr -d ' \n')
+  tagged23=$(echo "$rflat23" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  aud23=$(echo "$rflat23" | grep -oE '"audit":"?[0-9]+' | head -1 | tr -cd '0-9')
+  # how 23a ended: results = the sentinel (the probe wrote its fixtures); setup = a PROBE_SETUP raise and no PROBE_RESULTS at all (its setup
+  # block stopped before its first call of the reset); none = neither (a setup error or cut-off output - nobody can tell)
+  end23=none
+  if echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then end23=results
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then end23=setup; fi
+  if [ -z "$tagged23" ] || [ -z "$aud23" ]; then
+    bad "East reset backstop probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  else
+    if [ "$tagged23" = "0" ] && [ "$aud23" = "0" ]; then
+      ok "East reset backstop probe persisted nothing (leftover count 0: auth.users probe-eastreset32-* / east_feed data.probe eastreset32 / east_vacation_reviews decided_by probe-eastreset32 / eastvac.review and eastvac.reset.kept audit rows of 2032-01 .. 2032-06)"
+    fi
+    if [ "$tagged23" != "0" ]; then
+      bad "East reset backstop probe LEFT ROWS BEHIND (tagged=$tagged23 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.east_feed where data->>'probe' = 'eastreset32';"
+      echo "      delete from public.east_vacation_reviews where decided_by = 'probe-eastreset32';"
+      echo "      delete from auth.users where email like 'probe-eastreset32-%@example.test';   -- user_profiles rows cascade"
+    fi
+    if [ "$aud23" != "0" ]; then
+      if [ "$end23" = "results" ]; then
+        bad "East reset backstop probe LEFT ROWS BEHIND (audit=$aud23 - eastvac.review / eastvac.reset.kept audit rows of 2032-01 .. 2032-06 after a run that wrote its fixtures): the batch did not run as one transaction. Review them before removing anything (the reset writes them with no tag of the probe's - audit history is never deleted blindly), then report:"
+      elif [ "$end23" = "setup" ]; then
+        echo "   23b: $aud23 eastvac.review / eastvac.reset.kept audit row(s) of 2032-01 .. 2032-06 - the probe stopped at a PROBE_SETUP raise before its first call of the reset (23a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
+      else
+        echo "   23b: $aud23 eastvac.review / eastvac.reset.kept audit row(s) of 2032-01 .. 2032-06 - the run reported neither PROBE_RESULTS nor PROBE_SETUP (23a), so whether the probe wrote them is unknown; review them before removing anything:"
+      fi
+      echo "      select * from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30';"
+    fi
+  fi
+else
+  echo "   SKIP 23 (supabase CLI not linked at $WORKDIR)"
+fi
 
 echo
 echo "RESULT: $pass passed, $fail failed"

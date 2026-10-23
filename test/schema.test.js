@@ -6208,7 +6208,9 @@ ok(s21code.includes('echo "   SKIP 21 (supabase CLI not linked at $WORKDIR)"'), 
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
   // pin moved deliberately 10/22 (revision z's record step): the header names section 22 after section 21; moved again 10/22 (the
   // record step's review): section 22 carries anon checks too (22c-22e), so the header calls it "anon checks and probe" and lists them
-  ok(/ \+ East vacations anon checks and probe \(20\) \+ trade offers probe \(21\) \+ push follow-ups anon checks and probe \(22\) via the linked Supabase CLI$/m.test(head) && /anon checks \([^)]*20h, 20i, 22c-22e\)/.test(head), "verify-rls.sh's header names section 21 (the trade offers probe) after section 20, then section 22 (the push follow-ups anon checks and probe), and lists 22c-22e among the anon checks");
+  // moved again 10/22 (revision aa's record step): the header names section 23 (the East reset backstop probe - no anon check of its own)
+  // after section 22
+  ok(/ \+ East vacations anon checks and probe \(20\) \+ trade offers probe \(21\) \+ push follow-ups anon checks and probe \(22\) \+ East reset backstop probe \(23\) via the linked Supabase CLI$/m.test(head) && /anon checks \([^)]*20h, 20i, 22c-22e\)/.test(head), "verify-rls.sh's header names section 21 (the trade offers probe) after section 20, then section 22 (the push follow-ups anon checks and probe), then section 23 (the East reset backstop probe), and lists 22c-22e among the anon checks");
 }
 // the record step (10/20): the 32 probe AFTER lines of the live run as Faraz's log printed them (apply-trade-offer-20261020T004005Z.log, its
 // paste-back block "probe after cases:"), read from SCHEMA-REVIEW's revision y observed block (frozen by sha256 in the docs step), not rebuilt
@@ -6425,8 +6427,11 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
 // start - apply-push-followups.sh never pinned or ran verify-rls.sh) and the header's "+ push follow-ups probe (22)"; every other byte as
 // at the 16d / 18g change; moved again 10/22 (the record step's review): section 22 gains the plan's anon REST checks 22c-22e (its title
 // and the header name them), its reader drops the trailing-whitespace trim after the ;END cut, its not-linked SKIP line reads 22a/22b;
-// sections 1-21 unchanged byte for byte (section 21 keeps its inherited trim)
-eq(ySha(fs.readFileSync(VERIFY, "utf8")), "4ec5bfd8cb4f09fb6647a14e6debf0ff378230416fd911a00c880b550c60df5b", "scripts/verify-rls.sh must stay at revision z's record-step bytes (section 22 added; 22c-22e and the untrimmed reader since its review) until its next deliberate change;");
+// sections 1-21 unchanged byte for byte (section 21 keeps its inherited trim);
+// pin moved deliberately 10/22 (revision aa's record step): section 23 added after section 22 (the East reset backstop probe, strict from
+// the start - apply-east-reset-backstop.sh never pinned or ran verify-rls.sh; no REST call - 20b / 20e ask anon and a surgeon for the
+// reset) and the header's "+ East reset backstop probe (23)"; sections 1-22 unchanged byte for byte
+eq(ySha(fs.readFileSync(VERIFY, "utf8")), "51eed2339f5ef51ada6c15542cad0539db23a0d2eae27317b1259c09e00f9124", "scripts/verify-rls.sh must stay at revision aa's record-step bytes (section 23 added after section 22) until its next deliberate change;");
 ok(vr.indexOf('echo "== 21. ') > 0 && vr.indexOf("trade-offer-probe.sql") > vr.indexOf('echo "== 21. '), "verify-rls.sh runs revision y's probe in section 21 only (its record step added it)");
 ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-trade-offer.sh")) && !/bash scripts\/apply-/.test(yMig + yProbe + yPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-trade-offer.sh, and no y file points at one");
 console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (APPLIED 2026-10-20 00:41:25Z), the trailer and verify-rls.sh section 21");
@@ -6727,7 +6732,8 @@ ok(!/\r/.test(zPre) && /^[\x00-\x7f]*$/.test(zPre), "the push follow-ups pre-che
 step("revision z: verify-rls.sh section 22 - the graded probe (22a: 46 cases by name + the count of 46) and its leftovers (22b: the probe's own identity in three columns - tagged / person / audit; person rows FAIL only after PROBE_RESULTS, the audit rows listed for review), strict from the start (no flag - PROBE_SETUP FAILs), and the anon REST checks (22c the function refused, 22d its five keys known to PostgREST, 22e the column's anon GET 200 []); graded against a faked CLI and a faked curl, the 2026-10-22 live picture replayed");
 ok(/^echo "== 22\. phone push follow-ups \(2026-10-20, revision z\): replace_push_subscription \+ notification_preferences\.shift_reminders_push - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 22 (the push follow-ups; since the record step's review its title names the anon refusals, as section 19's does)");
 const s22 = vr.slice(vr.indexOf('echo "== 22. '), vrSectionEnd('echo "== 22. '));
-ok(s22.length > 0 && vr.indexOf('echo "== 22. ') > vr.indexOf('echo "== 21. ') && vrSectionEnd('echo "== 22. ') === vr.indexOf('\necho\necho "RESULT: '), "verify-rls.sh section 22 could not be sliced out (after section 21, the last section before the RESULT line - 23 is revision aa's record step's)");
+// pin moved deliberately 10/22 (revision aa's record step): section 23 follows section 22, so 22 ends where 23 begins
+ok(s22.length > 0 && vr.indexOf('echo "== 22. ') > vr.indexOf('echo "== 21. ') && vrSectionEnd('echo "== 22. ') === vr.indexOf('\necho "== 23. '), "verify-rls.sh section 22 could not be sliced out (after section 21, before section 23 - revision aa's record step's)");
 ok(/^# Section 22 \(17 = the weekend pair claim, taken on its own branch; 21 = revision y's trade offers, the section above\)\.$/m.test(s22), "section 22's comment says why it is 22 (17 is on its own branch, 21 the section above)");
 ok(/^# sql\/migrations\/2026-10-20-push-followups\.sql \(report-first; applied 2026-10-22 04:33:15Z, revision z\): /m.test(s22) && !/NOT applied/.test(s22), "section 22's comment says the migration is applied 2026-10-22 04:33:15Z (report-first; revision z)");
 const s22code = s22.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
@@ -7154,14 +7160,19 @@ console.log("- revision z (2026-10-20): the push follow-ups migration (the B4 dr
 /* ---------------------------------------------- revision aa (2026-10-21): the East reset backstop */
 // Faraz 10/20, "finish the backlog": every recommended decision D1-D10 of the private report REPORT-RESET-BACKSTOP-2026-10-20.md, which
 // drafted the change as revision z (the letter went to the push follow-ups, prepared in parallel - this is aa, its records follow z's).
-// sql/migrations/2026-10-21-east-reset-backstop.sql (report-first, NOT applied - Faraz's apply-east-reset-backstop.sh, kept outside the
-// repo) re-creates east_vacation_reset_stale(p_from): an East person with reviews ending on or after p_from but no merged cached range
+// sql/migrations/2026-10-21-east-reset-backstop.sql (report-first; APPLIED 2026-10-22 04:50:53Z by Faraz with apply-east-reset-backstop.sh,
+// kept outside the repo) re-creates east_vacation_reset_stale(p_from): an East person with reviews ending on or after p_from but no merged cached range
 // ending then keeps every review (none deleted or returned) and gets ONE eastvac.reset.kept audit row; everyone else is reset exactly as
 // revision x resets. Pinned here: the file's shape and its mirror; the body = revision x's applied body plus exactly three insertions;
 // the test (silvis_east_ranges, >=); the refusals before the lock and the held reading; the kept row's action and keys; rows returned
 // from the delete loop only; no unqualified column in the new statements (the 42702 lesson); the probe (15 cases) and pre-check shapes;
-// the existing East vacations probe still valid under the backstop; the docs' PREPARED words; no apply script in the repo. verify-rls.sh
-// is NOT changed now - its section 23 comes with the record step (22 goes to revision z's record step, which comes first).
+// the existing East vacations probe still valid under the backstop; the docs' applied words; no apply script in the repo; the trailer and
+// the body sha256; and scripts/verify-rls.sh section 23, added by the record step (after z's 22), which grades the probe on every plain run.
+// pins moved deliberately (the record step, 10/22, like revision z's): log apply-east-reset-backstop-20261022T044711Z.log, APPLIED AND
+// VERIFIED (repo HEAD cc4cecc on main, the pins from a0a322c - all five matched; migration applied 2026-10-22T04:50:53Z, exit 0); the file
+// kept as it ran plus ONE trailer line, the probe's and the pre-check's headers turned APPLIED with their as-run notes (case lines and
+// code unchanged), SCHEMA-REVIEW's observed paragraph copied from the log (frozen by sha256), the docs' applied words and verify-rls.sh
+// section 23 (its sha256 moved).
 const AA_FILE = "2026-10-21-east-reset-backstop.sql";
 const AA_MIGRATION = path.join(ROOT, "sql", "migrations", AA_FILE);
 const AA_PROBE = path.join(ROOT, "sql", "probes", "east-reset-backstop-probe.sql");
@@ -7207,17 +7218,44 @@ const AA_EXACT = "       and not exists (select 1 from cur c where c.pid = w.per
 const undoAa = (t) => cutOnce(cutOnce(cutOnce(t, AA_DECLARE, ""), AA_HELD, ""), AA_DELETE_WHERE + AA_PREDICATE + AA_EXACT, AA_DELETE_WHERE + AA_EXACT);
 const AA_COMMENT = "comment on function public.east_vacation_reset_stale(date) is 'Prompt 31 Part A (revision x) with revision aa''s backstop: the ONE review reset both feed refreshes run - deletes every review row of an East person ending on or after p_from whose exact range is no longer a merged cached range (changed / removed), one eastvac.review audit row each, and returns them; but an East person the cache holds NO merged range of ending on or after p_from keeps every review (none deleted or returned) and gets ONE eastvac.reset.kept audit row - a blocked or emptied read looks the same (defence in depth behind the callers'' silent-empty guard, critic A7). The scheduler or a no-user session (the service role) only: EV001; EV002 without p_from. Volatile (POST only); never anon.';";
 const AA_ROLLBACK = "--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-14-east-vacations.sql   (revision x, idempotent: its reset body; the rest as live)\n";
+const aaSha = (t) => crypto.createHash("sha256").update(t || "").digest("hex");
+// sha256 of the applied file, observed 2026-10-22: the log's graded-files line of apply-east-reset-backstop.sh (apply-east-reset-backstop-20261022T044711Z.log,
+// repo HEAD cc4cecc on main, the pins from a0a322c - all five matched: yes). The repo copy carries ONE trailer line after the applied body
+// (the record step); the body (everything before it) is what is hashed.
+const AA_APPLIED_SHA256 = "3e2d83e6f306a443eb71b8d66f41f1961e2e1803b705cd1acbc148d519401608";
+const AA_TRAILER = "\n-- applied 2026-10-22 04:50:53Z by Faraz";
+// the whole trailer line, pinned exactly: written once by the record step, frozen like the body it annotates (no apostrophe, no machine path)
+const AA_TRAILER_LINE = "-- applied 2026-10-22 04:50:53Z by Faraz (apply-east-reset-backstop.sh, its CLI in agent mode - AI_AGENT=1; repo HEAD cc4cecc on main, its pins from a0a322c - all five matched; the UTC clock 0447 at step 0 and 0450 at the APPLY step, outside 10:25-10:40; the regression probe sql/probes/east-vacations-probe.sql read the same 56 cases before and after; one earlier run applied nothing: a --dry-run at 20261022T044140Z (main cc4cecc) passed steps 0-3 and stopped after the probe BEFORE); the body above this line is the applied file, sha256 " + AA_APPLIED_SHA256 + " - its header is the text as it ran (its \"REPORT-FIRST, NOT APPLIED\" and its Order note - the record step adds verify-rls section 23 - predate the record step, which added section 23 to run and grade sql/probes/east-reset-backstop-probe.sql on every run); test/schema.test.js pins it; the revision aa section of docs/SCHEMA-REVIEW.md (2026-10-21) quotes the probe observed right after)";
 
-step("revision aa: migration 2026-10-21-east-reset-backstop.sql - LF / ASCII, REPORT-FIRST, NOT APPLIED (no trailer), the header (the problem, what changes, the behaviour change, who it binds, the blast radius, the residuals, the apply lines, the order, the rollback = revision x's file); ONE function re-created with x's grants, the comment replaced, the reload; no supersedes; a mirrored migration");
-const aaMig = read(AA_MIGRATION);
+step("revision aa: migration 2026-10-21-east-reset-backstop.sql - LF / ASCII, APPLIED 2026-10-22 04:50:53Z (the file kept as it ran: body sha256 + ONE trailer line; its header as it ran, REPORT-FIRST, NOT APPLIED), the header (the problem, what changes, the behaviour change, who it binds, the blast radius, the residuals, the apply lines, the order, the rollback = revision x's file); ONE function re-created with x's grants, the comment replaced, the reload; no supersedes; a mirrored migration");
+const aaBuf = fs.existsSync(AA_MIGRATION) ? fs.readFileSync(AA_MIGRATION) : null;
+ok(aaBuf, "missing file " + path.relative(ROOT, AA_MIGRATION));
+const aaMig = aaBuf.toString("utf8");
+let aaBody = aaMig;
+{
+  // the record step (10/22): the file that ran is the file that is kept - the body hashed, the apply noted after it in ONE line
+  const at = aaBuf.indexOf(AA_TRAILER);
+  ok(at > 0, "the revision aa migration must carry its trailer line `" + AA_TRAILER.slice(1) + " ...` after the applied body (the record step)");
+  const tail = at > 0 ? aaBuf.slice(at + 1).toString("utf8") : "";
+  ok(tail.split("\n").length === 2 && tail.endsWith("\n") && tail.indexOf("\n") === tail.length - 1, "revision aa migration: exactly ONE trailer line (and its LF) after the applied body, nothing after it");
+  ok(tail.includes("the body above this line is the applied file, sha256 " + AA_APPLIED_SHA256) && tail.includes("apply-east-reset-backstop.sh") && tail.includes("AI_AGENT=1") && tail.includes("repo HEAD cc4cecc") && tail.includes("its pins from a0a322c - all five matched") && tail.includes("the UTC clock 0447 at step 0 and 0450 at the APPLY step") && tail.includes("a --dry-run at 20261022T044140Z (main cc4cecc) passed steps 0-3") && tail.includes("read the same 56 cases before and after") && tail.includes("added section 23 to run and grade sql/probes/east-reset-backstop-probe.sql on every run") && tail.includes("the revision aa section of docs/SCHEMA-REVIEW.md (2026-10-21) quotes the probe observed right after"), "the trailer names the applied sha256, the script, the agent mode, the HEAD it ran at and its pins, the clock, the earlier dry run, the regression probe, verify-rls section 23 and the record");
+  ok(!/'/.test(tail) && !/bash scripts\/apply-|[A-Za-z]:[\\/]/.test(tail), "the trailer carries no apostrophe, no scripts/apply- path and no machine path");
+  eq(tail, AA_TRAILER_LINE + "\n", "the revision aa migration's trailer line must read exactly as the record step wrote it (frozen);");
+  eq(aaSha(at > 0 ? aaBuf.slice(0, at + 1) : aaBuf), AA_APPLIED_SHA256, "revision aa migration body sha256 must equal the applied file's (strip nothing; annotate only in the trailer line);");
+  if (at > 0) aaBody = aaBuf.slice(0, at + 1).toString("utf8");
+}
 ok(!/\r/.test(aaMig) && /^[\x00-\x7f]*$/.test(aaMig), "the revision aa migration is LF and ASCII");
 ok(migFiles.includes(AA_FILE) && !PREPARED_NOT_MIRRORED.includes(AA_FILE), "sql/migrations/" + AA_FILE + " is a mirrored migration (not exempt)");
-ok(!/^-- applied /m.test(aaMig), "the revision aa migration carries no applied trailer (report-first, NOT applied - the record step adds it)");
+// pin moved deliberately 10/22 (the record step): exactly one applied line, the trailer (pinned whole above) - never a second one
+eq((aaMig.match(/^-- applied /gm) || []).length, 1, "the revision aa migration carries exactly one applied line (its trailer);");
+ok(!/^-- applied /m.test(aaBody), "the applied body carries no applied line (the trailer is the record step's, after it)");
 ok(!/^-- supersedes:/m.test(aaMig) && !/^-- PREPARED FOLLOW-UP/m.test(aaMig), "no supersedes line (no other 2026-10-21 file - D10) and not a NOT-MIRRORED follow-up");
 {
   const hdr = aaMig.slice(0, aaMig.indexOf("\n-- ============================================================================\n\n"));
   const flat = hdr.replace(/\n-- ?/g, " ").replace(/\s+/g, " ");
-  ok(hdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(hdr), "the header says REPORT-FIRST, NOT APPLIED");
+  // pin kept deliberately (the record step, 10/22): the header is the text as it ran (the body is sha256-pinned); the APPLIED note is the
+  // trailer line
+  ok(hdr.length > 1000 && /^-- REPORT-FIRST, NOT APPLIED \(/m.test(hdr), "the header says REPORT-FIRST, NOT APPLIED (as it ran)");
   ok(flat.includes("migration 2026-10-21 (revision aa)") && flat.includes("\"finish the backlog\"") && flat.includes("D1-D10") && flat.includes("docs/history/REPORT-RESET-BACKSTOP-2026-10-20.md") && flat.includes("drafted this change as revision z") && flat.includes("the letter z went to the push follow-ups") && flat.includes("its records follow z's"), "the header quotes Faraz's go, names the report (drafted as z) and says why the letter is aa (z is the push follow-ups'; aa's records follow z's)");
   ["The problem.", "What changes.", "Behaviour change (D2", "Who it binds.", "Blast radius.", "Residuals (recorded, not fixed):", "Apply live", "Order (D9):", "Re-running:", "Rolling back"].forEach((a, i, all) => {
     ok(flat.includes(a), "the header lacks '" + a + "'");
@@ -7236,13 +7274,13 @@ eq(Array.from(aaMig.matchAll(/^create or replace function public\.([a-z_]+)\(/gm
 {
   const code = aaMig.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
   ok(!/\b(create|alter|drop) (table|policy|trigger|index|publication|view)\b|drop function|drop column|security_invoker|raise notice/i.test(code), "the migration creates, alters and drops no table, policy, trigger, index, view or publication, drops no function and raises no notice (D4)");
-  ok(aaMig.endsWith("\nnotify pgrst, 'reload schema';\n"), "the migration ends with `notify pgrst, 'reload schema';`");
-  const st = psTopStatements(aaMig);
+  ok(aaBody.endsWith("\nnotify pgrst, 'reload schema';\n"), "the applied body ends with `notify pgrst, 'reload schema';`");
+  const st = psTopStatements(aaBody);
   ok(!st.some((s) => /^(insert|update|delete)\b/i.test(s)), "the migration writes no row outside the function body");
   eq(st.map((s) => s.split("\n")[0].replace(/ is '.*$/, " is ...")), ["create or replace function public.east_vacation_reset_stale(p_from date) returns table (person_id text, start_date date, end_date date, decision text, reason text)"]
     .concat(xvGrants("east_vacation_reset_stale").split("\n"), ["comment on function public.east_vacation_reset_stale(date) is ...", "notify pgrst, 'reload schema';"]),
     "the migration is exactly: the reset, revision x's four grant lines, the comment, the reload;");
-  ok(aaMig.includes("\nend $$;\n" + xvGrants("east_vacation_reset_stale") + "\n" + AA_COMMENT + "\n\nnotify pgrst, 'reload schema';\n"), "the grants (revision x's, byte for byte) and the comment follow the function directly; the comment reads exactly as approved (the report's, z renamed aa)");
+  ok(aaBody.includes("\nend $$;\n" + xvGrants("east_vacation_reset_stale") + "\n" + AA_COMMENT + "\n\nnotify pgrst, 'reload schema';\n"), "the grants (revision x's, byte for byte) and the comment follow the function directly; the comment reads exactly as approved (the report's, z renamed aa)");
 }
 
 step("revision aa: the body = revision x's applied body plus exactly three insertions (the declarations; the held reading and the kept loop after the lock; the held predicate in the delete loop); the refusals first; the kept row's action and keys; returns from the delete loop only; no unqualified column in the new statements");
@@ -7275,26 +7313,30 @@ step("revision aa: the body = revision x's applied body plus exactly three inser
   eq(yCollisions(functionText(aaMig, "east_vacation_reset_stale").replace(AA_DECLARE, "  v_held   text[];\n  k        record;\n  pid      text;\n")).hits, ["pid"], "the collision check catches a variable named like the kept loop's alias;");
 }
 
-step("revision aa: schema.sql mirrors the migration (the reset, its grants and comment byte for byte, in the revision x block; the derived block's own revision aa line); the header records revision aa after z, before the same-day rule; its md5s derived");
+step("revision aa: schema.sql mirrors the migration (the reset, its grants and comment byte for byte, in the revision x block; the derived block's own revision aa line); the header records revision aa after z, before the same-day rule - both lines read applied 2026-10-22 04:50:53Z (the record step), no schema.sql line says NOT yet applied; its md5s derived");
 {
   ok(functionText(schema, "east_vacation_reset_stale") === functionText(aaMig, "east_vacation_reset_stale"), "east_vacation_reset_stale(): schema.sql differs from sql/migrations/" + AA_FILE + " (revision aa, the newest migration touching it)");
-  psTopStatements(aaMig).filter((st) => st !== "notify pgrst, 'reload schema';").forEach((st) => ok(schemaCode.includes(st), "schema.sql must carry the revision aa statement byte for byte (comment lines aside; the reload is the migration's alone): " + st.split("\n")[0].slice(0, 120)));
+  psTopStatements(aaBody).filter((st) => st !== "notify pgrst, 'reload schema';").forEach((st) => ok(schemaCode.includes(st), "schema.sql must carry the revision aa statement byte for byte (comment lines aside; the reload is the migration's alone): " + st.split("\n")[0].slice(0, 120)));
   ok(schema.includes("\nend $$;\n" + xvGrants("east_vacation_reset_stale") + "\n" + AA_COMMENT + "\n"), "schema.sql: the reset's grants and its revision aa comment follow it directly");
   eq((schema.match(/^create or replace function public\.east_vacation_reset_stale\(/gm) || []).length, 1, "schema.sql creates the reset once;");
   const at = (t) => schema.indexOf(t);
   ok(at("create or replace function public.silvis_derived_vacations()") < at("create or replace function public.east_vacation_reset_stale(") && at("create or replace function public.east_vacation_reset_stale(") < at("create or replace function public.silvis_vacation_short_days("), "the reset stays in its place in the revision x block (after the derived rows, before the short days)");
-  ok(schema.includes("\n-- critic A12). Kept after east_feed, the reviews and time_off: a sql body is validated when it is created.\n-- Revision aa (2026-10-21, sql/migrations/" + AA_FILE + " - report-first, NOT yet applied) re-creates the reset below\n-- with its backstop: an East person whose reviews end on or after p_from but whom the cache holds no merged range of ending then keeps\n-- them all, with one eastvac.reset.kept audit row (behind the callers' silent-empty guard, critic A7); everyone else is reset as before.\n"), "the derived block's comment gains its own revision aa line (its heading line stays as pinned)");
-  // pin moved 10/21 (the rebase onto revision z): aa's header line follows z's (prepared before it)
-  const zAt = header.search(/^-- Revision 2026-10-20 z /m), aAt = header.search(/^-- Revision 2026-10-21 aa \(East reset backstop, sql\/migrations\/2026-10-21-east-reset-backstop\.sql, report-first, NOT yet applied\): /m);
-  ok(zAt > 0 && aAt > zAt && aAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-21 aa ('report-first, NOT yet applied') after revision z and before the same-day rule");
+  // pin moved deliberately 10/22 (the record step): the derived block's line reads 'report-first; applied 2026-10-22 04:50:53Z' (z's form)
+  ok(schema.includes("\n-- critic A12). Kept after east_feed, the reviews and time_off: a sql body is validated when it is created.\n-- Revision aa (2026-10-21, sql/migrations/" + AA_FILE + " - report-first; applied 2026-10-22 04:50:53Z) re-creates the reset below\n-- with its backstop: an East person whose reviews end on or after p_from but whom the cache holds no merged range of ending then keeps\n-- them all, with one eastvac.reset.kept audit row (behind the callers' silent-empty guard, critic A7); everyone else is reset as before.\n"), "the derived block's comment gains its own revision aa line (its heading line stays as pinned)");
+  // pin moved 10/21 (the rebase onto revision z): aa's header line follows z's (prepared before it); pin moved deliberately 10/22 (the record
+  // step): it reads 'applied 2026-10-22 04:50:53Z after the probe' (z's precedent), z the last applied before it
+  const zAt = header.search(/^-- Revision 2026-10-20 z /m), aAt = header.search(/^-- Revision 2026-10-21 aa \(East reset backstop, sql\/migrations\/2026-10-21-east-reset-backstop\.sql, applied 2026-10-22 04:50:53Z after the probe\): /m);
+  ok(zAt > 0 && aAt > zAt && aAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-21 aa ('applied 2026-10-22 04:50:53Z after the probe' since the record step) after revision z and before the same-day rule");
   const revAa = header.slice(aAt).split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
-  ok(/"finish the backlog"/.test(revAa) && /drafted it as z/.test(revAa) && /eastvac\.reset\.kept/.test(revAa) && /revision x's plus three insertions/.test(revAa) && /No table, column, policy, trigger, row or anon surface changes/.test(revAa) && /Letter u stays taken by the weekend pair claim and z by the push follow-ups/.test(revAa) && /records follow z's/.test(revAa), "revision aa's header text: the go, drafted as z, the kept row, x's body plus three insertions, what does not change, the letters u and z");
+  ok(/"finish the backlog"/.test(revAa) && /drafted it as z/.test(revAa) && /eastvac\.reset\.kept/.test(revAa) && /revision x's plus three insertions/.test(revAa) && /No table, column, policy, trigger, row or anon surface changes/.test(revAa) && /Letter u stays taken by the weekend pair claim and z by the push follow-ups/.test(revAa) && /records follow z's/.test(revAa) && revAa.includes("z was the last applied before it (2026-10-22 04:33:15Z; independent - either apply order)."), "revision aa's header text: the go, drafted as z, the kept row, x's body plus three insertions, what does not change, the letters u and z");
   ok(!/east-vacations\.sql[^\n]*NOT yet applied/.test(schema) && !/Prompt 31 Part A[^\n]*NOT yet applied/.test(schema) && !/trade-offer\.sql[^\n]*NOT yet applied/.test(schema), "no revision aa line pairs 'NOT yet applied' with revision x's or y's file (their record steps' pins)");
-  // widened 10/21 (the rebase onto revision z): z's three lines name its own file and are counted in the z block
-  eq(schema.split("\n").filter((l) => /NOT yet applied/.test(l) && !l.includes("sql/migrations/2026-10-20-push-followups.sql")).map((l) => l.includes("sql/migrations/" + AA_FILE)), [true, true], "exactly two schema.sql lines say NOT yet applied, each naming revision aa's file (the header line and the derived block's line; revision z's three aside);");
+  // widened 10/21 (the rebase onto revision z): z's three lines name its own file and are counted in the z block; pin moved deliberately
+  // 10/22 (revision aa's record step): aa's two lines read applied - no schema.sql line says NOT yet applied any more
+  eq(schema.split("\n").filter((l) => /NOT yet applied/.test(l)), [], "no schema.sql line says NOT yet applied since revision aa's record step (its header line and the derived block's line read applied);");
+  ok(!/east-reset-backstop\.sql[^\n]*NOT yet applied/.test(schema) && (schema.match(/sql\/migrations\/2026-10-21-east-reset-backstop\.sql[^\n]*applied 2026-10-22 04:50:53Z/g) || []).length === 2, "revision aa's two schema.sql lines name its file and read applied 2026-10-22 04:50:53Z");
   // the md5 of each body's prosrc, derived from the files (PGlite read the same; a body edit must fail here until the gate's record moves)
   const bodyMd5 = (s) => { const t = functionText(s, "east_vacation_reset_stale") || "", a = t.indexOf("$$") + 2; return crypto.createHash("md5").update(t.slice(a, t.lastIndexOf("$$"))).digest("hex"); };
-  eq([bodyMd5(xvBody), bodyMd5(aaMig), bodyMd5(schema)], [AA_X_MD5, AA_MD5, AA_MD5], "the reset's body md5: revision x's (the live body) and revision aa's, derived from the files (schema.sql = aa);");
+  eq([bodyMd5(xvBody), bodyMd5(aaBody), bodyMd5(schema)], [AA_X_MD5, AA_MD5, AA_MD5], "the reset's body md5: revision x's (the live body until the apply) and revision aa's, derived from the files (schema.sql = aa) - the md5s the live pre-check read before and after the apply (2026-10-22);");
 }
 
 step("revision aa: the probe - self-rolling-back, the collision guard first, then PROBE_SETUP (revision x absent, then no backstop), one throwaway admin, 2032 fixtures, 15 cases each stating its AFTER string in the header, the roster never written");
@@ -7347,7 +7389,9 @@ eq(AA_CASES.length, 15, "the contract's 15 probe cases;");
 {
   const hdr = aaProbe.slice(0, aaProbe.indexOf("create temp table probe_results"));
   const flat = hdr.replace(/\n-- ?/g, " ").replace(/\s+/g, " ");
-  ok(/REPORT-FIRST, NOT APPLIED\)\./.test(flat) && /WITHOUT PERSISTING ANYTHING/.test(flat) && /\n-- 15 cases\.\n/.test(hdr) && flat.includes("apply-east-reset-backstop.sh") && flat.includes("adds scripts/verify-rls.sh section 23") && flat.includes("not at 10:25-10:40 UTC"), "the probe header: report-first, NOT APPLIED, nothing persisted, 15 cases, graded by the apply script (section 23 with the record step), outside the cron window");
+  // pin moved deliberately 10/22 (revision aa's record step): the header reads APPLIED 2026-10-22 04:50:53Z with its as-run note (z's
+  // precedent); the 15 case lines below it are unchanged (the next lines read each)
+  ok(/\n-- REPORT-FIRST; APPLIED 2026-10-22 04:50:53Z\)\. Proves /.test(hdr) && !/NOT APPLIED/.test(hdr) && /^-- As run: the migration was applied 2026-10-22 04:50:53Z \(schema\.sql revision aa\); /m.test(hdr) && flat.includes("all 15 cases below as listed after it, leftover count 0 (apply-east-reset-backstop.sh steps 3 and 6)") && flat.includes("(graded by Faraz's apply script apply-east-reset-backstop.sh, kept outside the repo, and, since the record step, by scripts/verify-rls.sh section 23 on every run, value for value against the header lines below)") && flat.includes("it FAILs a PROBE_SETUP (no backstop, revision x absent, a collision, the roster or the profile row) or a missing sentinel") && /WITHOUT PERSISTING ANYTHING/.test(flat) && /\n-- 15 cases\.\n/.test(hdr) && flat.includes("not at 10:25-10:40 UTC"), "the probe header: report-first, APPLIED 2026-10-22 04:50:53Z, its as-run note (15 / 15, leftover 0; section 23 grades it, a PROBE_SETUP FAILs), nothing persisted, 15 cases, outside the cron window");
   const hdrAfter = {};
   hdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+)\s+.* -> (.*)$/); if (m) hdrAfter[m[1]] = m[2]; });
   eq(Object.keys(hdrAfter).sort(), AA_CASES.slice().sort(), "the probe header lists every case once with its AFTER string (`--   <case> <what> -> <AFTER>`);");
@@ -7366,7 +7410,10 @@ ok(!/\r/.test(aaPre) && /^[\x00-\x7f]*$/.test(aaPre), "the backstop pre-check is
 {
   const hdr = aaPre.slice(0, aaPre.indexOf("with objects as ("));
   const flat = hdr.replace(/\n-- ?/g, " ").replace(/\s+/g, " ");
-  ok(/REPORT-FIRST, NOT APPLIED\)\. READ-ONLY: one SELECT, nothing is written, locked or changed/.test(flat) && flat.includes("Run it BEFORE the apply and again right after it"), "the pre-check's header: report-first, NOT APPLIED, READ-ONLY, when to run it");
+  // pin moved deliberately 10/22 (revision aa's record step): the header reads APPLIED 2026-10-22 04:50:53Z and carries the as-run gate,
+  // bodies, grants, owner and facts (z's precedent)
+  ok(/REPORT-FIRST; APPLIED 2026-10-22 04:50:53Z\)\. READ-ONLY: one SELECT, nothing is written, locked or changed/.test(flat) && !/NOT APPLIED/.test(hdr) && flat.includes("Run it BEFORE the apply and again right after it"), "the pre-check's header: report-first, APPLIED 2026-10-22 04:50:53Z (no NOT APPLIED left), READ-ONLY, when to run it");
+  ok(flat.includes("As run (2026-10-22): before the apply rows 1-2 read " + AA_GATE_BEFORE + " and definer=t volatile=v path=yes body_md5=" + AA_X_MD5 + " (revision x's body), right after it " + AA_GATE_AFTER + " and definer=t volatile=v path=yes body_md5=" + AA_MD5 + " (this revision's);") && flat.includes("rows 3 (public=f anon=f authenticated=t service_role=t, the result as below) and 4 (owner_match=yes reviews_force=f audit_force=f) the same both times;") && flat.includes("row 5 p_from=2026-09-21 east_people=1 held=1 would_keep=0/0 would_reset=0 and row 6 resets_since_x=0 by_cron=0 kept_rows=0 refreshes_since_x=2 both times") && flat.includes("the record step turned it APPLIED."), "the pre-check's as-run note: the gate and the body md5 before / after, the grants and the owner, the facts rows 5-6 as the log printed them");
   ok(flat.includes("before the apply it reads " + AA_GATE_BEFORE) && flat.includes("after it " + AA_GATE_AFTER) && flat.includes("definer=t volatile=v path=yes body_md5=" + AA_X_MD5 + " (revision x's body)") && flat.includes("definer=t volatile=v path=yes body_md5=" + AA_MD5 + " (this revision's) - any other md5 is a STOP") && flat.includes("public=f anon=f authenticated=t service_role=t result=TABLE(person_id text, start_date date, end_date date, decision text, reason text)") && flat.includes("owner_match=yes reviews_force=f audit_force=f"), "the header states the gate before and after, with both bodies' md5 (derived from the files)");
   ok(flat.includes("Expected live: east_people=1 held=1 would_keep=0/0") && flat.includes("an expectation, never a stop") && flat.includes("would_keep above 0 means revision x would delete those reviews at the next reset unless that run's read brings his ranges back: report it at once"), "row 5 is a fact (expected east_people=1 held=1 would_keep=0/0), never a stop - a would_keep above 0 (revision x would delete those reviews at the next reset unless its read brings his ranges back) is reported at once");
   const code = aaPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
@@ -7395,7 +7442,7 @@ step("revision aa: the existing East vacations probe stays valid under the backs
   ok(!/east-reset-backstop|eastvac\.reset\.kept/.test(xvProbe), "the x probe is unchanged by revision aa (it neither names nor counts the kept rows)");
 }
 
-step("revision aa: docs - SCHEMA-REVIEW.md's section (PREPARED, report-first; the last one, after revision z's): why, the decisions, the objects, the change, who it binds, the blast radius, the migration verbatim, the pre-check gate with the md5s, the probe table = the header's 15 cases, the leftover query, the offline proof, the order, the rollback, the record step, the observed placeholder; guide 4.3 / 25.1 / 25.4 and the rules doc's Khan reset bullet say prepared, NOT applied");
+step("revision aa: docs - SCHEMA-REVIEW.md's section (APPLIED 2026-10-22 04:50:53Z; the last one, after revision z's): why, the decisions, the objects, the change, who it binds, the blast radius, the migration verbatim, the pre-check gate with the md5s, the probe table = the header's 15 cases, the leftover query, the offline proof, the order, the rollback, the record step, their as-run notes, the observed paragraph from the log (frozen); tables (a), revision x's pointer; guide 4.3 / 25.1 / 25.4 / 25.6, the rules doc's Khan reset bullet and item 26 (4), CLAUDE.md say applied");
 {
   ok(new RegExp("^" + AA_SECTION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ": east_vacation_reset_stale re-created \\(Faraz 10/20; `sql/migrations/2026-10-21-east-reset-backstop\\.sql`\\)$", "m").test(review), "SCHEMA-REVIEW.md lacks the '" + AA_SECTION + ": east_vacation_reset_stale re-created (Faraz 10/20; `sql/migrations/" + AA_FILE + "`)' section (the migration header's record step names it)");
   const at = review.indexOf(AA_SECTION), end = at < 0 ? -1 : review.indexOf("\n## ", at + 1);
@@ -7404,14 +7451,17 @@ step("revision aa: docs - SCHEMA-REVIEW.md's section (PREPARED, report-first; th
   // the newest section: revision z's record (the push follow-ups, prepared in parallel - aa's records follow z's) goes before it (pin
   // moved 10/21, the rebase onto z: the x / y / z "may follow" pins above name aa's); this pin moves only if a section lands after this one
   ok(at > review.indexOf("## 2026-10-20 - phone push follow-ups (revision z)") && end < 0, "the revision aa section is the last one, after revision z's");
-  ok(/^\*\*Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-reset-backstop\.sh`\.\*\*$/m.test(ar) && !/^\*\*Status: APPLIED/m.test(ar), "the status line reads '**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-east-reset-backstop.sh`.**'");
+  // pin moved deliberately 10/22 (the record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
+  ok(/^\*\*Status: APPLIED 2026-10-22 04:50:53Z\*\* \(Faraz - `apply-east-reset-backstop\.sh`, its CLI in agent mode \(`AI_AGENT=1`\), from the main clone at `cc4cecc`; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(ar) && !/^\*\*Status: PREPARED/m.test(ar), "the status line reads APPLIED 2026-10-22 04:50:53Z (Faraz - apply-east-reset-backstop.sh, its CLI in agent mode, from the main clone at cc4cecc; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
+  ok(af.includes("Faraz ran it and pasted the log back, and the record step filled the observed lines at the end of this section and added verify-rls section 23. As run, revision z's apply went first (2026-10-22 04:33:15Z) and this one followed about 18 minutes later; z's record step (`32e9f20`) merged before this one.") && !/the record step fills the observed line/.test(ar), "the status paragraph reads as run: the log pasted back, the observed lines filled, section 23 added; z's apply first, its record step merged first");
   ok(af.includes("u stays reserved for the weekend pair claim; z went to the push follow-ups") && af.includes("`REPORT-RESET-BACKSTOP-2026-10-20.md`") && af.includes("\"finish the backlog\""), "the section names the letters (u, z), the report and Faraz's go");
-  const ANCHORS = ["**Why.**", "**The decisions**", "**The objects**", "**Design notes.**", "**What it changes**", "**Who it binds.**", "**Blast radius.**", "**The migration**", "**The pre-check**", "**The probe**", "**Offline**", "**The order**", "**Rolling back**", "**The record step, ONE commit:**", "\nobserved: (the record step fills this - nothing in this section has run against the live project)."];
+  const ANCHORS = ["**Why.**", "**The decisions**", "**The objects**", "**Design notes.**", "**What it changes**", "**Who it binds.**", "**Blast radius.**", "**The migration**", "**The pre-check**", "**The probe**", "**Offline**", "**The order**", "**Rolling back**", "**The record step, ONE commit:**", "\nobserved (apply, 2026-10-22): applied 2026-10-22 04:50:53Z"];
   let last = -1;
   ANCHORS.forEach((a) => { const i = ar.indexOf(a); ok(i > last, "the section's '" + a.trim() + "' is missing or out of order"); last = i; });
   ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10"].forEach((d) => ok(af.includes(d + " "), "the decisions name " + d));
   // the migration, verbatim: every statement after its header, in one sql fence
-  const body = aaMig.slice(aaMig.indexOf("create or replace function public.east_vacation_reset_stale(")).replace(/\n+$/, "");
+  // pin moved deliberately 10/22 (the record step): the applied body, without the trailer line
+  const body = aaBody.slice(aaBody.indexOf("create or replace function public.east_vacation_reset_stale(")).replace(/\n+$/, "");
   ok(body.length > 1000 && ar.includes("```sql\n" + body + "\n```"), "the section carries the migration verbatim (every statement after its header - = sql/migrations/" + AA_FILE + ")");
   ok(ar.includes("before: 1 objects  " + AA_GATE_BEFORE + "\n        2 body     definer=t volatile=v path=yes body_md5=" + AA_X_MD5 + "\nafter:  1 objects  " + AA_GATE_AFTER + "\n        2 body     definer=t volatile=v path=yes body_md5=" + AA_MD5 + "\n"), "the section's gate states the objects and the body md5 before (revision x) and after (aa), derived from the files");
   AA_CASES.forEach((k) => ok(new RegExp("^\\| " + k + " \\| [^\\n]+ \\| `" + AA_AFTER[k].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "` \\|$", "m").test(ar), "the section's probe table lists case " + k + " with its AFTER string"));
@@ -7420,29 +7470,332 @@ step("revision aa: docs - SCHEMA-REVIEW.md's section (PREPARED, report-first; th
   ok(af.includes("INVENTED East data, not live data") && af.includes("this probe 15 / 15, the revision x probe 56 / 56 with the same case=value pairs as before, leftover 0 and nothing persisted") && af.includes("The file re-runs (15 / 15 again)") && af.includes("reads B3-B6, B8-B13 and B15 red") && af.includes("B15 `n=0` - B3 already deleted them") && af.includes("Rollback (x's file re-run): x's md5 back, this probe PROBE_SETUP, the revision x probe 56 / 56") && af.includes("Eleven one-change mutants") && af.includes("`silvis_derived_vacations()` or with `r.state <> 'home'`") && af.includes("(B4 `pid=other`)") && af.includes("Two East people (offline only)"), "the offline proof: invented data (not live), 15 / 15 and 56 / 56 with nothing persisted, the re-run (15 / 15 again), revision x's body red on B3-B6, B8-B13 and B15 (B15 n=0), the rollback, the mutants, two East people offline only");
   ok(ar.includes("```text\nsupabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-14-east-vacations.sql   (revision x - idempotent)\n```"), "the rollback is revision x's file re-run (its own block)");
   ok(af.includes("`apply-east-reset-backstop.sh`, kept outside the repo; `--dry-run` first") && af.includes("APPLY in capitals") && af.includes("PASTE THIS BACK") && af.includes("the record step adds section 23 (22 goes to revision z's record step, which comes first)") && af.includes("outside 10:25-10:40 UTC") && !/bash scripts\/apply-/.test(ar), "the order: Faraz's apply script outside the repo (--dry-run, APPLY in capitals, the paste-back block), no verify-rls run (section 23 with the record step - 22 is revision z's), outside the cron window");
-  ok(!/_to be filled/.test(ar) && !/^observed \(apply/m.test(ar), "the section carries only the observed placeholder (nothing ran live)");
+  // pin moved deliberately 10/22 (the record step): the placeholder is gone - the observed paragraph from Faraz's log replaces it
+  ok(!/_to be filled/.test(ar) && !/^observed: \(the record step fills this/m.test(ar) && !/PLACEHOLDER/.test(ar), "the section has no observed placeholder since the record step");
+  // the as-run notes (the record step, z's precedent): the blast radius, the pre-check, the probe, the order, the rollback, the record step
+  ok(af.includes("*As run: the pre-check's row 5 read `p_from=2026-09-21 east_people=1 held=1 would_keep=0/0 would_reset=0` before and after the apply - the one East person held, nobody the backstop would keep, no review the next reset would delete - and row 6 `resets_since_x=0 by_cron=0 kept_rows=0 refreshes_since_x=2` both times (no reset has deleted a review since revision x, no kept row yet). The apply wrote no row (the probe rolled back, leftover 0). Both callers and the cron job are unchanged; every call of the reset since the apply - the daily 10:30 UTC run or an in-app Refresh - runs under the backstop (none observed by the record step: no audit read since the apply).*") && af.indexOf("*As run: the pre-check's row 5 read") > af.indexOf("**Blast radius.**") && af.indexOf("*As run: the pre-check's row 5 read") < af.indexOf("**The migration**"), "the blast radius carries its as-run note (rows 5-6 before and after, nothing written, every reset since the apply under the backstop - none observed)");
+  ok(af.includes("*As run: the live pre-check read exactly the \"before\" rows before the apply and the \"after\" rows right after it - rows 3 and 4 the same both times; its facts read `5 backstop p_from=2026-09-21 east_people=1 held=1 would_keep=0/0 would_reset=0` and `6 audit resets_since_x=0 by_cron=0 kept_rows=0 refreshes_since_x=2` both times - row 5 as expected.*") && af.indexOf("*As run: the live pre-check read exactly") > af.indexOf("**The pre-check**") && af.indexOf("*As run: the live pre-check read exactly") < af.indexOf("**The probe**"), "the pre-check carries its as-run note (the gate before / after, rows 5-6 both times)");
+  ok(af.includes("*As run (2026-10-22): the live probe BEFORE read `PROBE_SETUP` (east_vacation_reset_stale has no backstop) and AFTER all 15 cases exactly as their header strings, leftover 0; the regression probe's 56 cases read the same before and after (steps 2 and 7).*") && af.indexOf("*As run (2026-10-22): the live probe BEFORE") > af.indexOf("as leftover ```") && af.indexOf("*As run (2026-10-22): the live probe BEFORE") < af.indexOf("**Offline**"), "the probe carries its as-run note after the leftover count (15 / 15, leftover 0, the regression probe unchanged)");
+  ok(af.includes("*As run (2026-10-22): `apply-east-reset-backstop.sh` (Faraz, the script's sha256 `6523baae300d49ab1839ae83fde29291d5afe6dfcf16d3b0a2053c8d47f72a5c`; main clone at `cc4cecc`, pins from `a0a322c` - all five matched) ran its steps 0-7 in this order - 0 the sha256 pins and the CLI link (the UTC clock 0447), 1 agent mode and the pre-check (the gate before, revision x's md5; rows 5-6 printed, `would_keep` 0/0), 2 the regression probe BEFORE (its 56 cases), 3 probe BEFORE, 4 APPLY and the migration (the clock 0450 at the prompt), 5 the gate after, 6 probe AFTER and its leftover count, 7 the regression probe AFTER (the same 56 pairs) - then the PASTE THIS BACK block; the list above and the log number the steps alike.") && af.includes("When (D9): Faraz's plain `bash scripts/verify-rls.sh` on `cc4cecc` came first - its RESULT line, pasted by Faraz (not in the apply logs), read `569 passed, 0 failed` (sections 1-21: the 535 of 2026-10-20 and section 21's 34);") && 535 + 34 === 569 && af.includes("The record step changes three of the five graded files (the migration through its trailer - its body's sha256 `" + AA_APPLIED_SHA256 + "` unchanged - the probe's and the pre-check's headers), so the script is one-shot: a re-run or `--dry-run` needs its pins refreshed (`sql/probes/east-vacations-probe.sql` and `sql/migrations/2026-10-14-east-vacations.sql` keep theirs).*"), "the order carries its as-run note (the script's steps 0-7 as the log numbers them, the script's sha256, the clone and its pins, the clocks, D9's verify-rls run before it - 569 = 535 + 34, three graded files changed - one-shot)");
+  ok(af.includes("*As run: not run. The apply's paste-back block printed this same line (revision x's file), adding that with revision x back the next reset deletes again the reviews aa keeps (row 5's `would_keep` - 0/0 at the apply).*"), "the rollback carries its as-run note (not run; the paste-back's own warning)");
+  ok(af.includes("*As run (the record step, 2026-10-22): all of the above - the status and the observed lines (pre-check rows 5-6 before and after included), the migration's ONE trailer line (its body's sha256 pinned),") && af.includes("verify-rls section 23 runs and grades this probe (its 15 AFTER strings by name, the count of 15) and counts its leftovers through the linked CLI, as section 22 does for revision z's, in two columns of the leftover count above: tagged (the probe's users, `east_feed` rows and reviews - a FAIL on every ending, with their DELETEs) and audit (the window's `eastvac.review` / `eastvac.reset.kept` rows, which the reset writes with no tag of the probe's - a FAIL after a run that wrote its fixtures, listed for review after a PROBE_SETUP stop or an unknown ending, never a DELETE).") && af.includes("No anon REST check is added: aa changes no grant, and section 20 already asks anon (20b, refused 401 / 403) and a surgeon (20e, `EV001`) for this function."), "the record step carries its as-run note: section 23 through the CLI (15 by name, the count, two leftover columns), no anon check of its own (20b / 20e cover the reset)");
+  // the expected plain-run count: z's record expects 620 (sections 1-22: the 569 of Faraz's 2026-10-22 run on cc4cecc - 535 + 34 - plus
+  // section 22's 51); section 23 adds 17 PASS lines on a green run (its 15 cases, the count of 15, the leftover count) - the faked run above
+  // reads 17 / 0 on the AFTER picture
+  ok(af.includes("A plain `bash scripts/verify-rls.sh` with no token is then expected to read `RESULT: 637 passed, 0 failed` - the 620 revision z's record expects (sections 1-22) and section 23's 17 (its 15 cases, the count and the leftover check; neither 22 nor 23 run live yet).") && 569 + 51 === 620 && 620 + AA_CASES.length + 2 === 637 && review.includes("expected to read `RESULT: 620 passed, 0 failed`"), "the as-run note states the plain run's expected count: 637 (620 + section 23's 17 - its 15 cases, the count and the leftover check)");
+  ok(af.includes("No change to `edge-functions/`, `index-source.html`, `config.js` or `east-feed.js`: no runtime input changes, so merging this step is no client build.*"), "the record step's as-run note: no runtime input changes - no client build");
+  {
+    const oat = ar.indexOf("observed (apply, 2026-10-22): applied 2026-10-22 04:50:53Z");
+    ok(oat > 0 && oat > ar.indexOf("**The record step, ONE commit:**"), "the section must end with the 'observed (apply, 2026-10-22): applied 2026-10-22 04:50:53Z ...' paragraph");
+    const ob = oat < 0 ? "" : ar.slice(oat).replace(/\n+$/, "");
+    const obFlat = ob.replace(/\s+/g, " ");
+    ok(obFlat.includes("exit 0, an empty result `\"rows\": []`, no `ERROR:`") && obFlat.includes("log `apply-east-reset-backstop-20261022T044711Z.log`, outside the repo, result `APPLIED AND VERIFIED`") && obFlat.includes("the script's sha256 `6523baae300d49ab1839ae83fde29291d5afe6dfcf16d3b0a2053c8d47f72a5c`") && obFlat.includes("repo HEAD `cc4cecc` on `main`, the pins from `a0a322c`") && obFlat.includes("`" + AA_APPLIED_SHA256 + "`") && obFlat.includes("(`all five matched: yes`)") && obFlat.includes("supabase CLI 2.120.0") && obFlat.includes("(`AI_AGENT=1`)") && obFlat.includes("`bzhsroegtagqhutbnsrp` (the known-good read `silvis=true davenport=false`)") && obFlat.includes("the UTC clock `0447` at step 0 and `0450` at the APPLY step, outside 10:25-10:40; APPLY typed at the prompt)"), "the observed apply names the CLI exit, the log and its result, the script's sha256, the repo HEAD and its pins, the applied sha256 (all five matched), the CLI version and agent mode, the project, the clocks and the typed APPLY");
+    const PRE_BEFORE = ["1 objects  " + AA_GATE_BEFORE, "2 body     definer=t volatile=v path=yes body_md5=" + AA_X_MD5, "3 grants   public=f anon=f authenticated=t service_role=t result=TABLE(person_id text, start_date date, end_date date, decision text, reason text)", "4 owner    owner_match=yes reviews_force=f audit_force=f", "5 backstop p_from=2026-09-21 east_people=1 held=1 would_keep=0/0 would_reset=0", "6 audit    resets_since_x=0 by_cron=0 kept_rows=0 refreshes_since_x=2"];
+    const PRE_AFTER = ["1 objects  " + AA_GATE_AFTER, "2 body     definer=t volatile=v path=yes body_md5=" + AA_MD5].concat(PRE_BEFORE.slice(2));
+    ok(ob.includes("```text\n" + PRE_BEFORE.join("\n") + "\n```") && ob.includes("```text\n" + PRE_AFTER.join("\n") + "\n```") && ob.indexOf(PRE_BEFORE[0]) < ob.indexOf(PRE_AFTER[0]), "the observed apply records the pre-check before and after as the log printed them (rows 1-4 the gate - x's md5, then aa's; rows 5-6 the same both times)");
+    ok(obFlat.includes("Step 2, the regression probe `sql/probes/east-vacations-probe.sql` BEFORE: 56 cases, each as its header states. Step 3, probe BEFORE: `PROBE_SETUP: east_vacation_reset_stale has no backstop - sql/migrations/2026-10-21-east-reset-backstop.sql is not applied` (nothing else ran)."), "the observed apply records the regression probe BEFORE and the probe BEFORE");
+    // the 15 AFTER lines as the log printed them, in one text block, frozen on their own: the sha256 of the 15 lines (each with its LF) as
+    // the paste-back block of apply-east-reset-backstop-20261022T044711Z.log printed them under "probe after cases:" (indent removed,
+    // machine-compared with the log at the record step), so a later, justified edit of a probe AFTER string never forces a rewrite of this record
+    const blockAt = ob.indexOf("```text\nB1=");
+    const block = blockAt < 0 ? "" : ob.slice(blockAt + 8, ob.indexOf("\n```", blockAt + 8));
+    eq(block.split("\n").length, 15, "the observed probe AFTER lists 15 lines (one per case);");
+    eq(aaSha(block + "\n"), "af866f00cbe3d894c63b53ffef88037d8063f8c9d804a062267ab7c12aad72a1", "the observed probe AFTER block must be the 15 lines exactly as the 20261022T044711Z log printed them (frozen sha256);");
+    ok(!/[\";<>&]/.test(block), "no observed AFTER line carries a double quote, ; < > or &");
+    ok(obFlat.includes("then the probe's leftover count: 0 (persisted nothing). Step 7, the regression probe AFTER: the same 56 case=value pairs as before the migration.") && obFlat.includes("The apply script runs no `scripts/verify-rls.sh` (no RESULT line)."), "the observed apply records the leftover 0, the regression probe after and that no verify-rls RESULT exists for this apply");
+    ok(!/RESULT: \d+ passed/.test(ob), "the observed paragraph states no verify-rls RESULT figure (the apply ran none)");
+    ok(obFlat.includes("One earlier run applied nothing: the `--dry-run` at 20261022T044140Z (`main`, `cc4cecc`, the same script and pins; the clock `0442`) read steps 0-3 as above and stopped there by design - `DRY RUN - nothing applied`, `APPLY confirmation: not reached`, `migration: not run`."), "the observed apply records the earlier dry run, which applied nothing");
+    ok(!/typed '|you typed|Program Files|[A-Za-z]:[\\/]|supa-silvis|scoop|OneDrive|Older copies/.test(ob), "the observed paragraph quotes no typed answer and no machine path (the logs name the workdir, the script's folder and the CLI's local path)");
+    ok(obFlat.includes("Not re-run against the live project after the record step: verify-rls section 23 (added by this step) grades the probe on the next plain `bash scripts/verify-rls.sh`."), "the observed paragraph says nothing live was re-run by the record step");
+    // the observed paragraph is a frozen record copied from the log (checked against apply-east-reset-backstop-20261022T044711Z.log at the
+    // record step), so it is frozen whole by sha256 - the probe block's own sha above stays; any later edit is deliberate (a new sha with its
+    // reason), never silent
+    eq(aaSha(ob), "72864980f38f2c24a0f51984f9bc71365864107ebeda2c4ceeee88a253c48074", "the observed (apply, 2026-10-22) paragraph must read exactly as the record step copied it from the log (frozen sha256);");
+  }
+  // table (a): the reviews row and the helper line name revision aa applied live; revision x's section gains its As run pointer after its
+  // sentence on the caller's guard (the record step's plan)
+  const APPLIED_AA = "Revision aa (prepared 2026-10-21 - report-first, **applied live 2026-10-22 04:50 UTC** - section at the end)";
+  const revRow = review.split("\n").find((l) => l.startsWith("| `east_vacation_reviews` | Prompt 15 part 2")) || "";
+  ok(revRow.endsWith(" " + APPLIED_AA + ": that reset keeps every review of an East person the cache holds no merged range of ending on or after `p_from` (one `eastvac.reset.kept` audit row instead). |"), "table (a)'s east_vacation_reviews row names revision aa, applied live 2026-10-22 04:50 UTC");
+  ok(/^Helper functions: [^\n]*`east_vacation_reset_stale\(p_from\)` \(security definer, volatile: the one review reset of both East feed refreshes - the scheduler or a no-user session; its backstop since revision aa, \*\*applied live 2026-10-22 04:50 UTC\*\* - section at the end: an East person the cache holds no range of keeps his reviews\), /m.test(review) && !/revision aa[^\n|]*NOT applied/i.test(review.slice(0, review.indexOf("## (c) Findings"))), "table (a)'s helper line names the reset's backstop (revision aa, applied live) - no line of tables (a) / (b) calls aa not applied");
+  {
+    const xr = review.slice(review.indexOf("## 2026-10-14 - East vacations:"), review.indexOf("\n## ", review.indexOf("## 2026-10-14 - East vacations:") + 1));
+    ok(xr.includes("The function itself never second-guesses its caller: it resets against the cache\nas it stands.\n*As run (revision aa, applied 2026-10-22 04:50:53Z - the section \"2026-10-21 - east_vacation_reset_stale keeps a person's reviews when\nthe cache holds no range of his (revision aa)\"): one case is second-guessed since - an East person the cache holds no merged range of\nending on or after `p_from` keeps every review, with one `eastvac.reset.kept` audit row (a blocked or emptied read looks the same);\neveryone else is reset against the cache as it stands.*\n\n**Blast radius.**"), "revision x's section carries the As run pointer to revision aa right after its sentence on the caller's guard");
+  }
   ok(!/the refusals come first \|/.test(ar) && af.includes("pinned in `test/schema.test.js` on the body's text; no probe reading can see the order (B2 sees that each refused call raises and leaves no kept row)"), "the section's B2 row claims only what B2 reads, and its design note says the refusal order is pinned on the body's text, not by the probe");
   // guide 4.3, 25.1, 25.4 and the rules doc's Khan reset bullet: prepared, NOT applied
   const aaBullet = (g43.match(/^- \*\*East reset backstop \(2026-10-21, [^\n]*/m) || [""])[0];
   const aaProof = (g43.match(/^Proof: `sql\/probes\/east-reset-backstop-probe\.sql`[^\n]*/m) || [""])[0];
-  ok(aaBullet.startsWith("- **East reset backstop (2026-10-21, revision aa, report-first, NOT applied - Faraz runs `apply-east-reset-backstop.sh`; `sql/migrations/2026-10-21-east-reset-backstop.sql`).**") && aaBullet.includes("never anon - unchanged") && aaBullet.includes("`eastvac.reset.kept`") && aaBullet.includes("drafted it as revision z"), "guide 4.3 carries the revision aa bullet (report-first, NOT applied; the reset never anon; the kept row; drafted as z)");
-  ok(/15 cases in its header/.test(aaProof) && aaProof.includes("B2 each refused call raises `EV001` / `EV002` and leaves no kept row (the order is pinned in `test/schema.test.js`)") && !/B2 the refusals first/.test(aaProof) && aaProof.includes("B8-B10 and B15 the test's edges") && aaProof.includes("`sql/probes/east-reset-backstop-precheck.sql`") && aaProof.includes("`sql/probes/east-vacations-probe.sql` (its 56 cases the same before and after)") && aaProof.includes("adds `scripts/verify-rls.sh` section 23") && aaProof.endsWith("applied: _to be filled at the record step_."), "guide 4.3's revision aa proof line: the 15 cases (B2 claiming only what it reads), the pre-check, the regression probe, section 23 with the record step, applied: to be filled");
+  // pins moved deliberately 10/22 (the record step): guide 4.3's bullet and proof line, 25.1, 25.4 and the rules doc read applied; 25.6
+  // gains revision aa's bullet; the rules doc's item 26 (4) and CLAUDE.md's East feed sentence name the backstop
+  ok(aaBullet.startsWith("- **East reset backstop (2026-10-21, revision aa, report-first, applied 2026-10-22 04:50 UTC; `sql/migrations/2026-10-21-east-reset-backstop.sql`).**") && !/NOT applied/.test(aaBullet) && aaBullet.includes("never anon - unchanged") && aaBullet.includes("`eastvac.reset.kept`") && aaBullet.includes("drafted it as revision z"), "guide 4.3 carries the revision aa bullet (report-first, applied 2026-10-22 04:50 UTC; the reset never anon; the kept row; drafted as z)");
+  ok(/15 cases in its header/.test(aaProof) && aaProof.includes("B2 each refused call raises `EV001` / `EV002` and leaves no kept row (the order is pinned in `test/schema.test.js`)") && !/B2 the refusals first/.test(aaProof) && aaProof.includes("B8-B10 and B15 the test's edges") && aaProof.includes("`sql/probes/east-reset-backstop-precheck.sql`") && aaProof.includes("`sql/probes/east-vacations-probe.sql` (its 56 cases the same before and after)") && aaProof.includes("`scripts/verify-rls.sh` section 23 (the graded probe - its 15 AFTER strings, the count of 15 - and its leftover count: tagged rows FAIL with their DELETEs, the window's audit rows FAIL after a run that wrote its fixtures and are listed for review otherwise; added by the record step, a PROBE_SETUP FAILs; no anon check of its own - section 20's 20b refuses anon on the reset; not yet run live), one command:") && aaProof.includes("; applied: 2026-10-22 04:50:53 UTC by Faraz (`apply-east-reset-backstop.sh`, its CLI in agent mode `AI_AGENT=1`; from the main clone at `cc4cecc`, the pins from `a0a322c`; a `--dry-run` at 04:41Z applied nothing) - the pre-check gate `" + AA_GATE_BEFORE + "` before and `" + AA_GATE_AFTER + "` after (the reset's body `" + AA_X_MD5 + "` -> `" + AA_MD5 + "`), row 5 `p_from=2026-09-21 east_people=1 held=1 would_keep=0/0 would_reset=0` before and after, probe BEFORE `PROBE_SETUP`, AFTER 15 / 15, leftovers 0, the regression probe's 56 cases the same before and after; the migration file kept as it ran, its sha256 pinned.") && aaProof.endsWith("its sha256 pinned.") && !/_to be filled/.test(aaProof) && !/\d+ \/ 0\b/.test(aaProof), "guide 4.3's revision aa proof line: the 15 cases (B2 claiming only what it reads), the pre-check, the regression probe, section 23 (not yet run live) and the apply (2026-10-22 04:50:53 UTC, the gate, the bodies, row 5, 15 / 15, leftovers 0, the file's sha256 pinned) - no verify-rls N / 0 figure");
   ok(g43.indexOf(aaBullet) > g43.indexOf("- **Phone push follow-ups (2026-10-20, revision z,") && g43.indexOf("- **Phone push follow-ups (2026-10-20, revision z,") > g43.indexOf("- **Trade offers (2026-10-18, revision y,"), "guide 4.3's revision aa bullet follows revision z's (which follows y's)");
   const s25 = guide.slice(guide.indexOf("\n## 25. "));
-  ok(s25.includes("| the ONE review reset (25.4); revision aa (prepared 2026-10-21 - report-first, NOT applied; §4.3) adds its backstop - a person the cache holds no range of ending on or after `p_from` keeps his reviews |"), "guide 25.1's reset row names revision aa (prepared, NOT applied)");
+  ok(s25.includes("| the ONE review reset (25.4); revision aa (report-first, applied 2026-10-22 04:50 UTC; §4.3) adds its backstop - a person the cache holds no range of ending on or after `p_from` keeps his reviews |") && !/revision aa \(prepared 2026-10-21 - report-first, NOT applied/.test(s25), "guide 25.1's reset row names revision aa (applied 2026-10-22 04:50 UTC)");
   const s254 = s25.slice(s25.indexOf("\n### 25.4 "), s25.indexOf("\n### 25.5 "));
-  ok(s254.includes("- **The backstop - prepared, NOT applied** (revision aa, 2026-10-21 - report-first; `sql/migrations/2026-10-21-east-reset-backstop.sql`,") && s254.replace(/\n\s*/g, " ").includes("keeps every one of them - none deleted, none returned - and gets one `eastvac.reset.kept` audit row") && s254.indexOf("- **The backstop") > s254.indexOf("- **ONE reset**") && s254.indexOf("- **The backstop") < s254.indexOf("- **The silent-empty guard**"), "guide 25.4 carries the backstop bullet (prepared, NOT applied) between the ONE reset and the guard");
+  ok(s254.includes("- **The backstop - applied 2026-10-22 04:50 UTC** (revision aa, 2026-10-21 - report-first; `sql/migrations/2026-10-21-east-reset-backstop.sql`,") && s254.replace(/\n\s*/g, " ").includes("Since the apply, the function first reads ONCE the East people the cache holds a merged range of ending on or after `p_from`;") && !/Once applied|prepared, NOT applied/.test(s254) && s254.replace(/\n\s*/g, " ").includes("keeps every one of them - none deleted, none returned - and gets one `eastvac.reset.kept` audit row") && s254.indexOf("- **The backstop") > s254.indexOf("- **ONE reset**") && s254.indexOf("- **The backstop") < s254.indexOf("- **The silent-empty guard**"), "guide 25.4 carries the backstop bullet (applied 2026-10-22 04:50 UTC) between the ONE reset and the guard");
+  const s256 = s25.slice(s25.indexOf("\n### 25.6 "));
+  const aa256 = (s256.match(/^- \*\*Revision aa\*\* [^\n]*(\n  [^\n]+)*/m) || [""])[0].replace(/\n\s*/g, " ");
+  ok(aa256.startsWith("- **Revision aa** (the backstop, 25.4 - report-first, applied 2026-10-22 04:50:53Z by Faraz with `apply-east-reset-backstop.sh`;") && aa256.includes("verify-rls section 23 grades the probe on every plain run (its 15 cases, the count, its leftovers - added by its record step).") && aa256.includes("Its own rollback is revision x's file re-run (aa writes no review; its `eastvac.reset.kept` rows stay as history).") && s256.indexOf("- **Revision aa**") > s256.indexOf("- **Rollback**") && s256.indexOf("- **Revision aa**") < s256.indexOf("- **Still open:**"), "guide 25.6 gains revision aa's bullet (applied 2026-10-22 04:50:53Z; section 23; its own rollback x's file) between the rollback and what stays open");
   const rules = read(path.join(ROOT, "docs", "SILVIS-CALL-RULES.md"));
   const rb = (rules.match(/^  - \*\*A refreshed feed that changes or removes a range resets its review\*\*[^\n]*/m) || [""])[0];
-  ok(rb.includes("⟶ **10/21 (revision aa - prepared, report-first, NOT applied):** once applied, the reset also keeps every review of a person the cache holds no range of ending on or after the refresh's first day") && rb.includes("`eastvac.reset.kept`") && rb.includes("build guide §25.4"), "the rules doc's Khan reset bullet says revision aa is prepared, NOT applied, and what it changes");
+  ok(rb.includes("⟶ **10/21 (revision aa - report-first, applied 2026-10-22 04:50 UTC):** since the apply, the reset also keeps every review of a person the cache holds no range of ending on or after the refresh's first day") && !/revision aa - prepared|once applied/.test(rb) && rb.includes("`eastvac.reset.kept`") && rb.includes("build guide §25.4"), "the rules doc's Khan reset bullet says revision aa is applied 2026-10-22 04:50 UTC, and what it changes");
+  const i26 = ((rules.slice(rules.indexOf("\n## 8. Answered")).match(/^26\. \*\*East vacations seen by everyone signed in[^\n]*(\n    [^\n]+)*/m) || [""])[0]).replace(/\n\s*/g, " ");
+  ok(i26.includes("(4) ONE SQL function, `east_vacation_reset_stale(p_from)`, does the review resets of both refreshes; since revision aa (applied 2026-10-22 04:50 UTC - build guide section 25.4) it keeps every review of an East person the cache holds no range of ending on or after `p_from`, with one `eastvac.reset.kept` audit row. (5) Every refresh"), "the rules doc's section 8 item 26 (4) names the backstop since revision aa (applied 2026-10-22 04:50 UTC)");
+  const cmd = read(path.join(ROOT, "CLAUDE.md")).replace(/\n\s*/g, " ");
+  ok(cmd.includes("the review resets go through ONE SQL function, `east_vacation_reset_stale` (the 9/23 client loop while it is missing); since revision aa (applied 2026-10-22 04:50:53Z) it keeps every review of an East person the cache holds no range of ending on or after its first day, with one `eastvac.reset.kept` audit row."), "CLAUDE.md's East feed sentence names the backstop since revision aa (applied 2026-10-22 04:50:53Z)");
+  ok(![guide, rules, read(path.join(ROOT, "CLAUDE.md"))].some((t) => /revision aa[^\n]*NOT applied|NOT applied[^\n]*revision aa|apply-east-reset-backstop\.sh`?[^\n]*NOT applied/.test(t)), "no line of the guide, the rules doc or CLAUDE.md still calls revision aa not applied");
 }
 
-step("revision aa: no apply script in the repo (Faraz 10/1: apply scripts live outside it); scripts/verify-rls.sh unchanged - section 23 comes with the record step");
+step("revision aa: verify-rls.sh section 23 - the graded probe (23a: 15 cases by name + the count of 15) and its leftovers (23b: docs/SCHEMA-REVIEW.md's leftover count in two columns - tagged / audit; a tagged row FAILs on every ending with its DELETEs, the window's audit rows FAIL only after PROBE_RESULTS and are listed for review otherwise, never with a DELETE), strict from the start (no flag - PROBE_SETUP FAILs), no REST call (anon and a surgeon on the reset are section 20's 20b / 20e); graded against a faked CLI, the 2026-10-22 live picture replayed");
+ok(/^echo "== 23\. East reset backstop \(2026-10-21, revision aa\): east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his - rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 23 (the East reset backstop)");
+const s23 = vr.slice(vr.indexOf('echo "== 23. '), vrSectionEnd('echo "== 23. '));
+ok(s23.length > 0 && vr.indexOf('echo "== 23. ') > vr.indexOf('echo "== 22. ') && vrSectionEnd('echo "== 23. ') === vr.indexOf('\necho\necho "RESULT: '), "verify-rls.sh section 23 could not be sliced out (after section 22, the last section before the RESULT line)");
+ok(/^# Section 23 \(17 = the weekend pair claim, taken on its own branch; 22 = revision z's push follow-ups, the section above\)\.$/m.test(s23), "section 23's comment says why it is 23 (17 is on its own branch, 22 the section above)");
+ok(/^# sql\/migrations\/2026-10-21-east-reset-backstop\.sql \(report-first; applied 2026-10-22 04:50:53Z, revision aa\): /m.test(s23) && !/NOT applied/.test(s23), "section 23's comment says the migration is applied 2026-10-22 04:50:53Z (report-first; revision aa)");
+const s23code = s23.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+// no anon REST check of its own: aa changes no grant (the migration re-runs revision x's four grant lines), and section 20 already asks
+// anon (20b: 401/403 = refused, a 404 or a 400 FAILs) and a surgeon (20e: 400 EV001) for the reset - section 23 makes no REST call
+ok(!/\bcurl\b|\$URL|\$ANON|SILVIS_/.test(s23code) && !/SILVIS_EAST_RESET|SILVIS_BACKSTOP/.test(vr), "section 23 makes no REST call and reads no environment flag - strict from the start (no SILVIS_EAST_RESET_* / SILVIS_BACKSTOP_* flag anywhere in the script)");
+ok(s20code.includes("line=$(curl -s -o $T/vr20b.json -w 'HTTP %{http_code}' -X POST \"$URL/rest/v1/rpc/east_vacation_reset_stale\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_from\":\"2099-01-01\"}')") && s20code.includes("\"HTTP 401\"|\"HTTP 403\") ok \"anon rpc east_vacation_reset_stale refused ($line - the function exists, execute revoked from anon)\";;") && s20code.includes("-X POST \"$URL/rest/v1/rpc/east_vacation_reset_stale\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $SILVIS_SURGEON_JWT\"") && aaMig.includes("\n" + xvGrants("east_vacation_reset_stale") + "\n"), "the reset's REST side stays section 20's: 20b refuses anon (401/403), 20e a surgeon (EV001); aa re-runs revision x's grants unchanged - no section 23 REST check duplicates them");
+ok(/PROBE23="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/east-reset-backstop-probe\.sql"/.test(s23code) && s23code.includes("out=$(supabase db query --linked --workdir \"$WORKDIR\" -f \"$PROBE23\" 2>&1 | grep -v 'new version\\|recommend updating\\|Using workdir\\|Initialising' | tr -d '\\n')"), "23a runs sql/probes/east-reset-backstop-probe.sql through the linked CLI (the other probes' filter)");
+ok(s23code.includes("  if ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: east_vacation_reset_stale has no backstop'; then\n    bad \"East reset backstop probe: PROBE_SETUP - east_vacation_reset_stale has no backstop (the backstop exists since the 2026-10-22 apply)\"\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then\n    bad \"East reset backstop probe: ") && s23code.includes("\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then\n    bad \"East reset backstop probe reported no sentinel-terminated PROBE_RESULTS") && !/ok "East reset backstop probe: [^"\n]*no backstop/.test(s23code), "23a: PROBE_SETUP no backstop FAILs (strict from the start); every other PROBE_SETUP FAILs too - each only when no PROBE_RESULTS came back; a PROBE_RESULTS without ;END is a missing sentinel");
+ok(s23code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'") && s23code.includes('case_val23()   { CV23=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV23="${l#"$1="}"; return 0;; esac; done <<< "$lines23"; }'), "section 23 decodes the results ONCE and reads each case in plain bash (section 22's reader)");
+ok(s23code.includes("n23=$(echo \"$lines23\" | grep -c .)") && s23code.includes('[ "$n23" = "15" ] && ok "East reset backstop probe: 15 cases reported') && s23code.includes("|| bad \"East reset backstop probe: $n23 cases reported, not the 15 of its header"), "23a counts the cases the probe reported - exactly 15: with the 15 graded names, the set apply-east-reset-backstop.sh requires");
+// exact grading (section 22's, the review of its record step): string equality, never a prefix or a pattern - an answer that grew a
+// suffix FAILs; and the reader trims nothing after the ;END cut (a trim could only reach the last case, B9 - the results come sorted by name)
+eq((s23code.match(/expect_eq23\(\)/g) || []).length, 1, "section 23 defines expect_eq23 once;");
+ok(s23code.includes("    expect_eq23()  { case_val23 \"$1\"; v=\"$CV23\"; [ \"$v\" = \"$2\" ] && ok \"East reset backstop probe $1: $3\" || bad \"East reset backstop probe $1: $3 (got '$v', expected '$2')\"; }\n"), "23a's expect_eq23 grades by exact string equality: [ \"$v\" = \"$2\" ] (never [[ == ]], a prefix or a pattern)");
+ok(s23code.includes("    results23=$(echo \"$out\" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//')\n") && !/\[\[:space:\]\]/.test(s23code), "23a cuts the results at ;END and trims nothing after it (the last case, B9, is graded value for value)");
+ok(s23code.includes("  tagged23=$(echo \"$rflat23\" | grep -oE '\"tagged\":\"?[0-9]+' | head -1 | tr -cd '0-9')\n  aud23=$(echo \"$rflat23\" | grep -oE '\"audit\":\"?[0-9]+' | head -1 | tr -cd '0-9')\n") && s23code.includes("  if [ -z \"$tagged23\" ] || [ -z \"$aud23\" ]; then\n    bad \"East reset backstop probe leftover count could not be read: "), "23b reads each count whole (every digit) and FAILs a row missing either as unreadable");
+AA_CASES.forEach((k) => ok(s23code.includes("\n    expect_eq23 " + k.padEnd(3) + " \"" + AA_AFTER[k] + "\" "), "section 23 must grade " + k + " as `expect_eq23 " + k.padEnd(3) + " \"" + AA_AFTER[k] + "\" ...` (the probe header's AFTER string)"));
+eq((s23code.match(/\n    expect_eq23 /g) || []).length, AA_CASES.length, "section 23 grades exactly the 15 cases;");
+// 23b: SCHEMA-REVIEW's leftover count, term for term, in two columns - the first three terms (rows only the probe writes) are tagged, the
+// fourth (the window's audit rows, which the reset writes with the run's actor) is audit
+const AA_LEFTOVER_DOC = "select ((select count(*) from auth.users where email like 'probe-eastreset32-%@example.test') + (select count(*) from public.east_feed where data->>'probe' = 'eastreset32') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastreset32') + (select count(*) from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30'))::int as leftover";
+const AA_LEFTOVER23_SQL = "select ((select count(*) from auth.users where email like 'probe-eastreset32-%@example.test') + (select count(*) from public.east_feed where data->>'probe' = 'eastreset32') + (select count(*) from public.east_vacation_reviews where decided_by = 'probe-eastreset32'))::int as tagged, (select count(*) from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30')::int as audit";
+{
+  const ar = review.slice(review.indexOf(AA_SECTION));
+  ok(ar.includes("```sql\n" + AA_LEFTOVER_DOC + "\n```"), "SCHEMA-REVIEW's revision aa section carries the leftover count section 23 splits");
+  const terms = AA_LEFTOVER_DOC.slice("select ((".length, -"))::int as leftover".length).split(") + (");
+  eq(terms.length, 4, "the documented leftover count has four terms;");
+  eq(AA_LEFTOVER23_SQL, "select ((" + terms.slice(0, 3).join(") + (") + "))::int as tagged, (" + terms[3] + ")::int as audit", "23b's columns are the documented leftover count's four terms, in order - three tagged, the audit window apart;");
+  ok(s23code.includes("LEFTOVER23_SQL=\"" + AA_LEFTOVER23_SQL + "\""), "23b counts the probe's leftovers by its own identity in two columns: tagged (its users, its east_feed rows, its reviews) and audit (the window's eastvac rows)");
+  // what 23b counts is what the probe writes: the tagged terms its own identity, the audit term the reset's rows of its window - which the
+  // probe's collision guard reads with the very same predicate (so after PROBE_RESULTS such a row can only be the probe's)
+  const pcode = aaProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const feedIns = pcode.split("insert into public.east_feed").slice(1).map((s) => s.slice(0, s.indexOf(";")));
+  const revIns = pcode.split("insert into public.east_vacation_reviews").slice(1).map((s) => s.slice(0, s.indexOf(";")));
+  ok(pcode.includes("'probe-eastreset32-' || ua || '@example.test'") && (pcode.match(/insert into auth\.users\b/g) || []).length === 1
+    && feedIns.length === 2 && feedIns.every((s) => s.includes("jsonb_build_object('probe', 'eastreset32'"))
+    && revIns.length === 1 && (revIns[0].match(/\(e_id, '\d{4}-\d{2}-\d{2}', '\d{4}-\d{2}-\d{2}', '(away|home)', 'probe-eastreset32'\)/g) || []).length === 4 && (revIns[0].match(/\(e_id,/g) || []).length === 4
+    && Array.from(pcode.matchAll(/\b(insert into|update|delete from) (public\.[a-z_]+|auth\.[a-z_]+)/g)).map((m) => m[1] + " " + m[2]).sort().join(",") === "insert into auth.users,insert into public.east_feed,insert into public.east_feed,insert into public.east_vacation_reviews,update public.user_profiles",
+    "23b's tagged terms are what the probe writes: one probe-eastreset32-<uuid>@example.test user (its profile cascades; the one update is that profile), its two east_feed inserts with data.probe eastreset32, its four reviews decided_by probe-eastreset32 - and no other table (the reset's audit rows are the audit column)");
+  const guard = aaProbe.slice(aaProbe.indexOf("-- the collision guard first"), aaProbe.indexOf("raise exception 'PROBE_SETUP: live rows already sit in 2031-12-29 .. 2032-06-30"));
+  ok(guard.length > 0 && guard.includes("exists (select 1 from public.audit_log where " + terms[3].replace("select count(*) from public.audit_log where ", "") + ")"), "the probe's collision guard reads the audit window with 23b's audit predicate exactly (a row there after a run that wrote its fixtures - PROBE_RESULTS - can only be the probe's)");
+  // every PROBE_SETUP raise sits in the setup block (the first DO block), before the probe's first call of the reset (B2's) - the only
+  // writer of the window's audit rows; no other block raises PROBE_SETUP - what 23b's 'setup' reading rests on
+  // read on the probe's code (comment lines blanked: its header names the function in prose)
+  const pc0 = aaProbe.split("\n").map((l) => (/^\s*--/.test(l) ? "" : l)).join("\n");
+  const setupEnd = pc0.indexOf("\nend $$;"), firstCall = pc0.indexOf("from public.east_vacation_reset_stale('2032-");
+  const raises = []; let at = pc0.indexOf("raise exception 'PROBE_SETUP"); while (at >= 0) { raises.push(at); at = pc0.indexOf("raise exception 'PROBE_SETUP", at + 1); }
+  // the reset is called by name in four places - pg_temp.rs (every other case calls it through rs), B2's two refused calls and B5's - all
+  // after the setup block
+  const calls = Array.from(pc0.matchAll(/east_vacation_reset_stale\((?!date\))/g)).map((m) => m.index);
+  ok(setupEnd > 0 && firstCall > setupEnd && raises.length === 5 && raises.every((x) => x < setupEnd) && calls.length === 4 && calls.every((x) => x > setupEnd) && pc0.indexOf("create or replace function pg_temp.rs(") > setupEnd, "the probe's five PROBE_SETUP raises (the collision guard, revision x absent, no backstop, the roster, the profile row) all sit in its setup block, before its first call of the reset (its four call sites all after it) - and no other block raises one (" + raises.length + " raises, " + calls.length + " call sites)");
+}
+// a DELETE names the probe's tag or it is not printed: every 'delete from' line of section 23 (any table, any wording) is one statement
+// whose only condition is a tagged identity, a trailing SQL comment allowed; an audit row is never a tag
+const AA_TAGGED_DELETE = /^delete from (public\.east_feed where data->>'probe' = 'eastreset32'|public\.east_vacation_reviews where decided_by = 'probe-eastreset32'|auth\.users where email like 'probe-eastreset32-%@example\.test');( +-- [^;]*)?$/;
+const aaUntaggedDeletes = (text) => text.split("\n").filter((l) => /delete\s+from/i.test(l)).map((l) => l.trim().replace(/^echo "\s*/, "").replace(/"$/, "")).filter((l) => !AA_TAGGED_DELETE.test(l));
+const AA_TAGGED_THREE = ["delete from public.east_feed where data->>'probe' = 'eastreset32';", "delete from public.east_vacation_reviews where decided_by = 'probe-eastreset32';", "delete from auth.users where email like 'probe-eastreset32-%@example.test';   -- user_profiles rows cascade"];
+{
+  const del23 = s23code.split("\n").filter((l) => /delete\s+from/i.test(l));
+  eq(del23.length, 3, "section 23's code says 'delete from' on exactly three lines (the tagged DELETEs);");
+  eq(aaUntaggedDeletes(s23code), [], "every 'delete from' line of section 23 names the probe's tag as its only condition;");
+  ok(AA_TAGGED_THREE.every((d) => s23code.includes("echo \"      " + d + "\"")), "23b prints DELETEs for the tagged rows only - never for an audit row (audit history is reviewed, never deleted blindly)");
+  eq(aaUntaggedDeletes(["delete from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30';", "      echo \"      delete from public.east_vacation_reviews where person_id = 's1';\"", "DELETE FROM public.east_feed where week_monday between '2031-12-29' and '2032-06-30';", "delete from public.east_feed where data->>'probe' = 'eastreset32' or true;", "delete from auth.users where email like 'probe-eastreset32-%@example.test'; delete from public.user_profiles;", "delete from public.east_vacation_reviews where \"end\" >= '2032-01-01';"].join("\n")).length, 6, "the DELETE matcher flags every untagged or widened DELETE (audit history, a person's reviews, a window of east_feed, an OR, a second statement, reviews by date);");
+}
+ok(s23code.includes("  end23=none\n  if echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then end23=results\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then end23=setup; fi\n"), "23b: end23 = results / setup / none from 23a's output (a PROBE_SETUP only counts when no PROBE_RESULTS came back)");
+ok(/LEFT ROWS BEHIND \(audit=\$aud23 [^\n]*after a run that wrote its fixtures\)/.test(s23code) && s23code.includes("echo \"   23b: $aud23 eastvac.review / eastvac.reset.kept audit row(s) of 2032-01 .. 2032-06 - the probe stopped at a PROBE_SETUP raise before its first call of the reset (23a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:\"") && s23code.includes("echo \"   23b: $aud23 eastvac.review / eastvac.reset.kept audit row(s) of 2032-01 .. 2032-06 - the run reported neither PROBE_RESULTS nor PROBE_SETUP (23a), so whether the probe wrote them is unknown; review them before removing anything:\"") && s23code.includes("echo \"      select * from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30';\""), "23b: the window's audit rows FAIL after results only; after setup this run wrote none of them (real rows, or an earlier run's leak), after none unknown - listed for review with their SELECT either way");
+// the verdicts' own lines, pinned (the mutation check of the record step: an 'ok' for a leftover the PASS line never counts, a tagged
+// leftover echoed instead of failed, an audit row failed after a setup stop - each red here as well as in the faked runs below)
+ok(s23code.includes("    if [ \"$tagged23\" = \"0\" ] && [ \"$aud23\" = \"0\" ]; then\n      ok \"East reset backstop probe persisted nothing (leftover count 0: ") && s23code.includes("    if [ \"$tagged23\" != \"0\" ]; then\n      bad \"East reset backstop probe LEFT ROWS BEHIND (tagged=$tagged23 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:\"\n") && s23code.includes("    if [ \"$aud23\" != \"0\" ]; then\n      if [ \"$end23\" = \"results\" ]; then\n        bad \"East reset backstop probe LEFT ROWS BEHIND (audit=$aud23 - ") && s23code.includes("      elif [ \"$end23\" = \"setup\" ]; then\n        echo \"   23b: $aud23 ") && (s23code.match(/\bok "East reset backstop probe persisted nothing/g) || []).length === 1, "23b's verdicts: PASS only when both columns read 0; a tagged row FAILs (bad) on every ending; an audit row FAILs (bad) only after results and is echoed for review after setup / none");
+ok(s23code.includes('echo "   SKIP 23 (supabase CLI not linked at $WORKDIR)"'), "without a linked CLI section 23 prints one SKIP line (it has nothing to grade without the CLI)");
+// the record step (10/22): the 15 probe AFTER lines of the live run as Faraz's log printed them (apply-east-reset-backstop-20261022T044711Z.log,
+// its paste-back block "probe after cases:"), read from SCHEMA-REVIEW's revision aa observed block (frozen by sha256 in the docs step), not
+// rebuilt from the header's strings
+const AA_OBSERVED_BLOCK = (() => {
+  const at = review.indexOf(AA_SECTION), ob = at < 0 ? -1 : review.indexOf("observed (apply, 2026-10-22):", at);
+  const b = ob < 0 ? -1 : review.indexOf("```text\nB1=", ob);
+  return b < 0 ? "" : review.slice(b + 8, review.indexOf("\n```", b + 8));
+})();
+const AA_LIVE_LINES = AA_OBSERVED_BLOCK ? AA_OBSERVED_BLOCK.split("\n") : [];
+eq(AA_LIVE_LINES.length, 15, "the faked live run replays SCHEMA-REVIEW's revision aa observed probe AFTER block - 15 lines;");
+eq(AA_LIVE_LINES.slice().sort(), AA_CASES.map((k) => k + "=" + AA_AFTER[k]).sort(), "... each line its header's AFTER string (the log graded 15 / 15);");
+eq(AA_CASES.slice().sort().pop(), "B9", "the probe reports its cases sorted by name - B9 last (the case a trailing-space trim would reach);");
+{
+  const code23 = s23;
+  const sq = (t) => "'" + String(t).replace(/'/g, "'\\''") + "'";
+  const run23 = (cliOut, opts) => {
+    // linked (default true); tagged / audit: 23b's two counts; shape: the leftover read as the agent envelope, a plain terminal's bare
+    // array, an error, or notagged / noaudit (a row without that column - must fail as unreadable); pre: a line before the section (e.g. a
+    // flag left in the environment - none exists, so it must change nothing).
+    // The fakes record every call (each runs in a command substitution's subshell, so each appends a line to a file): the CLI must be
+    // asked for the backstop probe once and q for exactly the section's leftover query; curl must never be called (section 23 has no
+    // REST call). A wrong call is written to a file too (WRONG-PROBE-FILE / WRONG-LEFTOVER-SQL / WRONG-REST), never to the fake's stdout or
+    // stderr - the section captures both ($(supabase ... 2>&1), $(q ...)), so a marker printed there would never reach the run's output;
+    // the run prints the file on its WRONG line. code: the section's code (a self-test hands a broken one); expectWrong: return the WRONG
+    // line instead of failing on it. Every run's output is checked for a DELETE that does not name the probe's tag.
+    const o = Object.assign({ linked: true, tagged: 0, audit: 0, shape: "envelope", pre: "", code: code23, expectWrong: false }, opts || {});
+    const cols = (o.shape === "notagged" ? [] : [["tagged", o.tagged]]).concat(o.shape === "noaudit" ? [] : [["audit", o.audit]]);
+    const row = "{\\n" + cols.map(([k, v]) => "      \"" + k + "\": " + v).join(",\\n") + "\\n    }";
+    const qBody = o.shape === "error" ? "echo 'unexpected status 500: connection refused'"
+      : o.shape === "bare" ? "printf '[\\n  " + row + "\\n]\\n'"
+      : "printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    " + row + "\\n  ]\\n}\\n' \"$RANDOM\"";
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" + (o.pre ? o.pre + "\n" : "") +
+      "linked() { " + (o.linked ? "true" : "false") + "; }\n" +
+      "q() { echo q >> \"$T/q.calls\"; [ \"$1\" = " + sq(AA_LEFTOVER23_SQL) + " ] || echo WRONG-LEFTOVER-SQL >> \"$T/wrong\"; " + qBody + "; }\n" +
+      "curl() { echo curl >> \"$T/curl.calls\"; echo WRONG-REST >> \"$T/wrong\"; printf 'HTTP 599'; }\n" +
+      "supabase() { echo sb >> \"$T/sb.calls\"; case \"$*\" in *'-f '*/sql/probes/east-reset-backstop-probe.sql*) ;; *) echo WRONG-PROBE-FILE >> \"$T/wrong\";; esac; echo 'Initialising login role...'; echo " + sq(cliOut) + "; }\n" +
+      fakesGuard(["linked", "q", "supabase", "curl"]) + o.code +
+      "\necho \"CALLS $(cat \"$T/curl.calls\" 2>/dev/null | wc -l | tr -d ' ') $(cat \"$T/sb.calls\" 2>/dev/null | wc -l | tr -d ' ') $(cat \"$T/q.calls\" 2>/dev/null | wc -l | tr -d ' ')\"\necho \"WRONG $(cat \"$T/wrong\" 2>/dev/null | tr '\\n' ' ')\"\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 23: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 23's faked run: a fake did not resolve to a bash function - aborted before the section ran");
+    const out = r.stdout || "";
+    const wrong = ((out.match(/^WRONG ?(.*)$/m) || [])[1] || "").trim();
+    ok(/^WRONG/m.test(out), "section 23's faked run printed no WRONG line (it did not reach its end)");
+    if (!o.expectWrong) ok(wrong === "", "section 23's faked run asked the CLI for another file, q for another query or made a REST call (section 23 has none): " + wrong.slice(0, 300));
+    ok(aaUntaggedDeletes(out).length === 0, "section 23 printed a DELETE that does not name the probe's tag: " + aaUntaggedDeletes(out).join(" | ").slice(0, 300));
+    return { out, wrong, result: (out.match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "", calls: (out.match(/^CALLS (\d+) (\d+) (\d+)$/m) || []).slice(1).map(Number) };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  // the CLI's error body (a JSON message; CONTEXT after the sentinel)
+  const msgOf = (pic) => 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";").replace(/"/g, '\\"') + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 6 at RAISE\\n"}';
+  const N23 = AA_CASES.length + 2;   // the 15 cases + the count of 15 (23a) + the leftover count (23b)
+  const ANY_DELETE = /delete\s+from/i;
+  const deletesOf = (x) => x.out.split("\n").filter((l) => ANY_DELETE.test(l)).map((l) => l.trim());
+  const env = (message) => JSON.stringify({ _tag: "Error", error: { code: "DbQueryUnexpectedStatusError", message } });
+  const ra = run23(msgOf(AA_AFTER));
+  eq(ra.result, [N23, 0], "section 23 against the AFTER picture (the 15 header strings, leftover 0): every check PASS (" + fails(ra) + ");");
+  eq(ra.calls, [0, 1, 1], "... no REST call, one CLI run (the probe) and one leftover query;");
+  // the fakes' own guard binds (the mutation check of the record step: a WRONG marker echoed by a fake vanished into the section's own
+  // capture): a section asking the CLI for another probe and q for another query is reported on the run's WRONG line
+  {
+    const broken = code23.replace("'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30')::int as audit\"", "'eastvac.reset.kept', 'x') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30')::int as audit\"").replace("/east-reset-backstop-probe.sql\"", "/east-vacations-probe.sql\"");
+    ok(broken !== code23 && broken.split("\n").filter((l, i) => l !== code23.split("\n")[i]).length === 2, "the self-test breaks exactly two lines of section 23 (the probe file, the leftover query)");
+    const rw = run23(msgOf(AA_AFTER), { code: broken, expectWrong: true });
+    ok(/WRONG-PROBE-FILE/.test(rw.wrong) && /WRONG-LEFTOVER-SQL/.test(rw.wrong) && !/WRONG-REST/.test(rw.wrong), "the fakes report a section that asks the CLI for another file and q for another query (WRONG line: " + rw.wrong + ")");
+  }
+  // the live picture inside the CLI 2.120.0 error envelope as the apply logs show it ({"_tag":"Error",...} around the 400 body)
+  const rlive = run23(env('unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + AA_LIVE_LINES.join(";") + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 6 at RAISE\\n"}'));
+  eq(rlive.result, [N23, 0], "section 23 against the 2026-10-22 AFTER picture as the log printed it (15 lines, leftover 0) - 17 / 0 (" + fails(rlive) + ");");
+  ok(AA_LIVE_LINES.length === 15 && rlive.out.includes("\n" + AA_LIVE_LINES.map((l) => "   " + l).join("\n") + "\n"), "the live replay prints the 15 lines as the log's paste-back block printed them");
+  // the not-applied picture exactly as both 2026-10-22 logs printed the probe BEFORE (step 3), in the CLI's error envelope
+  const setup = env('unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: east_vacation_reset_stale has no backstop - sql/migrations/2026-10-21-east-reset-backstop.sql is not applied\\nCONTEXT:  PL/pgSQL function inline_code_block line 21 at RAISE\\n"}');
+  eq(setup, "{\"_tag\":\"Error\",\"error\":{\"code\":\"DbQueryUnexpectedStatusError\",\"message\":\"unexpected status 400: {\\\"message\\\":\\\"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: east_vacation_reset_stale has no backstop - sql/migrations/2026-10-21-east-reset-backstop.sql is not applied\\\\nCONTEXT:  PL/pgSQL function inline_code_block line 21 at RAISE\\\\n\\\"}\"}}", "the not-applied picture is the logs' step-3 line byte for byte;");
+  const rbf = run23(setup);
+  eq(rbf.result, [1, 1], "the not-applied picture (PROBE_SETUP: east_vacation_reset_stale has no backstop - the probe BEFORE as the logs printed it) FAILs with no flag - strict from the start; the leftover check runs and passes (" + fails(rbf) + ");");
+  ok(/^FAIL  East reset backstop probe: PROBE_SETUP - east_vacation_reset_stale has no backstop \(the backstop exists since the 2026-10-22 apply\)$/m.test(rbf.out), "... and its FAIL line says the backstop exists since the apply");
+  eq(run23(setup, { pre: "export SILVIS_EAST_RESET_BACKSTOP_APPLIED=1" }).result, [1, 1], "... a SILVIS_EAST_RESET_BACKSTOP_APPLIED left in the environment changes nothing (no such flag exists);");
+  // the probe's other four raises, each as its setup block words it - every one a FAIL that names it
+  const raise = (t) => env('unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: ' + t + '\\nCONTEXT:  PL/pgSQL function inline_code_block line 15 at RAISE\\n"}');
+  const COL = "live rows already sit in 2031-12-29 .. 2032-06-30 (an east_feed week, a review ending in 2032 or later, a cached East vacation reaching 2031-12-29, or an eastvac audit row of the window) - the probe fixtures would collide";
+  [COL, "east_vacation_reset_stale is absent - revision x (sql/migrations/2026-10-14-east-vacations.sql) is not applied", "the probe needs an East person on the roster (found none)", "handle_new_auth_user did not create the profile row"].forEach((t) => {
+    ok(aaProbe.includes("raise exception 'PROBE_SETUP: " + t + "';"), "the probe raises 'PROBE_SETUP: " + t.slice(0, 60) + "...' (the faked run replays its own words)");
+    const rr = run23(raise(t));
+    eq(rr.result, [1, 1], "the raise 'PROBE_SETUP: " + t.slice(0, 50) + "...' is a FAIL (" + fails(rr) + ");");
+    ok(rr.out.includes("FAIL  East reset backstop probe: PROBE_SETUP: " + t.slice(0, 40)) && rr.out.includes("(revision x absent, a fixture collision, the roster or the profile row - ask Claude Code)"), "... and its FAIL line names the raise");
+  });
+  const col = raise(COL);
+  const none = '{"message": "connection refused"}';
+  // ONE leaked row, on each ending: a tagged row FAILs with its three DELETEs whatever the ending (an earlier leak trips the next run's
+  // collision guard - the setup ending is where the DELETEs are needed); an audit row of the window FAILs after results and is listed for
+  // review after setup / none, never with a DELETE. (p, f) = 23a's own PASS / FAIL count on that ending.
+  [{ k: "results", what: "a results (PROBE_RESULTS)", cli: msgOf(AA_AFTER), p: AA_CASES.length + 1, f: 0 },
+    { k: "setup", what: "a setup (the collision guard's PROBE_SETUP)", cli: col, p: 0, f: 1 },
+    { k: "none", what: "a none (no sentinel)", cli: none, p: 0, f: 1 }].forEach((z) => {
+    const t1 = run23(z.cli, { tagged: 1 });
+    eq(t1.result, [z.p, z.f + 1], "ONE tagged leftover after " + z.what + " ending FAILs (" + fails(t1) + ");");
+    ok(/^FAIL  East reset backstop probe LEFT ROWS BEHIND \(tagged=1 - rows only the probe writes\)/m.test(t1.out) && JSON.stringify(deletesOf(t1)) === JSON.stringify(AA_TAGGED_THREE), "... with exactly its three tagged DELETEs (" + z.k + " ending)");
+    const a1 = run23(z.cli, { audit: 1 });
+    if (z.k === "results") {
+      eq(a1.result, [z.p, z.f + 1], "ONE audit row of the window after " + z.what + " ending FAILs (LEFT ROWS BEHIND) (" + fails(a1) + ");");
+      ok(/^FAIL  East reset backstop probe LEFT ROWS BEHIND \(audit=1 - /m.test(a1.out) && a1.out.includes("      select * from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept') and coalesce(detail->>'start', detail->>'from', '') between '2032-01-01' and '2032-06-30';") && !ANY_DELETE.test(a1.out) && !/   23b: /.test(a1.out), "... listed with its SELECT, never a DELETE (results ending)");
+    } else {
+      eq(a1.result, [z.p, z.f], "ONE audit row of the window after " + z.what + " ending is listed for review, not a FAIL of its own (" + fails(a1) + ");");
+      ok(a1.out.includes("   23b: 1 eastvac.review / eastvac.reset.kept audit row(s) of 2032-01 .. 2032-06 - " + (z.k === "setup" ? "the probe stopped at a PROBE_SETUP raise before its first call of the reset (23a), so this run wrote none of them" : "the run reported neither PROBE_RESULTS nor PROBE_SETUP (23a), so whether the probe wrote them is unknown")) && a1.out.includes("      select * from public.audit_log where action in ('eastvac.review', 'eastvac.reset.kept')") && !/LEFT ROWS BEHIND/.test(a1.out) && !/persisted nothing/.test(a1.out) && !ANY_DELETE.test(a1.out), "... listed with its SELECT, no LEFT ROWS BEHIND, no 'persisted nothing', no DELETE (" + z.k + " ending)");
+    }
+    // an unreadable leftover read, in each shape: the CLI's error text, a row without tagged, a row without audit - a FAIL, never read as 0
+    ["error", "notagged", "noaudit"].forEach((shape) => {
+      const u = run23(z.cli, { shape, tagged: 0, audit: 0 });
+      eq(u.result, [z.p, z.f + 1], "an unreadable leftover read (" + shape + ") after " + z.what + " ending FAILs (" + fails(u) + ");");
+      ok(/^FAIL  East reset backstop probe leftover count could not be read: /m.test(u.out) && !/persisted nothing|LEFT ROWS BEHIND|   23b: /.test(u.out), "... (" + shape + ", " + z.k + ") as 'could not be read' - no PASS, no leftover verdict, no listing");
+    });
+  });
+  // a two-digit count prints whole, in each column
+  const r10 = run23(msgOf(AA_AFTER), { tagged: 10 });
+  eq(r10.result, [N23 - 1, 1], "ten tagged leftovers FAIL;");
+  ok(/^FAIL  East reset backstop probe LEFT ROWS BEHIND \(tagged=10 - rows only the probe writes\)/m.test(r10.out), "... and the FAIL line prints the whole count (tagged=10 - never its first digit)");
+  const r12 = run23(msgOf(AA_AFTER), { audit: 12 });
+  ok(/^FAIL  East reset backstop probe LEFT ROWS BEHIND \(audit=12 - /m.test(r12.out) && JSON.stringify(r12.result) === JSON.stringify([N23 - 1, 1]), "twelve audit rows after results: the FAIL line prints audit=12");
+  const r12s = run23(col, { audit: 12 });
+  ok(r12s.out.includes("   23b: 12 eastvac.review / eastvac.reset.kept audit row(s)") && JSON.stringify(r12s.result) === JSON.stringify([0, 1]), "twelve audit rows after setup: listed as 12, never its first digit");
+  eq(run23(msgOf(AA_AFTER), { shape: "bare" }).result, [N23, 0], "a plain terminal's bare-array -o json reads the same as the agent envelope (leftover 0);");
+  eq(run23(msgOf(AA_AFTER), { shape: "bare", tagged: 2, audit: 3 }).result, [N23 - 1, 2], "... and a bare array with leftovers FAILs both columns (23a green, no leftover PASS);");
+  // no sentinel / a cut-off PROBE_RESULTS: a missing sentinel; the leftover check still runs
+  eq(run23(none).result, [1, 1], "a run with no sentinel-terminated PROBE_RESULTS FAILs (the leftover check still runs);");
+  const rcut = run23(msgOf(AA_AFTER).replace(";END", ""), { audit: 2 });
+  eq(rcut.result, [0, 1], "a cut-off PROBE_RESULTS (no ;END) with two audit rows: a missing sentinel, the rows unknown - listed (" + fails(rcut) + ");");
+  ok(/FAIL  East reset backstop probe reported no sentinel-terminated PROBE_RESULTS/.test(rcut.out) && rcut.out.includes("so whether the probe wrote them is unknown") && !/LEFT ROWS BEHIND/.test(rcut.out), "... the no-sentinel FAIL and 23b's 'unknown' line, never LEFT ROWS BEHIND");
+  // a PROBE_SETUP inside a case value of a sentinel-terminated PROBE_RESULTS is graded case by case (results ending) - only that case FAILs
+  const inVal = run23(msgOf(Object.assign({}, AA_AFTER, { B14: "ERR P0001 PROBE_SETUP: x" })), { audit: 1 });
+  eq(inVal.result, [N23 - 2, 2], "a PROBE_SETUP inside B14's value: graded case by case (B14 FAILs), the ending is results (an audit row FAILs) (" + fails(inVal) + ");");
+  ok(/^FAIL  East reset backstop probe B14: [^\n]*\(got 'ERR P0001 PROBE_SETUP: x', expected 'time_off=same east_feed=same other_audit=0'\)$/m.test(inVal.out) && !/FAIL  East reset backstop probe: PROBE_SETUP/.test(inVal.out), "... its FAIL shows the real value, never a setup stop");
+  // ... and the same cut off before ;END: a PROBE_RESULTS came back (unterminated), so the PROBE_SETUP text is no setup stop - a missing
+  // sentinel and 23b's 'unknown' (the mutation check: a setup ending read without the no-PROBE_RESULTS test would say 'this run wrote none')
+  const inValCut = run23(msgOf(Object.assign({}, AA_AFTER, { B14: "ERR P0001 PROBE_SETUP: x" })).replace(";END", ""), { audit: 1 });
+  eq(inValCut.result, [0, 1], "the same cut off before ;END with an audit row: a missing sentinel, the row unknown - listed (" + fails(inValCut) + ");");
+  ok(/FAIL  East reset backstop probe reported no sentinel-terminated PROBE_RESULTS/.test(inValCut.out) && inValCut.out.includes("so whether the probe wrote them is unknown") && !/stopped at a PROBE_SETUP raise|LEFT ROWS BEHIND/.test(inValCut.out), "... the no-sentinel FAIL and 23b's 'unknown' line - never the setup reading ('this run wrote none') or LEFT ROWS BEHIND");
+  // the set of cases: a lost case, an extra one (any name), a doubled one
+  const miss = Object.assign({}, AA_AFTER); delete miss.B15;
+  eq(run23(msgOf(miss)).result, [N23 - 2, 2], "a lost case (B15) FAILs twice (its own grade and the count of 15);");
+  const miss1 = Object.assign({}, AA_AFTER); delete miss1.B1;
+  eq(run23(msgOf(miss1)).result, [N23 - 2, 2], "a lost first case (B1) FAILs twice too;");
+  for (const extra of ["B16=x", "XY_EXTRA=anything"]) eq(run23(msgOf(AA_AFTER).replace(";END", ";" + extra + ";END")).result, [N23 - 1, 1], "an extra case line " + extra + " FAILs the count of 15;");
+  eq(run23(msgOf(AA_AFTER).replace("B3=", "B3=" + AA_AFTER.B3 + ";B3=")).result, [N23 - 1, 1], "a doubled case (B3) FAILs the count of 15;");
+  // wrong values: revision x's reading (B3 resets every review), the kept row naming another person (B4 pid=other), the held set
+  // dropping a range reviewed home (B15 kept instead of reset), a refused call that ran (B2)
+  const rb3 = run23(msgOf(Object.assign({}, AA_AFTER, { B3: "n=3 02-02..02-03/away/removed,02-09..02-10/home/removed,03-01..03-02/away/removed reviews=E 01-12..01-13 away" })));
+  eq(rb3.result, [N23 - 1, 1], "revision x's reading of B3 (every review in scope deleted) FAILs B3 alone (" + fails(rb3) + ");");
+  ok(/^FAIL  East reset backstop probe B3: [^\n]*\(got 'n=3 02-02\.\.02-03\/away\/removed,[^']*', expected 'n=0 reviews=E 01-12\.\.01-13 away,E 02-02\.\.02-03 away,E 02-09\.\.02-10 home,E 03-01\.\.03-02 away'\)$/m.test(rb3.out), "... its FAIL line shows the value read and the one expected");
+  eq(run23(msgOf(Object.assign({}, AA_AFTER, { B4: AA_AFTER.B4.replace(" pid=E ", " pid=other "), B15: "n=0 kept_rows=1" }))).result, [N23 - 2, 2], "the kept row naming another person (B4 pid=other) and a range reviewed home not holding him (B15) FAIL - exactly those two;");
+  eq(run23(msgOf(Object.assign({}, AA_AFTER, { B2: "anon=NO-refusal null=EV002 kept_rows=1" }))).result, [N23 - 1, 1], "an anon claim that ran the reset (B2) FAILs B2 alone;");
+  // exact grading: an answer that EXTENDS its expected string FAILs (a prefix grader would pass it), and so does one that stops short;
+  // the last case (B9) with a trailing space FAILs like any other (no trim after ;END)
+  const rext = run23(msgOf(Object.assign({}, AA_AFTER, { B7: AA_AFTER.B7 + " review_rows=0", B10: AA_AFTER.B10 + "0" })));
+  eq(rext.result, [N23 - 2, 2], "B7 extended by ' review_rows=0' and B10 by one digit FAIL - exactly those two (" + fails(rext) + ");");
+  ok(/^FAIL  East reset backstop probe B7: [^\n]*\(got 'n=0 kept_rows=0 review_rows=0', expected 'n=0 kept_rows=0'\)$/m.test(rext.out) && /^FAIL  East reset backstop probe B10: [^\n]*\(got 'n=0 kept_rows=10', expected 'n=0 kept_rows=1'\)$/m.test(rext.out), "... each FAIL line shows the longer value read and the one expected");
+  eq(run23(msgOf(Object.assign({}, AA_AFTER, { B8: AA_AFTER.B8.replace(" review_rows=3", "") }))).result, [N23 - 1, 1], "B8 cut short (a prefix of its expected string) FAILs;");
+  const rsp = run23(msgOf(Object.assign({}, AA_AFTER, { B9: AA_AFTER.B9 + " " })));
+  eq(rsp.result, [N23 - 1, 1], "the last case (B9) with a trailing space FAILs, as any other case would (" + fails(rsp) + ");");
+  ok(/^FAIL  East reset backstop probe B9: [^\n]*\(got 'n=0 kept_rows=1 ', expected 'n=0 kept_rows=1'\)$/m.test(rsp.out), "... its FAIL line shows the trailing space");
+  const ru = run23(msgOf(AA_AFTER), { linked: false });
+  eq(ru.result, [0, 0], "without a linked CLI section 23 grades nothing;");
+  ok(/^   SKIP 23 \(supabase CLI not linked at \/nonexistent\)$/m.test(ru.out) && JSON.stringify(ru.calls) === "[0,0,0]", "... prints its SKIP line and asks the CLI, q and REST nothing");
+}
+
+step("revision aa: no apply script in the repo (Faraz 10/1: apply scripts live outside it); scripts/verify-rls.sh names revision aa's probe in section 23 only (the record step added it)");
 {
   ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-east-reset-backstop.sh")), "scripts/apply-east-reset-backstop.sh must not be in the repo (it lives outside it; test/ci.test.js keeps verify-rls.sh the only shell script)");
   [AA_MIGRATION, AA_PROBE, AA_PRECHECK].forEach((p) => ok(!/bash scripts\/apply-|scripts\/apply-east-reset-backstop\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script (they live outside the repo since 10/1)"));
-  ok(!/east-reset-backstop|eastvac\.reset\.kept|eastreset32/.test(vr) && !/^echo "== 23\. /m.test(vr), "verify-rls.sh does not run or count the backstop probe yet (its section 23 is the record step's)");
+  // pin moved deliberately 10/22 (revision aa's record step): verify-rls.sh runs revision aa's probe in section 23 only (its sha256 is pinned in
+  // revision y's step above, moved with it)
+  ok(vr.indexOf('echo "== 23. ') > 0 && vr.indexOf("east-reset-backstop") > vr.indexOf('echo "== 23. ') && vr.indexOf("eastreset32") > vr.indexOf('echo "== 23. ') && vr.indexOf("eastvac.reset.kept") > vr.indexOf('echo "== 23. '), "verify-rls.sh names revision aa's files, its tag and the kept row in section 23 only (the record step added it)");
 }
-console.log("- revision aa (2026-10-21, report-first, NOT applied): the East reset backstop - the migration (x's body plus three insertions), its mirror, the probe (15 cases), the pre-check, the x probe still valid, the docs (PREPARED); verify-rls.sh unchanged");
+console.log("- revision aa (2026-10-21): the East reset backstop - the migration (x's body plus three insertions), its mirror, the probe (15 cases), the pre-check, the x probe still valid, the docs (APPLIED 2026-10-22 04:50:53Z), the trailer and verify-rls.sh section 23");
 
 console.log("schema.test.js: " + N + " assertions passed");

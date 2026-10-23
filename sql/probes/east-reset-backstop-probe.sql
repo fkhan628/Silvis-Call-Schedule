@@ -1,14 +1,19 @@
 -- ============================================================================
 -- Silvis Call Schedule - East reset backstop PROBE (2026-10-21, revision aa; sql/migrations/2026-10-21-east-reset-backstop.sql,
--- REPORT-FIRST, NOT APPLIED). Proves east_vacation_reset_stale()'s backstop - an East person the cache holds no merged range of
+-- REPORT-FIRST; APPLIED 2026-10-22 04:50:53Z). Proves east_vacation_reset_stale()'s backstop - an East person the cache holds no merged range of
 -- ending on or after p_from keeps every review, with ONE eastvac.reset.kept audit row - and that everyone else is reset as before,
 -- on the LIVE database WITHOUT PERSISTING ANYTHING. Same mechanism as the other probes: ONE batch through the linked CLI (one
 -- implicit transaction, no BEGIN/COMMIT); every case records into probe_results; the LAST statement raises
 -- 'PROBE_RESULTS K=...;END', so everything - the user, the reviews, the cached weeks, the audit rows - rolls back. A batch ending in
 -- RAISE persists nothing.
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/east-reset-backstop-probe.sql
---   (graded by Faraz's apply script apply-east-reset-backstop.sh, kept outside the repo, value for value against the header lines below; the record
---   step adds scripts/verify-rls.sh section 23, which grades it on every run)
+--   (graded by Faraz's apply script apply-east-reset-backstop.sh, kept outside the repo, and, since the record step, by scripts/verify-rls.sh
+--   section 23 on every run, value for value against the header lines below)
+-- As run: the migration was applied 2026-10-22 04:50:53Z (schema.sql revision aa); the probe read PROBE_SETUP (east_vacation_reset_stale
+-- has no backstop) before it and all 15 cases below as listed after it, leftover count 0 (apply-east-reset-backstop.sh steps 3 and 6). Since
+-- the record step verify-rls section 23 runs it on every run, grades each case against its line below and counts the leftovers it could
+-- leave; it FAILs a PROBE_SETUP (no backstop, revision x absent, a collision, the roster or the profile row) or a missing sentinel - there
+-- was never a not-applied grading.
 -- Run no Refresh from Davenport at the same time and not at 10:25-10:40 UTC (the daily server refresh): the probe takes the reset's
 -- advisory lock east_vacation_reviews:reset for the length of the batch - well under a second.
 -- The setup raises, in this order and before any fixture is written: the collision guard 'PROBE_SETUP: live rows already sit in
