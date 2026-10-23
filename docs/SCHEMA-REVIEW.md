@@ -4570,7 +4570,7 @@ name, the count of 46) and counts its leftovers through the linked CLI, as secti
 the database's `42501` for the function, while a `404` `PGRST202` FAILs (the live client would fall back to the plain save without a
 word); 22e an anon GET `select=shift_reminders_push` -> 200 `[]`. The probe's own N1 / F7 read the same privileges inside the database,
 never through PostgREST. A plain `bash scripts/verify-rls.sh` with no token is then expected to read `RESULT: 620 passed, 0 failed` -
-the 535 of the 2026-10-20 run (sections 1-20), section 21's 34 and section 22's 51 (neither run live yet). `config.js` changes in
+the 535 of the 2026-10-20 run (sections 1-20), section 21's 34 (run live in Faraz's 2026-10-22 baseline: 569 passed, 0 failed - his pasted RESULT line) and section 22's 51 (not run live yet). `config.js` changes in
 three comments only (the function and the column applied since 2026-10-22 04:33:15Z), so merging this step to `main` is a client
 build: CI bumps `APP_VERSION` and Pages redeploys, with no change in behaviour. `docs/ONBOARDING.md` words the three switches live;
 the reminder push itself waited for the `daily-reminder` deploy's record step (2026-10-22: v10 deployed 23:18:10 UTC; ONBOARDING words
@@ -4972,7 +4972,7 @@ ran its steps 0-7 in this order - 0 the sha256 pins and the CLI link (the UTC cl
 before, revision x's md5; rows 5-6 printed, `would_keep` 0/0), 2 the regression probe BEFORE (its 56 cases), 3 probe BEFORE, 4 APPLY
 and the migration (the clock 0450 at the prompt), 5 the gate after, 6 probe AFTER and its leftover count, 7 the regression probe AFTER
 (the same 56 pairs) - then the PASTE THIS BACK block; the list above and the log number the steps alike. When (D9): Faraz's plain
-`bash scripts/verify-rls.sh` on `cc4cecc` came first - its RESULT line, pasted by Faraz (not in the apply logs), read `569 passed, 0
+`bash scripts/verify-rls.sh` on `cc4cecc` came first - its RESULT line, pasted by Faraz in the chat on 2026-10-22 (the RESULT line only - not in the apply logs), read `569 passed, 0
 failed` (sections 1-21: the 535 of 2026-10-20 and section 21's 34); the dry run (clock 0442) and the run (0447-0450) both outside
 10:25-10:40 UTC. One earlier run applied nothing (the observed lines). The record step changes three of the five graded files (the
 migration through its trailer - its body's sha256 `3e2d83e6f306a443eb71b8d66f41f1961e2e1803b705cd1acbc148d519401608` unchanged - the probe's

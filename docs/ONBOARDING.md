@@ -151,7 +151,8 @@ view or in **My schedule**: **away** keeps it a Silvis vacation; **home** makes 
 preferred for primary (no East call, no OR block, so the Tue/Thu rule is lifted there). No Silvis vacation row is ever
 written for an East range — a change of mind is one tap and leaves nothing behind — and their own Silvis vacations in
 **Time off** are entered exactly as before. If Davenport changes or cancels a range, the next refresh resets that range
-to unreviewed and the toast says so. On the scheduler's calendar an East vacation sits in the day's vacation bar (since 10/21: "Khan?" =
+to unreviewed and the toast says so (since 2026-10-22, if every range of his vanishes from the cache at once - a blocked or emptied
+Davenport read looks the same - his reviews are kept instead and the audit log says so). On the scheduler's calendar an East vacation sits in the day's vacation bar (since 10/21: "Khan?" =
 unreviewed, "Khan" = away, nothing on a home day - its hover keeps the state), the day editor names the state, and the coverage strip counts the unreviewed ranges until
 they are decided - since 9/25 (item E3) those three are the scheduler's view only; the person's own Time off view and
 My schedule keep the list and the control. Since Prompt 31 Part A (decision 11) those two East cards are the scheduler's too -
