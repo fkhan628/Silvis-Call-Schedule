@@ -118,7 +118,11 @@
 //     failed accounting (what the client's toast reads) is unchanged. The pure pieces are the @followers mirror block
 //     (identical in daily-reminder).
 //
-//   - PHONE PUSH (Prompt 30, Faraz 10/2 "Davenport's look, Silvis's own push"; v10 on base v9 - prepared, NOT deployed; README section 3).
+//   - TOKEN RACE RETRY (2026-10-26; v13 on base v12 - prepared, NOT deployed; README section 3 "2026-10-26 - the PGRST303 retry"):
+//     rest() sends the same call again after 1 s, then 3 s, when PostgREST answers 401 PGRST303 ("JWT issued at future" - the
+//     platform's token race) - the @restRetry block above rest(); every other answer as before.
+//
+//   - PHONE PUSH (Prompt 30, Faraz 10/2 "Davenport's look, Silvis's own push"; deployed 2026-10-03 16:37:59 UTC as v12; README section 3).
 //     Web Push with VAPID, no third-party service: every send that has a push switch (PUSH_PREF_OF -
 //     schedule_updates_push / trade_updates_push in notification_preferences, revision w) also goes to the phones of the
 //     SAME people. resolveRecipients now answers `audience` too (every person of the universe BEFORE the e-mail filter,
@@ -197,15 +201,47 @@ function json(status: number, body: unknown): Response {
   });
 }
 
+// ---------------------------------------------------------------------------
+// The platform's token race (2026-10-26). Plain JavaScript between the
+// markers: test/edge-functions.test.js extracts this block from all five
+// functions, checks the copies are byte-identical, evaluates it with new
+// Function and runs it. SUPABASE_SERVICE_ROLE_KEY is an sb_secret_ key here,
+// which the gateway turns into a short-lived JWT on every call; on 10/26 about
+// one call in a hundred came back 401 PGRST303 "JWT issued at future" while
+// its twin, sent the same instant with the same key, passed - the weekly
+// digest and three reminder runs failed on it. PostgREST refuses such a call
+// before it runs anything, so the same call (a read or a write alike) goes
+// again after 1 s, then 3 s. Anything else - another 401, any other status, a
+// network error - comes back at once, as before (rest() still throws on every
+// non-2xx, the last PGRST303 included).
+// ---------------------------------------------------------------------------
+// @restRetry-mirror-start
+const REST_RETRY_DELAYS_MS = [1000, 3000];
+function restSleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+async function restFetchWithRetry(send, label, wait) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await send();
+    if (res.ok || res.status !== 401 || attempt >= REST_RETRY_DELAYS_MS.length) return res;
+    const text = await res.text().catch(function () { return ""; });
+    // its body is read: another 401 goes back as an unread copy (the caller's error line quotes it)
+    if (String(text).indexOf("PGRST303") < 0) return new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers });
+    console.warn("[rest] " + label + ": HTTP 401 PGRST303 (attempt " + (attempt + 1) + " of " + (REST_RETRY_DELAYS_MS.length + 1) + ") - again in " + REST_RETRY_DELAYS_MS[attempt] + " ms");
+    await wait(REST_RETRY_DELAYS_MS[attempt]);
+  }
+}
+// @restRetry-mirror-end
+
 // Service-role PostgREST call. A non-2xx throws - never a silent empty result.
 async function rest(path: string, init: RequestInit = {}): Promise<any> {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  const res = await restFetchWithRetry(() => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: {
       apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}`, "Content-Type": "application/json",
       ...((init.headers as Record<string, string>) || {}),
     },
-  });
+  }), path.split("?")[0], restSleep);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new HttpError(res.status, `${path.split("?")[0]} ${init.method || "GET"} failed: HTTP ${res.status} ${text.slice(0, 200)}`);

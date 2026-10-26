@@ -819,6 +819,35 @@ on this machine on 2026-09-23 (the 9/22 deploys used a session-scratchpad workdi
 already linked to `bzhsroegtagqhutbnsrp` - before the download / backup / copy / deploy sequence; `Copy-Item`
 into a missing `supabase\functions\<slug>` fails, and `deploy` from an unlinked workdir refuses.
 
+### 2026-10-26 - the PGRST303 retry (all five functions)
+
+*Status: NOT deployed - prepared 2026-10-26 by Claude Code on branch `fix/rest-retry` (Faraz 10/26: "Yeah go ahead" to the retry fix).*
+
+Why: on 2026-10-26 the 11:00 UTC weekly digest answered 502 before it sent anything (`call_schedule_data GET failed: HTTP 401
+{"code":"PGRST303",...,"message":"JWT issued at future"}`; nothing sent and the baseline kept, so the week was not lost - Faraz ran
+it again from Settings at 13:19 UTC: 6 contacts, no send error), and the same 401 stopped `daily-reminder` at 03:00, 04:00 and 10:00 UTC
+(nobody's reminder hour, so no reminder was missed). The edge logs show the functions' `SUPABASE_SERVICE_ROLE_KEY` is an `sb_secret_`
+key, which the gateway turns into a short-lived JWT on every call: 4 of about 420 function calls in those 24 hours were refused, each
+while its twin - sent the same instant with the same key - passed. The platform's, not ours; a resend passes.
+
+The change, in all five - `calendar-sync` v7 -> v8, `daily-reminder` v10 -> v11, `east-feed-refresh` v1 -> v2,
+`office-notifications` v6 -> v7, `send-notification` v12 -> v13: each `rest()` sends through the plain-JS `@restRetry` block (byte-identical in all five, run by
+`test/edge-functions.test.js`): a 401 whose body names PGRST303 goes again after 1 s, then 3 s - PostgREST refuses such a call before
+it runs anything, so a write is as safe to resend as a read. Every other answer (another 401, any other status, a network error)
+comes back at once, and `rest()` still throws on every non-2xx, the third PGRST303 included. A resend logs one
+`[rest] <table>: HTTP 401 PGRST303 (attempt n of 3) - again in <ms> ms` line (no key, no address). Nothing else changes - no mode, no
+gate, no mail text, no database or client change.
+
+The deploy: `deploy-rest-retry.sh` in the private apply-scripts folder (it carries machine paths, so it stays out of this repo), run
+from a clean `main` that carries this change. `--dry-run` first: it checks the CLI and the `supa-silvis` link, downloads each live
+function into a fresh backup folder and stops unless every live copy is the file it replaces (main `57dd93d`'s, CRLF-normalised -
+anything else was deployed outside these records: stop), and stages the five new files against the hashes it pins; nothing is
+deployed. The real run asks for DEPLOY in capital letters at the terminal, deploys the five one at a time (the first failure stops it
+and prints the rollback of those already deployed), re-downloads each and compares it with the staged file, and checks that
+`calendar-sync` still serves the group feed (200, `BEGIN:VCALENDAR` - a read through the new `rest()`) and that an unauthenticated
+POST to the four gated functions still answers 401. Then its PASTE THIS BACK block, for the record step (this subsection's Status
+line). Any time but the top of the hour (the hourly reminder runs at :00, the East refresh at 10:30 UTC, the digest Mondays 11:00 UTC).
+
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
 Both jobs were created 2026-09-22, AFTER the secret was set and the functions
@@ -1236,6 +1265,12 @@ then the SQL rollback (the header of `sql/migrations/2026-10-20-push-followups.s
 lines). With the column dropped while v10 still runs, a missing key reads as on and the function would push with no switch. The
 client needs no rollback: a missing function or column reads as "unavailable" (the third phone switch hides; Enable and the re-arm
 fall back to the plain save).
+
+The PGRST303 retry (section 3, "2026-10-26 - the PGRST303 retry"): `deploy-rest-retry.sh` downloads every live function before it
+deploys anything, into `$env:USERPROFILE\projects\supa-silvis\backup-rest-retry-<UTC stamp>\<slug>\index.ts`, and prints the rollback
+lines of each function it deployed - copy that backup over the workdir's `supabase\functions\<slug>\index.ts`, then that function's
+deploy line (`--no-verify-jwt --use-api`). The backups are main `57dd93d`'s files, so the rollback only takes the retry away; no data
+and no database change is involved.
 
 `east-feed-refresh` (Prompt 31 Part A), in this order. Stop the job first, in the SQL editor:
 `select cron.unschedule('silvis-east-feed-daily');`. Then leave the function (it is gated and nothing else calls it)

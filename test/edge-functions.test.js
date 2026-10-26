@@ -32,6 +32,18 @@ const ROOT = path.join(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
 const snSrc = read("edge-functions/send-notification/index.ts");
 const readme = read("edge-functions/README.md");
+// 2026-10-26 (the PGRST303 retry - README section 3, "2026-10-26 - the PGRST303 retry"): the five sources are the PREPARED next
+// versions, raw bytes. Each was byte-identical to its deployed version until this change (the three deployed-hash pins below
+// recorded that and now point here); deploy-rest-retry.sh (the private apply-scripts folder) pins the same five, and the deploy's
+// record step re-labels them deployed.
+const RETRY_PREPARED_SHA256 = {
+  "calendar-sync": "c11c4ff3d8ebe19f5d8ffd6c7dda563bb38c80f81cf3dac225fabef1f20f41a3",
+  "daily-reminder": "ad3dbc5a5baed3ca953ae742445bb25501686b24dbc9b28b32b787d20edcfe15",
+  "east-feed-refresh": "0cd0d9b7198e2c7e06ad29260d502a4ce253bb75cb18799111abb6eab0ea6114",
+  "office-notifications": "fb37ea31885c654673d6d63ea623b7bee67a332ecb6ee07468416569b277c243",
+  "send-notification": "03ba467016d57ae29cbdb6a3c408d16bb97cffdd85f2d98593e7dc75e0631a21",
+};
+const sha256Of = (rel) => require("crypto").createHash("sha256").update(fs.readFileSync(path.join(ROOT, rel))).digest("hex");
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -590,16 +602,18 @@ check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame 
   // pin moved deliberately (Prompt 30): README section 3 said the v8 wording flips, with its pin, at the next source change -
   // Prompt 30 is that change, so the FOLLOWERS paragraph now records v8 as deployed and the PHONE PUSH paragraph is the pending v10
   assert.ok(/FOLLOWERS \(Prompt 20 F3, Faraz 9\/24; revision o; v8 on base v7 - deployed 2026-09-27 00:46 UTC; README section 3\)/.test(head), "the FOLLOWERS paragraph records v8 (on base v7) as deployed 2026-09-27 00:46 UTC");
-  // pin kept deliberately 10/3 (Prompt 30's record step): this source IS the deployed send-notification v12 (deployed 2026-10-03
-  // 16:37:59 UTC; the re-download byte-identical, sha256 ab7a6a70...), so its header stays as deployed - README section 3 ("Deploy
-  // record - Prompt 30") says the PHONE PUSH wording flips, with this pin, at the next source change (v12, not v10: two secrets sets
-  // had moved the listed version from v9 to v11)
-  assert.ok(/PHONE PUSH \(Prompt 30, Faraz 10\/2 "Davenport's look, Silvis's own push"; v10 on base v9 - prepared, NOT deployed; README section 3\)/.test(head), "the PHONE PUSH paragraph keeps its deployed wording (the pending v10 on base v9) until the next source change");
+  // pin moved deliberately 10/26 (the PGRST303 retry, the next source change): README section 3 ("Deploy record - Prompt 30") said
+  // the PHONE PUSH wording flips, with its pin, at the next source change - so the paragraph now records v12 as deployed (2026-10-03
+  // 16:37:59 UTC; the re-download was ab7a6a70...) and the TOKEN RACE RETRY paragraph is the pending v13 on base v12
+  assert.ok(/PHONE PUSH \(Prompt 30, Faraz 10\/2 "Davenport's look, Silvis's own push"; deployed 2026-10-03 16:37:59 UTC as v12; README section 3\)/.test(head), "the PHONE PUSH paragraph records v12 as deployed 2026-10-03 16:37:59 UTC");
+  assert.ok(/TOKEN RACE RETRY \(2026-10-26; v13 on base v12 - prepared, NOT deployed; README section 3 "2026-10-26 - the PGRST303 retry"\)/.test(head), "the TOKEN RACE RETRY paragraph is the pending v13 on base v12");
   {
     // the record step (10/3): README section 3 carries the deploy record and the flip rule; the source is byte-identical to what was deployed
     const s3p = readme.slice(readme.indexOf("### Deploy record - Prompt 30 (phone push)"), readme.indexOf("### Deploy record - Prompt 26"));
     assert.ok(/DEPLOYED 2026-10-03 16:37:59 UTC by Faraz \(v11 -> v12\)/.test(s3p) && /The source's own header still reads `v10 on base v9 - prepared, NOT deployed`/.test(s3p) && /that wording flips,\nwith its pin, at the next source change/.test(s3p), "README section 3's Prompt 30 record: DEPLOYED v11 -> v12, the header kept as deployed until the next source change");
-    assert.strictEqual(require("crypto").createHash("sha256").update(fs.readFileSync(path.join(ROOT, "edge-functions", "send-notification", "index.ts"))).digest("hex"), "ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa", "edge-functions/send-notification/index.ts must stay byte-identical to the deployed v12 (sha256 of the 10/3 re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
+    // pin moved deliberately 10/26: was the deployed v12's ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa (the 10/3
+    // re-download) - this source is the prepared v13, the PGRST303 retry (RETRY_PREPARED_SHA256, at the top of this file)
+    assert.strictEqual(sha256Of("edge-functions/send-notification/index.ts"), RETRY_PREPARED_SHA256["send-notification"], "edge-functions/send-notification/index.ts is the prepared v13 (the PGRST303 retry) that deploy-rest-retry.sh pins - a source change needs a new deploy and record, and this pin moves with it");
   }
   const pc = (head.split("\n").find((l) => l.includes("POST { type: string, data: {")) || "");
   assert.ok(pc.includes("kind?: 'give'"), "the Payload contract line names the optional data.kind: " + pc.trim());
@@ -3601,11 +3615,16 @@ check("A2 source pins: the handler's FIRST statement is the gate (CRON_SECRET fr
   assert.ok(!/user_profiles|notification|resend|push_subscriptions|office_contacts|email/i.test(code), "no contact read, no mail, no push");
   assert.ok(!/east_feed[^\n]*"DELETE"|"DELETE"[^\n]*east_feed/.test(code), "no DELETE of east_feed");
   assert.strictEqual((code.match(/method: "DELETE"/g) || []).length, 1, "the one DELETE is the forecast prune");
-  // pin kept deliberately 10/20 (the deploy's record step): this source IS the deployed east-feed-refresh v1 (deployed 2026-10-20
-  // 01:42:59 UTC by Faraz; the uploaded copy and the re-download both hashed ff717c93...), so its header stays as deployed - README
-  // section 3 ("Deploy record - Prompt 31 Part A") says the NOT DEPLOYED wording flips, with this pin, at the next source change
-  assert.ok(/NOT DEPLOYED/.test(erSrc.split("\n").slice(0, 12).join("\n")), "the header keeps its as-deployed NOT DEPLOYED until the next source change");
-  assert.strictEqual(require("crypto").createHash("sha256").update(fs.readFileSync(ER_PATH)).digest("hex"), "ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0", "edge-functions/east-feed-refresh/index.ts must stay byte-identical to the deployed v1 (sha256 of the 10/20 upload and re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
+  // pin moved deliberately 10/26 (the PGRST303 retry, the next source change): README section 3 ("Deploy record - Prompt 31 Part A")
+  // said the NOT DEPLOYED wording flips, with its pin, at the next source change - so the header now records v1 as deployed
+  // (2026-10-20 01:42:59 UTC; the upload and the re-download were ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0) and
+  // names the pending v2 on base v1; this source is that v2 (RETRY_PREPARED_SHA256, at the top of this file)
+  {
+    const top = erSrc.split("\n").slice(0, 16).join("\n");
+    assert.ok(!/NOT DEPLOYED/.test(top) && /^\/\/ Deployed 2026-10-20 01:42:59 UTC by Faraz \(v1\)\. /m.test(top), "the header records v1 as deployed 2026-10-20 01:42:59 UTC");
+    assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v2 on base v1 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(top), "the header names the pending v2 on base v1 (the PGRST303 retry)");
+  }
+  assert.strictEqual(sha256Of("edge-functions/east-feed-refresh/index.ts"), RETRY_PREPARED_SHA256["east-feed-refresh"], "edge-functions/east-feed-refresh/index.ts is the prepared v2 (the PGRST303 retry) that deploy-rest-retry.sh pins - a source change needs a new deploy and record, and this pin moves with it");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(erSrc), "the source is ASCII");
 });
 check("A2 pins on the in-app refresh this function mirrors (index-source.html refreshEastFeed) - the lines the re-statement above runs: the main read with the codes, the plan (planVacationCache or keepCachedVacations), the two row maps, the merge-duplicates upsert, coverageOf + the forecast prune, the reload, the reset floor fromMon, the extra leg (fetchEastWeeks over eastWin.extra, eastExtraWeeks, keepCachedVacations over the reloaded cache) - and their order", () => {
@@ -4341,11 +4360,13 @@ check("revision z (4) source pins - daily-reminder: the push fan-out sits AFTER 
   });
   drSrc.split("\n").filter((l) => /console\.(log|warn|error|info)\(/.test(l)).forEach((l) => assert.ok(!/\$\{[^}]*(endpoint|p256dh|\.auth\b|payloadText|\.line\b|followerLine)/.test(l) && !/\+\s*[\w.]*(endpoint|p256dh)/.test(l), "no console line interpolates an endpoint / key / the words: " + l.trim().slice(0, 120)));
   const head = drSrc.slice(0, drSrc.indexOf("import "));
-  // pin kept deliberately 10/22 (the deploy's record step): this source IS the deployed daily-reminder v10 (deployed 2026-10-22
-  // 23:18:10 UTC by Faraz; the uploaded copy and the re-download both hashed e7a345da...), so its header stays as deployed - README
-  // section 3 ("Deploy record - push reminders (revision z)") says the NOT DEPLOYED wording flips, with this pin, at the next source change
-  assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - prepared, NOT deployed; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the header keeps its as-deployed 'prepared, NOT deployed' until the next source change, the record named");
-  assert.strictEqual(require("crypto").createHash("sha256").update(fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"))).digest("hex"), "e7a345dab1b6ec2e68db2ed370c439a61a79484cec0078947bc582d2de22e82b", "edge-functions/daily-reminder/index.ts must stay byte-identical to the deployed v10 (sha256 of the 10/22 upload and re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
+  // pin moved deliberately 10/26 (the PGRST303 retry, the next source change): README section 3 ("Deploy record - push reminders
+  // (revision z)") said the NOT DEPLOYED wording flips, with its pin, at the next source change - so the PHONE PUSH item now records
+  // v10 as deployed (2026-10-22 23:18:10 UTC; the upload and the re-download were
+  // e7a345dab1b6ec2e68db2ed370c439a61a79484cec0078947bc582d2de22e82b) and the TOKEN RACE RETRY paragraph is the pending v11 on base v10
+  assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - deployed 2026-10-22 23:18:10 UTC; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the PHONE PUSH item records v10 as deployed 2026-10-22 23:18:10 UTC, the record named");
+  assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v11 on base v10 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(head), "the header names the pending v11 on base v10 (the PGRST303 retry)");
+  assert.strictEqual(sha256Of("edge-functions/daily-reminder/index.ts"), RETRY_PREPARED_SHA256["daily-reminder"], "edge-functions/daily-reminder/index.ts is the prepared v11 (the PGRST303 retry) that deploy-rest-retry.sh pins - a source change needs a new deploy and record, and this pin moves with it");
   assert.ok(!/OneSignal push \(send-push/.test(head) && /shift_reminders_push/.test(head) && /VAPID_PUBLIC_KEY,\n\/\/ VAPID_PRIVATE_KEY, VAPID_SUBJECT/.test(head), "the header no longer says push was dropped; it names the switch and the three secrets");
   assert.ok(/^\/\/ Deploy: supabase functions deploy daily-reminder --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api$/m.test(head), "the deploy line");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(drSrc), "the source is ASCII");
@@ -4454,6 +4475,180 @@ check("revision z (4): edge-functions/README.md - section 3's 'Deploy record - p
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(/daily-reminder/.test(s7) && /revision z/.test(s7) && s7.indexOf("backup-daily-reminder-v9") > 0, "section 7: the rollback of revision z's deploy");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(readme), "the README stays ASCII");
+});
+
+/* =====================================================================
+   2026-10-26 - the platform's token race (fix/rest-retry). The five functions' SUPABASE_SERVICE_ROLE_KEY is an sb_secret_ key,
+   which the gateway turns into a short-lived JWT on every call; on 10/26 about one call in a hundred came back 401 PGRST303
+   "JWT issued at future" while its twin, sent the same instant with the same key, passed (edge_logs) - the 11:00 UTC weekly digest
+   (502, nothing sent, the baseline kept) and three hourly reminder runs failed on it. Each function's rest() now sends through the
+   plain-JS '@restRetry' mirror block: a 401 whose body names PGRST303 goes again after 1 s, then 3 s (PostgREST refuses such a call
+   before it runs anything, so a write is as safe to resend as a read); every other answer comes back at once, as before, and rest()
+   still throws on every non-2xx. Here: the five copies byte-identical, the block run on its own, then each function's real rest()
+   (types stripped) run end to end against a fake fetch, and the pins that no PostgREST call of this project bypasses rest().
+   ===================================================================== */
+const RETRY_FNS = { "calendar-sync": csSrc, "daily-reminder": drSrc, "east-feed-refresh": erSrc, "office-notifications": onSrc, "send-notification": snSrc };
+const PGRST303_BODY = '{"code":"PGRST303","details":null,"hint":null,"message":"JWT issued at future"}';
+const PGRST301_BODY = '{"code":"PGRST301","details":null,"hint":null,"message":"No suitable key or wrong key type"}';
+let RETRY_BLOCK = null;
+check("10/26 retry: all five functions carry an identical plain-JS '@restRetry' mirror block - REST_RETRY_DELAYS_MS [1000, 3000], restSleep, restFetchWithRetry - above their rest()", () => {
+  const blocks = Object.entries(RETRY_FNS).map(([n, s]) => [n, blockOf(s, n, "restRetry")]);
+  blocks.forEach(([n, b]) => plainJs(b, n));
+  identical(blocks, "restRetry");
+  const api = new Function(blocks[0][1] + "\nreturn { REST_RETRY_DELAYS_MS, restSleep, restFetchWithRetry };")();
+  assert.deepStrictEqual(api.REST_RETRY_DELAYS_MS, [1000, 3000], "two retries: 1 s, then 3 s (at most 4 s added, only on PGRST303)");
+  assert.strictEqual(typeof api.restFetchWithRetry, "function");
+  assert.strictEqual(typeof api.restSleep, "function");
+  Object.entries(RETRY_FNS).forEach(([n, s]) => {
+    assert.ok(s.indexOf("// @restRetry-mirror-end") < s.indexOf("\nasync function rest("), n + ": the block sits above rest()");
+  });
+  RETRY_BLOCK = blocks[0][1];
+});
+// a fake send: answers the queued responses in order (an Error entry rejects), counts its calls
+const retryRig = (queue) => {
+  const rig = { calls: 0, waits: [], warns: [] };
+  rig.send = async () => { const r = queue[rig.calls++]; if (r instanceof Error) throw r; if (!r) throw new Error("the fake send ran dry"); return r; };
+  rig.wait = async (ms) => { rig.waits.push(ms); };
+  return rig;
+};
+const loadRetry = (warns) => new Function("console", RETRY_BLOCK + "\nreturn restFetchWithRetry;")({ warn: (m) => warns.push(String(m)), log: () => {}, error: () => {} });
+const resp = (status, body, headers) => new Response(body, { status, statusText: status === 401 ? "Unauthorized" : "", headers: headers || { "content-type": "application/json; charset=utf-8" } });
+acheck("10/26 retry (the block on its own): 200 -> returned as is, one call, no wait; 401 PGRST303 then 200 -> two calls, one 1 s wait, the 200 returned, one '[rest] <label>' warn line (no key, no address); three PGRST303 -> three calls, waits 1 s and 3 s, the last 401 returned UNREAD (its body still names PGRST303); two PGRST303 then a 201 -> the 201", async () => {
+  if (!RETRY_BLOCK) throw new Error("the retry block did not load");
+  let rig = retryRig([resp(200, "[]")]); let warns = []; let r = await loadRetry(warns)(rig.send, "schedule_days", rig.wait);
+  assert.strictEqual(r.status, 200); assert.strictEqual(rig.calls, 1); assert.deepStrictEqual(rig.waits, []); assert.deepStrictEqual(warns, []);
+  assert.strictEqual(r.bodyUsed, false, "a 2xx comes back unread");
+  const ok2 = resp(200, '[{"id":"main"}]');
+  rig = retryRig([resp(401, PGRST303_BODY), ok2]); warns = []; r = await loadRetry(warns)(rig.send, "call_schedule_data", rig.wait);
+  assert.strictEqual(r, ok2, "the second answer itself"); assert.strictEqual(rig.calls, 2); assert.deepStrictEqual(rig.waits, [1000]);
+  assert.deepStrictEqual(warns, ["[rest] call_schedule_data: HTTP 401 PGRST303 (attempt 1 of 3) - again in 1000 ms"]);
+  rig = retryRig([resp(401, PGRST303_BODY), resp(401, PGRST303_BODY), resp(401, PGRST303_BODY)]); warns = []; r = await loadRetry(warns)(rig.send, "schedule_days", rig.wait);
+  assert.strictEqual(r.status, 401); assert.strictEqual(rig.calls, 3, "three calls, never a fourth"); assert.deepStrictEqual(rig.waits, [1000, 3000]);
+  assert.strictEqual(r.bodyUsed, false, "the last 401 comes back unread");
+  assert.ok((await r.text()).indexOf("JWT issued at future") >= 0, "its body still names the reason (rest()'s error line quotes it)");
+  assert.deepStrictEqual(warns, ["[rest] schedule_days: HTTP 401 PGRST303 (attempt 1 of 3) - again in 1000 ms", "[rest] schedule_days: HTTP 401 PGRST303 (attempt 2 of 3) - again in 3000 ms"]);
+  const created = resp(201, "");
+  rig = retryRig([resp(401, PGRST303_BODY), resp(401, PGRST303_BODY), created]); r = await loadRetry([])(rig.send, "notifications", rig.wait);
+  assert.strictEqual(r, created); assert.strictEqual(rig.calls, 3); assert.deepStrictEqual(rig.waits, [1000, 3000]);
+});
+acheck("10/26 retry (the block on its own): never resent - another 401 (PGRST301, an empty body) comes back as an unread copy with its status, status text, headers and body; a 403 / 404 / 409 / 500 / 503 comes back as the same object, unread; a network error rejects at once; a network error on the resend rejects too (one wait, no third try)", async () => {
+  if (!RETRY_BLOCK) throw new Error("the retry block did not load");
+  let rig = retryRig([resp(401, PGRST301_BODY)]); let warns = []; let r = await loadRetry(warns)(rig.send, "schedule_days", rig.wait);
+  assert.strictEqual(rig.calls, 1); assert.deepStrictEqual(rig.waits, []); assert.deepStrictEqual(warns, []);
+  assert.strictEqual(r.status, 401); assert.strictEqual(r.statusText, "Unauthorized"); assert.strictEqual(r.ok, false); assert.strictEqual(r.bodyUsed, false);
+  assert.strictEqual(r.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.strictEqual(await r.text(), PGRST301_BODY, "the body intact");
+  rig = retryRig([resp(401, "")]); r = await loadRetry([])(rig.send, "x", rig.wait);
+  assert.strictEqual(rig.calls, 1); assert.strictEqual(r.status, 401); assert.strictEqual(await r.text(), "");
+  for (const st of [403, 404, 409, 500, 503]) {
+    const orig = resp(st, PGRST303_BODY);
+    rig = retryRig([orig]); r = await loadRetry([])(rig.send, "x", rig.wait);
+    assert.strictEqual(r, orig, st + ": the same object"); assert.strictEqual(rig.calls, 1, st + ": one call"); assert.deepStrictEqual(rig.waits, []);
+    assert.strictEqual(orig.bodyUsed, false, st + ": unread - a PGRST303 body under another status is not retried");
+  }
+  const boom = new TypeError("error sending request: connection reset");
+  rig = retryRig([boom]);
+  await assert.rejects(loadRetry([])(rig.send, "x", rig.wait), (e) => e === boom);
+  assert.strictEqual(rig.calls, 1); assert.deepStrictEqual(rig.waits, []);
+  rig = retryRig([resp(401, PGRST303_BODY), boom]);
+  await assert.rejects(loadRetry([])(rig.send, "x", rig.wait), (e) => e === boom);
+  assert.strictEqual(rig.calls, 2); assert.deepStrictEqual(rig.waits, [1000]);
+});
+acheck("10/26 retry: restSleep waits through setTimeout for the given ms (a fake setTimeout records 1000)", async () => {
+  if (!RETRY_BLOCK) throw new Error("the retry block did not load");
+  const seen = [];
+  const sleep = new Function("setTimeout", RETRY_BLOCK + "\nreturn restSleep;")((fn, ms) => { seen.push(ms); fn(); });
+  await sleep(1000);
+  assert.deepStrictEqual(seen, [1000]);
+});
+// Each function's own rest(), its TypeScript stripped (two known spots, each asserted), run with the block, a fake fetch and a fake
+// setTimeout that records the waits. Proves the wrap in every copy: the call is rebuilt on each attempt (same URL, method, body,
+// headers with the key; a fresh timeout signal in east-feed-refresh), the retry is invisible on success, and a non-2xx still throws.
+const restJsOf = (src, n) => {
+  const a = src.indexOf("\nasync function rest(path: string, init: RequestInit = {}): Promise<any> {\n");
+  assert.ok(a >= 0 && src.indexOf("\nasync function rest(", a + 1) < 0, n + ": one rest(), with the known signature");
+  const b = src.indexOf("\n}\n", a);
+  let js = src.slice(a + 1, b + 2);
+  const sig = "async function rest(path: string, init: RequestInit = {}): Promise<any> {", hdr = "...((init.headers as Record<string, string>) || {}),";
+  assert.strictEqual(js.split(sig).length - 1, 1, n + ": the signature to strip");
+  assert.strictEqual(js.split(hdr).length - 1, 1, n + ": the headers cast to strip");
+  js = js.replace(sig, "async function rest(path, init = {}) {").replace(hdr, "...((init.headers) || {}),");
+  assert.ok(js.includes("const res = await restFetchWithRetry(() => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {"), n + ": rest() sends its fetch through restFetchWithRetry, a closure that builds the call anew on each attempt");
+  assert.ok(js.includes("}), path.split(\"?\")[0], restSleep);"), n + ": labelled with the table (no query string), waiting through restSleep");
+  assert.ok(/\n  if \(!res\.ok\) \{\n    const text = await res\.text\(\)\.catch\(\(\) => ""\);\n    throw new HttpError\(res\.status, /.test(js), n + ": a non-2xx still throws (never a silent empty result)");
+  return js;
+};
+class FakeHttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+const restRig = (n, queue) => {
+  const rig = { calls: [], waits: [], warns: [] };
+  const fetchFake = async (url, init) => { rig.calls.push({ url, init }); const r = queue[rig.calls.length - 1]; if (!r) throw new Error("the fake fetch ran dry"); return r; };
+  const con = { warn: (m) => rig.warns.push(String(m)), log: () => {}, error: () => {} };
+  rig.rest = new Function("fetch", "setTimeout", "console", "HttpError", "SUPABASE_URL", "SERVICE_ROLE_KEY", "DB_KEY", "SILVIS_TIMEOUT_MS",
+    RETRY_BLOCK + "\n" + restJsOf(RETRY_FNS[n], n) + "\nreturn rest;")(fetchFake, (fn, ms) => { rig.waits.push(ms); fn(); }, con, FakeHttpError,
+    "https://fake-project.example.test", "sb_secret_FAKEKEY", "sb_secret_FAKEKEY", 10000);
+  return rig;
+};
+acheck("10/26 retry, each function's real rest(): a GET that meets one PGRST303 returns the parsed rows (two identical calls, one 1 s wait, the key on both); three PGRST303 throw HttpError 401 naming PGRST303 (three calls, 1 s + 3 s); a PATCH that meets one PGRST303 is resent with the same method, body and headers and returns null on 204; PGRST301 and a 500 throw at once (one call)", async () => {
+  if (!RETRY_BLOCK) throw new Error("the retry block did not load");
+  for (const n of Object.keys(RETRY_FNS)) {
+    let rig = restRig(n, [resp(401, PGRST303_BODY), resp(200, '[{"id":"main","data":{}}]')]);
+    const rows = await rig.rest("call_schedule_data?id=eq.main&select=data");
+    assert.deepStrictEqual(rows, [{ id: "main", data: {} }], n + ": the rows of the second answer");
+    assert.strictEqual(rig.calls.length, 2, n + ": two calls"); assert.deepStrictEqual(rig.waits, [1000], n + ": one 1 s wait");
+    rig.calls.forEach((c) => {
+      assert.strictEqual(c.url, "https://fake-project.example.test/rest/v1/call_schedule_data?id=eq.main&select=data", n + ": the same URL each time");
+      assert.strictEqual(c.init.headers.apikey, "sb_secret_FAKEKEY", n + ": the key on each attempt"); assert.strictEqual(c.init.headers.Authorization, "Bearer sb_secret_FAKEKEY", n + ": and as the bearer");
+    });
+    assert.notStrictEqual(rig.calls[0].init, rig.calls[1].init, n + ": the call is built anew for the resend");
+    if (n === "east-feed-refresh") assert.ok(rig.calls[0].init.signal && rig.calls[1].init.signal && rig.calls[0].init.signal !== rig.calls[1].init.signal, n + ": a fresh timeout signal on each attempt");
+    assert.deepStrictEqual(rig.warns, ["[rest] call_schedule_data: HTTP 401 PGRST303 (attempt 1 of 3) - again in 1000 ms"], n + ": one warn line, the table only");
+    rig = restRig(n, [resp(401, PGRST303_BODY), resp(401, PGRST303_BODY), resp(401, PGRST303_BODY)]);
+    await assert.rejects(rig.rest("schedule_days?select=day"), (e) => e instanceof FakeHttpError && e.status === 401 && /HTTP 401/.test(e.message) && /PGRST303/.test(e.message) && /JWT issued at future/.test(e.message), n + ": three PGRST303 -> HttpError 401 naming the reason");
+    assert.strictEqual(rig.calls.length, 3, n + ": three calls"); assert.deepStrictEqual(rig.waits, [1000, 3000], n + ": 1 s, then 3 s");
+    rig = restRig(n, [resp(401, PGRST303_BODY), resp(204, null)]);
+    const body = JSON.stringify({ last_digest_at: "2026-10-26T11:00:00.000Z" });
+    const out = await rig.rest("office_notification_state?id=eq.digest_snapshot", { method: "PATCH", body, headers: { Prefer: "return=minimal" } });
+    assert.strictEqual(out, null, n + ": 204 -> null");
+    assert.strictEqual(rig.calls.length, 2, n + ": the write resent once");
+    rig.calls.forEach((c) => {
+      assert.strictEqual(c.init.method, "PATCH", n + ": PATCH each time"); assert.strictEqual(c.init.body, body, n + ": the same body each time");
+      assert.strictEqual(c.init.headers.Prefer, "return=minimal", n + ": the caller's headers kept"); assert.strictEqual(c.init.headers["Content-Type"], "application/json", n + ": the JSON content type kept");
+    });
+    for (const [st, b] of [[401, PGRST301_BODY], [500, '{"message":"boom"}']]) {
+      rig = restRig(n, [resp(st, b)]);
+      await assert.rejects(rig.rest("time_off?select=*"), (e) => e instanceof FakeHttpError && e.status === st && e.message.indexOf(b.slice(0, 40)) >= 0, n + ": " + st + " throws with its body");
+      assert.strictEqual(rig.calls.length, 1, n + ": " + st + " - one call"); assert.deepStrictEqual(rig.waits, [], n + ": " + st + " - no wait");
+    }
+  }
+});
+check("10/26 retry: no PostgREST call of this project bypasses rest() - each function names `${SUPABASE_URL}/rest/v1/` exactly once (inside rest()); the other project's reads (EAST_PROJECT_URL, a public anon key) and the GoTrue / Resend / push calls are not PostgREST calls of this project and stay as they were", () => {
+  Object.entries(RETRY_FNS).forEach(([n, s]) => {
+    assert.strictEqual(s.split("${SUPABASE_URL}/rest/v1/").length - 1, 1, n + ": one `${SUPABASE_URL}/rest/v1/` - rest()'s");
+    const a = s.indexOf("\nasync function rest("), b = s.indexOf("\n}\n", a);
+    const at = s.indexOf("${SUPABASE_URL}/rest/v1/");
+    assert.ok(at > a && at < b, n + ": and it is inside rest()");
+    assert.strictEqual(s.split("restFetchWithRetry(").length - 1, 2, n + ": restFetchWithRetry defined once, called once (by rest())");
+  });
+});
+check("10/26 retry: each header names the retry as the pending next version on its deployed base (calendar-sync v8 on v7, daily-reminder v11 on v10, east-feed-refresh v2 on v1, office-notifications v7 on v6, send-notification v13 on v12), and each source is the prepared file RETRY_PREPARED_SHA256 pins (raw bytes)", () => {
+  const V = { "calendar-sync": [8, 7], "daily-reminder": [11, 10], "east-feed-refresh": [2, 1], "office-notifications": [7, 6], "send-notification": [13, 12] };
+  Object.entries(RETRY_FNS).forEach(([n, s]) => {
+    const head = s.slice(0, s.indexOf("\nimport "));
+    const [v, base] = V[n];
+    assert.strictEqual(head.split("TOKEN RACE RETRY (2026-10-26; v" + v + " on base v" + base + " - prepared, NOT deployed;").length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");
+    assert.ok(/PGRST303/.test(head) && /1 s, then 3 s/.test(head.replace(/\n\/\/\s*/g, " ")), n + ": the header says what the retry does");
+    assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), RETRY_PREPARED_SHA256[n], n + ": the source is the prepared file deploy-rest-retry.sh pins (a source change moves this pin, the script's and the record together)");
+  });
+});
+check("10/26 retry: the README carries the deploy record - section 3's '2026-10-26 - the PGRST303 retry' (all five, NOT deployed until Faraz runs the deploy script) and section 7's rollback (the five backups)", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const rec = s3.slice(s3.indexOf("### 2026-10-26 - the PGRST303 retry"));
+  assert.ok(s3.indexOf("### 2026-10-26 - the PGRST303 retry") > 0, "section 3 has the subsection");
+  const flat = rec.replace(/\s+/g, " ");
+  ["calendar-sync", "daily-reminder", "east-feed-refresh", "office-notifications", "send-notification"].forEach((f) => assert.ok(flat.indexOf(f) > 0, "the record names " + f));
+  assert.ok(flat.includes("JWT issued at future") && flat.includes("PGRST303") && flat.includes("deploy-rest-retry.sh"), "the record names the error and the deploy script");
+  const s7 = readme.slice(readme.indexOf("## 7."));
+  assert.ok(s7.indexOf("deploy-rest-retry.sh") > 0 && /PGRST303/.test(s7), "section 7: the rollback of the retry deploy");
 });
 
 (async () => {
