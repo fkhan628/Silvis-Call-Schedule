@@ -175,6 +175,13 @@
 -- grants, EV001 / EV002 and the lock are unchanged. No table, column, policy, trigger, row or anon surface changes. Letter u stays
 -- taken by the weekend pair claim and z by the push follow-ups (prepared in parallel) - this revision's records follow z's; z was the
 -- last applied before it (2026-10-22 04:33:15Z; independent - either apply order).
+-- Revision 2026-10-25 ab (locked trades, sql/migrations/2026-10-25-locked-trade.sql, report-first, NOT yet applied): Faraz 10/25 - "all
+-- locks, holidays included": apply_trade() moves a locked slot once the two surgeons agreed, whichever party applies - check (c), the
+-- lock refusal for every caller but the scheduler, is gone (a three-line comment in its place); every other check, lock and write is
+-- revision y's byte for byte (the moved role's lock flag cleared, source 'trade' - Generate keeps such a row fixed; the other role's
+-- lock on the day stays). No table, column, policy, trigger, grant, other function or anon surface changes; claim_open_slot keeps CL007
+-- (a locked OPEN slot stays the scheduler's to assign). Letter u stays taken by the weekend pair claim; aa was the last applied before
+-- it (2026-10-22 04:50:53Z; this body is y's, applied 2026-10-20 00:41:25Z, minus check (c)).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -999,6 +1006,10 @@ create trigger trade_insert_guard_trg
 -- The trade.apply audit detail gains two booleans, offer (leg 1 wrote or merged a row) and return_offer (the return leg did). Every
 -- check, refusal, lock and write before the loop is revision m's, byte for byte; the loop adds save_offers' per-person advisory
 -- lock for every leg that reaches the period read (after the day rows, in person order - review 10/18).
+-- 2026-10-25 ab (sql/migrations/2026-10-25-locked-trade.sql, report-first, NOT yet applied; Faraz 10/25, "all locks, holidays included"):
+-- check (c) above is gone - a locked slot moves like any other once the two surgeons agreed, whichever party applies (the receiver's
+-- Accept in the app, or Retry apply by either party), as it did when the scheduler applied it; the transfer still clears the moved
+-- role's lock flag and the other role's lock stays. Every other check, refusal, lock and write is revision y's, byte for byte.
 create or replace function public.apply_trade(p_trade_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -1083,15 +1094,9 @@ begin
       raise exception 'TRADE_INELIGIBLE: % starts a vacation on % (primary the day before is blocked)', fr_name, t.return_day + 1 using errcode = 'P0001';
     end if;
   end if;
-  -- (c) locked slots move only when the scheduler applies (the transfer below clears the lock)
-  if not sched then
-    if (t.role = 'primary' and d1.primary_locked) or (t.role = 'backup' and d1.backup_locked) then
-      raise exception 'TRADE_INELIGIBLE: % % is locked; ask the scheduler', t.day, t.role using errcode = 'P0001';
-    end if;
-    if t.return_day is not null and ((t.return_role = 'primary' and d2.primary_locked) or (t.return_role = 'backup' and d2.backup_locked)) then
-      raise exception 'TRADE_INELIGIBLE: % % is locked; ask the scheduler', t.return_day, t.return_role using errcode = 'P0001';
-    end if;
-  end if;
+  -- (c) (2026-10-25, revision ab - Faraz: all locks, holidays included) a locked slot moves like any other once the two surgeons
+  -- agreed, whichever party applies: no lock refusal for any caller. The transfer below clears the moved role's lock flag (the
+  -- day's source becomes 'trade', which Generate keeps fixed); the other role's lock on that day stays as it was.
   -- (d) the receiver must not already hold the other role that day
   if (t.role = 'primary' and d1.backup_id = t.to_surgeon_id) or (t.role = 'backup' and d1.primary_id = t.to_surgeon_id) then
     raise exception 'TRADE_INELIGIBLE: % already holds % on %', to_name, case when t.role = 'primary' then 'backup' else 'primary' end, t.day using errcode = 'P0001';

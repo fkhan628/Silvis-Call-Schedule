@@ -5070,3 +5070,73 @@ the migration. The apply script runs no `scripts/verify-rls.sh` (no RESULT line)
 20261022T044140Z (`main`, `cc4cecc`, the same script and pins; the clock `0442`) read steps 0-3 as above and stopped there by design -
 `DRY RUN - nothing applied`, `APPLY confirmation: not reached`, `migration: not run`. Not re-run against the live project after the
 record step: verify-rls section 23 (added by this step) grades the probe on the next plain `bash scripts/verify-rls.sh`.
+
+
+## 2026-10-25 - apply_trade moves a locked slot once the two surgeons agreed (revision ab): apply_trade re-created (Faraz 10/25; `sql/migrations/2026-10-25-locked-trade.sql`)
+
+**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-locked-trade.sh`.**
+Revision ab (u stays reserved for the weekend pair claim; aa was the last letter applied, 2026-10-22 04:50:53Z). Nothing in the repo
+applies it: the apply script lives outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills the
+observed line at the end of this section.
+
+**Why.** A partner told Faraz on 10/25 that changing the calendar was too hard "with the locks and the multiple verifications". The
+path he hit: the client never stops a trade on a locked slot (its trade checks read `rules.eligibility` with `ignoreLocks: true`), so
+two surgeons proposed it and the receiver accepted it, the Accept called `apply_trade`, and check (c) refused it - `TRADE_INELIGIBLE:
+<day> <role> is locked; ask the scheduler`. The trade then sat `accepted`, not applied, until the scheduler pressed Retry apply, and
+nothing told him: his Waiting on you lists pending proposals addressed to him only (`helpers.tradesWaitingOn`). Since the 10/21
+calendar change a surgeon sees no padlock on a held slot either. An anon read of the live `schedule_days` on 10/25 held 55 locked slots
+from that day on - 42 of them the import locks of 10/25-11/29, 6 manual, 6 east-derived, 1 left on a traded day - and 48 of them held by
+surgeons other than the scheduler: nearly every trade of the next five weeks met the refusal. Faraz 10/25, offered an unlock of the
+import locks by hand, a one-shot unlock script or this change: "I actually want to do these least amount as possible", then "build the
+locked-trade fix (all locks, holidays included) on a branch with the usual review and gate, and prepare the apply script for me to run
+once".
+
+**The objects** (the migration verbatim in the repo; schema.sql mirrors it):
+
+| object | before | after |
+|---|---|---|
+| `apply_trade(uuid)` | revision y (2026-10-18, applied 2026-10-20 00:41:25Z) | revision y's body byte for byte with check (c) - the two lock refusals inside `if not sched then` - replaced by a three-line comment |
+| every table, column, policy, trigger, grant, row, other function and the anon surface | - | **unchanged** (the grants re-run as they are) |
+| PostgREST schema cache | - | `notify pgrst, 'reload schema';` (a no-op for the client) |
+
+**What it changes.** An accepted trade or give whose leg (or return leg) is locked applies when a PARTY applies it - the receiver's
+Accept, or Retry apply by either party - exactly as it did when the scheduler applied it: the moved role's lock flag clears, the day's
+source becomes `trade` (Generate keeps a `trade` row fixed in both modes: `generator.js` `GEN_PERSON_FIXED_SOURCES`), and the other
+role's lock on that day stays. Every lock counts, holidays included: a holiday unit or a weekend block moves row by row as the client
+sends it (the client keeps a unit whole - `tradeUnitOf`), like an unlocked one. A trade the old refusal left `accepted` stays accepted
+until someone presses Retry apply (the pre-check's facts row counts them). Unchanged: every other check of `apply_trade` (the party or
+scheduler test, TRADE_NOT_ACCEPTED, TRADE_PAST for a member, the time_off SHARE lock, TRADE_STALE, the roster, the vacations and the day
+before one, the other role held), its writes, revision y's offer loop, the audit row; the receiver's own Accept (`trade_update_guard`);
+`claim_open_slot`'s CL007 (a locked OPEN slot stays the scheduler's to assign - nobody takes it from the Open shifts board); Generate;
+the scheduler's day editor (an unlock first). The client needs no change - it already lets both surgeons propose and accept on a locked
+slot.
+
+**Blast radius.** One function body. Two existing probes graded the old refusal: `sql/probes/trade-guards-probe.sql` case D (a member
+applies a locked slot: `ERR TRADE_INELIGIBLE: 2030-03-09 primary is locked  ask the scheduler` before, `status=applied locked=false`
+after) - verify-rls section 5 - and `sql/probes/trade-offer-probe.sql` case A4 (the member's own apply of the locked slot now succeeds,
+so the scheduler's apply after it finds the trade applied: `m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false` before,
+`ERR P0001 TRADE_NOT_ACCEPTED: status is applied` after) - verify-rls section 21. Between the apply and the record step a plain
+`bash scripts/verify-rls.sh` reads exactly those two FAILs; the record step moves both gradings (and both probes' header lines) and
+adds verify-rls section 24 for this revision's probe. Residual (recorded, not fixed): a revert of a member's trade on a once-locked day
+leaves the slot unlocked - the scheduler re-locks it in the day editor if he wants - as a scheduler-applied trade always did.
+
+**The proof** (offline on PGlite, 10/25: a database built from main's `sql/schema.sql` - revision y's `apply_trade` - then this file):
+`sql/probes/locked-trade-probe.sql` reads `PROBE_SETUP: apply_trade still refuses a member on a locked slot` before and its 15 cases as
+its header lists after - P1 the catalog, L1-L6 a locked slot moves whichever party applies (both legs locked, only the return leg, the
+other role's lock kept, the scheduler unchanged), N1-N6 every other refusal still holds on a locked slot, C1 a locked open slot is still
+not claimable (CL007), A1 the audit row; leftovers 0. `sql/probes/locked-trade-precheck.sql` (read-only) reads the gate
+`apply_trade=yes lock_check=yes offer_loop=yes` before and `apply_trade=yes lock_check=no offer_loop=yes` after, the bodies
+`apply_trade=b5cca6f0f35b07923e6facb940d1f180` (revision y's - the md5 the revision y apply read live after it) ->
+`1b4bf4792b6a164f382683661edaecc2`, `insert_guard=303f173367b9c386dc0786bc4892657a`, `update_guard=304e0fddfcbda63c48340314003d441b`
+and `claim=a38a708a166c28c7f3840387a366cb12` unchanged, `apply_trade=definer claim=definer`, `anon=f authenticated=t public=f`. The
+trade-guards probe read 34 cases before and after with D alone different, the claim probe 15 with none different, the trade-offer probe
+32 with A4 alone different.
+
+**Apply** (Faraz, one command; `--dry-run` first): `apply-locked-trade.sh` in the private apply-scripts folder - its README section
+and SHA256SUMS name it. Steps: 0 the checks (the graded files' sha256, a clean checkout, the CLI, the Silvis link); 1 agent mode and
+the pre-check gate (y's body - another body stops it); 2 the regression probes BEFORE (trade-guards D must read the old refusal and
+trade-offer A4 the old `m=locked`); 3 the probe BEFORE (`PROBE_SETUP`); 4 the migration after APPLY typed in capitals; 5 the gate after;
+6 the probe AFTER, case for case against its header, and its leftover count; 7 the regression probes AFTER (the same lists but D and A4,
+each as above). Rollback: `sql/migrations/2026-10-18-trade-offer.sql` (revision y, idempotent - its two guards are the live bodies).
+
+**Observed** (the record step fills this in from the log Faraz pastes back): not applied yet.
