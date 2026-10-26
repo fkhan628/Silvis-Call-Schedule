@@ -72,7 +72,7 @@
 --      wait itself is PostgreSQL's lock-conflict rule (a time_off writer's ROW EXCLUSIVE vs SHARE), and the statement's
 --      position (before the day-row locks and the vacation check) is pinned by test/schema.test.js.
 --        BEFORE: no table lock                          -> E2=share_locks=0
---        AFTER : SHARE held since E                     -> E2=share_locks=1
+--        AFTER : SHARE held since E (since revision ab: since D, the first case that commits) -> E2=share_locks=1
 --   N  surgeon (s2) inserts a trade naming s3, with from_surgeon_name 'Mallory' and to_surgeon_name 'Eve'
 --        BEFORE: the client's strings are stored        -> N=from_name=Mallory to_name=Eve
 --        AFTER : the roster's names by id               -> N=from_name=Burchett to_name=Acton

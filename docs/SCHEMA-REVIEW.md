@@ -152,7 +152,7 @@ is checked, in this order, raising `TRADE_INELIGIBLE: <plain-English reason>` (e
 |---|---|---|
 | (a) | roster in `call_schedule_data` `main` present (fail closed); receiver is an **active** roster entry (pool or external - any active entry; like every client path, an entry with no `active` key counts as active: `coalesce(r ->> 'active', 'true') <> 'false'`) | `roster unavailable` / `<id> is not an active roster surgeon` |
 | (b) | the leg's day is not inside a `time_off` range of the receiver; for a **primary** leg, not the day before one either (SILVIS-CALL-RULES: a vacation day also blocks the day before it - the same rule the `time_off` trigger enforces from the other side). Like that trigger, the SQL side hardcodes primary; the client reads `groupRules.dayBeforeRules.trailingEdgeRoles` (default `['primary']`). One step beyond Prompt 12's wording ("inside a time_off range"); pinned by the test; drop the two `starts a vacation on` blocks in both files if strictly-inside is wanted | `<Name> is on vacation on <day>` / `<Name> starts a vacation on <day+1> (primary the day before is blocked)` |
-| (c) | the leg's role is not locked that day unless the caller is the scheduler; the transfer sets the transferred role's lock flag to `false` (a traded slot is no longer the locked import) | `<day> <role> is locked; ask the scheduler` |
+| (c) | the leg's role is not locked that day unless the caller is the scheduler; the transfer sets the transferred role's lock flag to `false` (a traded slot is no longer the locked import) - *gone since revision ab (applied 2026-10-26 03:50:31Z, "2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)"): a locked slot moves for a party once the trade is accepted* | `<day> <role> is locked; ask the scheduler` |
 | (d) | the receiver does not already hold the other role that day (readable message ahead of the `schedule_days_distinct_roles` constraint). Evaluated per leg against the pre-swap row, so a same-day role *swap* (A's primary for B's backup on one day) is refused here - it tripped the constraint before and the client refuses it too; not a supported trade shape | `<Name> already holds <other role> on <day>` |
 
 Unchanged: `security definer`, `set search_path = public`, `version + 1`, `source = 'trade'`, the `silvis.apply_trade`
@@ -4262,6 +4262,11 @@ gains a section that runs and grades `sql/probes/trade-offer-probe.sql` (its 32 
 script does) and its sha256 pin moves - only after Part A's record step, since Part A's apply script pins the file until then; the
 test pins with them.
 
+*As run since revision ab (applied 2026-10-26 03:50:31Z - the section "2026-10-25 - apply_trade moves a locked slot once the trade is
+accepted (revision ab)"): the probe's A4 quoted below (`m=locked`, as the 2026-10-20 run read it) grades the receiver's own apply of the
+locked slot since that revision's record step - `m=applied st=applied by=s2/s3 o1=primary/s3/app a=true/false`, in its header and in
+verify-rls section 21; a party moves a locked slot once the trade is accepted.*
+
 observed (apply, 2026-10-20): applied 2026-10-20 00:41:25Z (`apply-trade-offer.sh` step 4: the migration file through
 `supabase db query --linked`, exit 0, an empty result `"rows": []`, no `ERROR:`) by Faraz (log `apply-trade-offer-20261020T004005Z.log`,
 outside the repo, result `APPLIED AND VERIFIED`; repo HEAD `b0344bd` on `main`, the pins from `fed3151`; the migration's sha256
@@ -5076,8 +5081,8 @@ record step: verify-rls section 23 (added by this step) grades the probe on the 
 
 **Status: APPLIED 2026-10-26 03:50:31Z by Faraz** (`apply-locked-trade.sh`, log `apply-locked-trade-20261026T034928Z.log`, APPLIED AND
 VERIFIED; one `--dry-run` at 20261026T034722Z before it applied nothing); recorded by this section's record step (2026-10-26: the migration's
-trailer line, verify-rls section 24 added, sections 5 D and 21 A4 moved). The observed paragraph at the end of this section is copied from
-the log.
+trailer line, verify-rls section 24 added, sections 5 D and 21 A4 moved; docs, SQL comments, probes, verify-rls and tests only - no runtime
+input, so its merge runs the Tests workflow and no build). The observed paragraph at the end of this section is copied from the log.
 *As prepared:* Revision ab (u stays reserved for the weekend pair claim; aa was the last letter applied, 2026-10-22 04:50:53Z). Nothing in
 the repo applies it: the apply script lives outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills
 the observed line at the end of this section.
@@ -5134,7 +5139,7 @@ so the scheduler's apply after it finds the trade applied: `m=locked st=applied 
 `ERR P0001 TRADE_NOT_ACCEPTED: status is applied` after) - verify-rls section 21. No existing probe applies as an account with no roster
 link (trade-offer's unlinked admin is the scheduler's role). Between the apply and the record step a plain `bash scripts/verify-rls.sh`
 reads exactly those two FAILs. **The record step** (done 2026-10-26; test/schema.test.js keys its pins to this section's Status line -
-PREPARED: the old gradings and no section 24; APPLIED: the new ones): verify-rls section 5's D graded `status=applied locked=false` and the trade-guards
+PREPARED: the old gradings and no section 24; APPLIED: the new ones - only APPLIED passes since the record step): verify-rls section 5's D graded `status=applied locked=false` and the trade-guards
 probe's D header line (and its E2 note - D is the first case whose block commits now); trade-offer A4 rewritten to read the member's
 own apply of the locked slot (skip the scheduler's apply when `m=applied`; it then observes the offer row and the stamps on the locked
 path, e.g. `m=applied st=applied by=s2/s3 o1=primary/s3/app a=true/false`) - its header line, section 21's grading and revision y's
@@ -5211,10 +5216,15 @@ N8=ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade
 P1=definer=t lock_check=f null_safe=t loop=t anon=f auth=t
 ```
 
-then the probe's leftover count: 0 (persisted nothing). Step 7: trade-guards D `status=applied locked=false` (before: the refusal), trade-offer
-A4 `ERR P0001 TRADE_NOT_ACCEPTED: status is applied` (before: `m=locked ...`), every other case the same as before - 33, 15 and 31 cases. The
+then the probe's leftover count: 0 (persisted nothing - the apply script's count: the five terms above plus the probe's profile rows and its
+windows' vacations and offers). Step 7: trade-guards D `status=applied locked=false` (before: the refusal), trade-offer A4 `ERR P0001
+TRADE_NOT_ACCEPTED: status is applied` (before: `m=locked ...`), every other case the same as before - 33, 15 and 31 cases. The
 apply script runs no `scripts/verify-rls.sh` (no RESULT line). One earlier run applied nothing: the `--dry-run` at 20261026T034722Z (`main`,
 `2b7a293`) read steps 0-3 as above and stopped there by design - `DRY RUN - nothing applied`, `APPLY confirmation: not reached`,
 `migration: not run`. Not re-run against the live project after the record step: verify-rls section 24 (added by this step) grades the probe
 on the next plain `bash scripts/verify-rls.sh` - expected **657 passed, 0 failed** (637 + section 24's 20: its 18 cases, the count of 18 and
-the leftover count; sections 5 D and 21 A4 keep their counts and read the post-ab values).
+the leftover count; sections 5 D and 21 A4 keep their counts and read the post-ab values). Not observed live either, so derived: section 24's
+five-term leftover count (a part of the apply script's, which read 0) and section 21's rewritten A4 - its reading `m=applied st=applied
+by=s2/s3 o1=primary/s3/app a=true/false` follows from step 7 (the old A4 found the trade already applied: the receiver's own apply had moved
+the locked slot) and from revision y's offer loop, which writes the receiver's row whoever applies; the next plain run is the first live
+reading of both.

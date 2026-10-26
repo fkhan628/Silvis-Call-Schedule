@@ -10,8 +10,10 @@
 -- is absent) before it and all 32 cases below as listed after it, leftover count 0 (apply-trade-offer.sh steps 3 and 6). Since the record step
 -- verify-rls section 21 runs it on every run, grades each case against its line below and counts the leftovers it could leave; it FAILs
 -- a PROBE_SETUP (absent, partly applied, a collision or the profile rows) or a missing sentinel - there was never a not-applied grading.
--- Since revision ab's record step (2026-10-26) case A4 reads the receiver's own apply of the locked slot (m=applied - his offer row on the
--- locked path); the 2026-10-20 run read it before revision ab (m=locked: the scheduler applied), as docs/SCHEMA-REVIEW.md quotes.
+-- Since revision ab's record step (2026-10-26) case A4 grades the receiver's own apply of the locked slot (m=applied - his offer row on the
+-- locked path; derived from that apply's step 7, where the old A4 found the trade already applied - the next plain verify-rls run is its first
+-- live reading); the 2026-10-20 run read it before revision ab (m=locked: the scheduler applied), as revision y's section of
+-- docs/SCHEMA-REVIEW.md quotes.
 -- Run nothing else that writes trades, offers or vacations at the same time: the probe takes the time_off SHARE lock (apply_trade)
 -- and the per-person offers advisory locks (each consenting receiver's, in person order) for the length of the batch - well under a second.
 -- Identity: users probe-tradeoffer-<uuid>@example.test; trades detail 'probe-tradeoffer <K>'; periods label 'probe-tradeoffer P?';
