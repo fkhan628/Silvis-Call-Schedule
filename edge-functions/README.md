@@ -836,17 +836,27 @@ The change, in all five - `calendar-sync` v7 -> v8, `daily-reminder` v10 -> v11,
 it runs anything, so a write is as safe to resend as a read. Every other answer (another 401, any other status, a network error)
 comes back at once, and `rest()` still throws on every non-2xx, the third PGRST303 included. A resend logs one
 `[rest] <table>: HTTP 401 PGRST303 (attempt n of 3) - again in <ms> ms` line (no key, no address). Nothing else changes - no mode, no
-gate, no mail text, no database or client change.
+gate, no mail text, no database or client change. Two side effects, both in what is read, not in what a run does: a network error on
+a resend comes back as that error (the handler answers 500, not 502); and the hourly reminder and the weekly digest jobs keep pg_net's
+default timeout (section 4 - a few seconds), so a run that resends may show in `net._http_response` as a timeout while the function
+finishes its work (the 10/12 cron digest ran 5.9 s - `function_edge_logs` execution time 5856 ms, status 200 - its mail went out
+and its baseline was written). After the deploy, the function logs' `attempt 2 of 3` /
+`attempt 3 of 3` lines show whether one resend was enough.
 
 The deploy: `deploy-rest-retry.sh` in the private apply-scripts folder (it carries machine paths, so it stays out of this repo), run
-from a clean `main` that carries this change. `--dry-run` first: it checks the CLI and the `supa-silvis` link, downloads each live
-function into a fresh backup folder and stops unless every live copy is the file it replaces (main `57dd93d`'s, CRLF-normalised -
-anything else was deployed outside these records: stop), and stages the five new files against the hashes it pins; nothing is
-deployed. The real run asks for DEPLOY in capital letters at the terminal, deploys the five one at a time (the first failure stops it
-and prints the rollback of those already deployed), re-downloads each and compares it with the staged file, and checks that
+from a clean `main` that carries this change. `--dry-run` first: it checks the CLI and the `supa-silvis` link, reads `functions list`
+(each of the five ACTIVE with `verify_jwt` false - the cron jobs send no JWT), downloads each live function into a fresh backup folder
+and stops unless every live copy is the file it replaces (main `57dd93d`'s, CRLF-normalised - anything else was deployed outside
+these records: stop), and stages the five new files against the hashes it pins; nothing is deployed, and the workdir is left holding
+the live copies. Run by Claude Code at 2026-10-26 13:54Z and again at 14:16Z after the review fixes (read-only): the five ACTIVE,
+`verify_jwt` false, `calendar-sync` v7, `east-feed-refresh` v1, `office-notifications` v6, `send-notification` v12, `daily-reminder`
+v10, every live copy `57dd93d`'s byte for byte. The real run reads the clock (not :50-:05 - the hourly reminder and the Monday
+digest run at :00; not 10:20-10:35 UTC - the East refresh), asks for DEPLOY in capital letters at the terminal, reads the clock
+again, deploys the five one at a time (the first failure stops it and prints the rollback of those it touched), reads `functions
+list` again (each one version up, `verify_jwt` still false), re-downloads each and compares it with the staged file, and checks that
 `calendar-sync` still serves the group feed (200, `BEGIN:VCALENDAR` - a read through the new `rest()`) and that an unauthenticated
 POST to the four gated functions still answers 401. Then its PASTE THIS BACK block, for the record step (this subsection's Status
-line). Any time but the top of the hour (the hourly reminder runs at :00, the East refresh at 10:30 UTC, the digest Mondays 11:00 UTC).
+line, the test pins re-labelled deployed).
 
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
