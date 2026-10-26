@@ -27,7 +27,7 @@
 --   L4  the day's OTHER role stays locked: primary s2 and backup s4 both locked, the primary given to s3, u3 applies -> st=applied p=s3/f b=s4/t
 --   L5  only the RETURN leg is locked (s3's backup 03-11): u3 accepts and applies -> st=applied 1=s3/f 2=s2/f
 --   L6  the scheduler applies a locked slot (unchanged): u3 accepts, u1 applies -> st=applied p=s3 pl=f src=trade
---   L7  a server session (postgres, no signed-in user) applies an accepted locked give (unchanged) -> st=applied p=s3/f src=trade
+--   L7  a server session (postgres, no signed-in user) applies an accepted locked give (it passes the party test as before, check (c) is gone) -> st=applied p=s3/f src=trade
 --   N1  locked slot, the receiver is on vacation that day -> ERR TRADE_INELIGIBLE: Acton is on vacation on 2032-03-15
 --   N2  locked slot, the receiver already holds the other role -> ERR TRADE_INELIGIBLE: Acton already holds backup on 2032-03-16
 --   N3  locked slot on a past day, the receiver applies -> TRADE_PAST 2020-08-11

@@ -7982,6 +7982,8 @@ step("revision ab: the docs - SCHEMA-REVIEW's section (the last one), the rules 
   ok(prepared !== applied, "the section's Status reads PREPARED (until the record step) or APPLIED (after it), not both or neither");
   ok(sec.includes("`apply_trade=b5cca6f0f35b07923e6facb940d1f180`") && sec.includes("`" + AB_MD5 + "`"), "the section quotes the two md5 the gate reads");
   ok(sec.includes("**The review's finding, fixed here too.**") && sec.includes("**The record step**"), "the section records the review's finding and the record step's plan");
+  // the `|| applied` escapes below (the prepared wording) and the PREPARED-only "NOT yet applied" count are the record step's to replace:
+  // it pins the applied wording of the rules doc, the build guide and schema.sql's two ab lines in their place (re-check, 10/25)
   const rules = read(path.join(ROOT, "docs", "SILVIS-CALL-RULES.md")).replace(/\n\s*/g, " ");
   ok(rules.includes("**10/25 (Faraz, revision ab - prepared, not applied yet):** \"all locks, holidays included\"") || applied, "the rules doc names revision ab as prepared, not applied (beside the scheduler-only rule it changes), until the record step");
   ok((guide.includes("- **Locked trades (2026-10-25, revision ab, report-first, NOT applied yet; `sql/migrations/" + AB_FILE + "`).**") && guide.includes("until revision ab\n  (prepared 10/25, not applied yet)")) || applied, "the build guide's revision ab bullet and its holiday-plan line say prepared, not applied, until the record step");

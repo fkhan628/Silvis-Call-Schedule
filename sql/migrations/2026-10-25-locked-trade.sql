@@ -32,12 +32,13 @@
 -- the other role's lock on that day stays as it was. Every lock the database holds counts, holidays included (Faraz 10/25); the
 -- client's rules still refuse a member's trade of an East-derived locked day (rules.js derived-lock-held), so those 6 stay the
 -- scheduler's in the app. A trade already left 'accepted' by the old refusal stays accepted until a party (or the scheduler) presses
--- Retry apply; the pre-check prints them (a day before today, or a slot the giver no longer holds, still refuses). A signed-in account
--- with no roster link can no longer apply any trade.
+-- Retry apply; the pre-check prints them (a day before today, or a slot the giver no longer holds, still refuses). A non-scheduler
+-- account with no roster link can no longer apply any trade (an admin with none counts as the scheduler).
 --
 -- Who it binds. Every caller of apply_trade. A party (the receiver, or the proposer) once the trade is accepted - by the receiver
--- himself, or by the scheduler for him (trade_update_guard, unchanged); the scheduler, unchanged; a server session, unchanged; a
--- signed-in account with no roster link (the coordinator, a viewer, a follower, an APP): refused TRADE_FORBIDDEN. What still guards a
+-- himself, or by the scheduler for him (trade_update_guard, unchanged); the scheduler, unchanged; a server session passes the party
+-- test as before and, like a party, now moves a locked slot (check (c) refused it too); a signed-in non-scheduler with no roster link
+-- (the coordinator, a viewer, a follower, an APP; an admin with none counts as the scheduler): refused TRADE_FORBIDDEN. What still guards a
 -- locked slot: Generate never moves it; claim_open_slot keeps CL007 (a locked OPEN slot is the scheduler's to assign - nobody takes it
 -- from the Open shifts board); the scheduler's day editor asks for the unlock first; the client's rules check on both legs at propose
 -- and accept.
@@ -75,7 +76,8 @@
 -- locked slot once the trade is accepted (revision ab)".
 -- Re-running: idempotent (create or replace; the grants re-run); the apply script refuses to re-run it anyway (its gate).
 -- Rolling back (nothing is lost: trades applied meanwhile stay applied; their slots stay as they were moved). Valid while the two trade
--- guards are still revision y's (the pre-check's bodies row shows it), since the file re-creates them too:
+-- guards are still revision y's (the pre-check's bodies row shows it), since the file re-creates them too; it also restores y's party
+-- test, under which an account with no roster link can apply an accepted trade on an unlocked slot again:
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/2026-10-18-trade-offer.sql   (revision y, idempotent: apply_trade with check (c); its two guards are the live bodies)
 -- ============================================================================
 
