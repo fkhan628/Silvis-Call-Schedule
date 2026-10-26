@@ -36,6 +36,8 @@
 --   D  the leg is LOCKED; s2 (not a scheduler) applies
 --        BEFORE: applies, lock flag left true       -> D=status=applied locked=true
 --        AFTER : refused                            -> D=ERR TRADE_INELIGIBLE: 2030-03-09 primary is locked; ask the scheduler
+--        since revision ab (sql/migrations/2026-10-25-locked-trade.sql, applied 2026-10-26 03:50:31Z - a locked slot moves for a party
+--        once the trade is accepted): applies and the lock clears -> D=status=applied locked=false (verify-rls section 5 grades this)
 --   E  control: clean accepted trade with a return leg; s2 applies
 --        BEFORE and AFTER: applies                  -> E=status=applied 03-11p=s2 03-13b=s3
 --   F  the leg is LOCKED; the SCHEDULER applies
@@ -63,7 +65,7 @@
 --   M  PENDING trade on 2020-02-05 (past); s2 declines it
 --        BEFORE and AFTER: declined (only ACCEPT is gated) -> M=status=declined
 -- 2026-09-24 (Prompt 16 B6, sql/migrations/2026-09-24-definer-locks.sql) - the time_off table lock and the roster names.
---   E2 observation right after E (the first case whose inner block COMMITS - a refused case like B rolls its
+--   E2 observation right after E (since revision ab D's block commits first - a refused case like B rolls its
 --      subtransaction back, and a relation lock taken inside it is released with it): does this backend hold a granted
 --      ShareLock on public.time_off in pg_locks? `lock table ... in share mode` is a relation lock, first-class in
 --      pg_locks, held until the batch's transaction ends. A single batch cannot show a second session waiting; the

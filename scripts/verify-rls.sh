@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i, 22c-22e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) + push follow-ups anon checks and probe (22) + East reset backstop probe (23) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i, 22c-22e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) + push follow-ups anon checks and probe (22) + East reset backstop probe (23) + locked trades probe (24) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
@@ -109,7 +109,9 @@ if linked; then
     expect_eq         A "status=pending from=s2 decided=null"    "surgeon insert with status 'accepted' + decided_at lands as 'pending', undecided"
     expect_ineligible B "vacation"                               "apply on the receiver's vacation day is refused"
     expect_ineligible C "already holds"                          "receiver already holding the other role is refused"
-    expect_ineligible D "locked"                                 "locked slot is refused for a non-scheduler"
+    # since revision ab (sql/migrations/2026-10-25-locked-trade.sql, applied 2026-10-26 03:50:31Z): a party applies a locked slot once the
+    # trade is accepted (before it: TRADE_INELIGIBLE ... is locked - the scheduler applied those)
+    expect_eq         D "status=applied locked=false"             "a party applies an accepted trade on a locked slot and the lock clears (revision ab; before it a non-scheduler was refused)"
     expect_eq         E "status=applied 03-11p=s2 03-13b=s3"    "control: a clean accepted trade applies (then rolls back)"
     expect_eq         F "status=applied locked=false"            "scheduler applies a locked slot and the lock clears"
     expect_ineligible G "two different"                          "from = to is refused"
@@ -1866,7 +1868,7 @@ if linked; then
     expect_eq21 A1  "st=applied by=s2/s3 o1=primary/s3/app a=true/false flag=off" "the receiver accepts and applies a give in the published period: his offer (primary, his own, app), audit offer=true; the frozen-period bypass is off again"
     expect_eq21 A2  "st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true lock=f/t" "a two-way trade the giver applies: both receivers' offers (the backup return leg too), audit true/true; the return leg takes s2's offers lock"
     expect_eq21 A3  "st=applied by=scheduler/s3 o1=primary/s3/app a=true/false" "the scheduler proposes a one-way trade, the receiver accepts, the scheduler applies: the receiver's offer"
-    expect_eq21 A4  "m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false" "a locked slot: the receiver's apply is refused, the scheduler applies - the receiver agreed, so his offer"
+    expect_eq21 A4  "m=applied st=applied by=s2/s3 o1=primary/s3/app a=true/false" "a locked slot: the receiver's own apply moves it (revision ab, applied 2026-10-26; before it the scheduler applied) - he agreed, so his offer"
     expect_eq21 A5  "st=applied by=s2/scheduler o1=none a=false/false" "the scheduler accepts for the receiver, the receiver applies (Retry apply): no offer - he never agreed"
     expect_eq21 A6  "st=applied by=s2/scheduler o1=none a=false/false" "an unlinked admin accepts for the receiver and applies: no offer"
     expect_eq21 A7  "st=applied by=s2/s3 o1=primary/s3/app a=true/false upd=scheduler" "the receiver accepts, an unlinked admin applies: his offer; the day is updated by the scheduler"
@@ -2203,6 +2205,108 @@ if linked; then
   fi
 else
   echo "   SKIP 23 (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 24. locked trades (2026-10-25, revision ab): apply_trade moves a locked slot once the trade is accepted; an account with no roster link applies nothing - rolled-back probe =="
+# Section 24 (17 = the weekend pair claim, taken on its own branch; 23 = revision aa's East reset backstop, the section above).
+# sql/migrations/2026-10-25-locked-trade.sql (report-first; applied 2026-10-26 03:50:31Z, revision ab): apply_trade(uuid) (security definer;
+# EXECUTE for authenticated, never anon - unchanged) is revision y's body with check (c) - the lock refusal for every caller but the scheduler -
+# gone and its party test NULL-safe (a signed-in non-scheduler with no roster link is refused TRADE_FORBIDDEN; a server session passes as
+# before). Nothing here goes over REST: ab changes no grant, section 6 asks a surgeon over REST (6b) and the anon side never had EXECUTE.
+# Section 5's D and section 21's A4 read the post-ab values since this record step. 24a runs sql/probes/locked-trade-probe.sql through the
+# linked CLI (rolls itself back; 18 cases graded by name - its header lists each AFTER string - and the number of case lines it reports,
+# whatever their names, must be exactly 18, so with the 18 graded names the set is exactly its header's). The change exists since the apply,
+# so the probe's PROBE_SETUP (apply_trade still refuses a member on a locked slot) is a FAIL - strict from the start: the record step added
+# this section after the apply, with no flag; its other raises (the collision guard, revision y absent, the profile rows) are FAILs too.
+# 24b counts the probe's leftovers either way, by the probe's own identity - docs/SCHEMA-REVIEW.md's leftover count, term for term, in two
+# columns: tagged = rows only the probe writes, each with its DELETE - its auth users (probe-lockedtrade-<uuid>@example.test; their profiles
+# cascade), its trades (detail probe-lockedtrade ...) and its vacation (note probe-lockedtrade); window = schedule_days rows and trade.apply
+# audit rows of 2032-03 / 2020-08 - a traded day's source reads trade, not the probe's, and apply_trade writes the audit row with the run's
+# actor. The collision guard refuses to start while such a row exists, so after a run that wrote its fixtures (PROBE_RESULTS) a window row
+# can only be the probe's - a FAIL. Every PROBE_SETUP the probe can end on sits in its setup block, before its first schedule row (act()'s
+# raise inside a case is caught and graded as that case's value), so after one they are rows this run never wrote - real rows, or an earlier run's leak (see any tagged rows); a
+# PROBE_SETUP counts as the run's end only when no PROBE_RESULTS came back. After a run that reported neither (a setup error or cut-off
+# output) nobody can tell. Those two are listed for review, never counted as a leftover and never given a DELETE (schedule rows and audit
+# history are reviewed, never deleted blindly).
+if linked; then
+  # 24a. the graded probe
+  PROBE24="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/locked-trade-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE24" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: apply_trade still refuses a member on a locked slot'; then
+    bad "locked trade probe: PROBE_SETUP - apply_trade still refuses a member on a locked slot (revision ab removed that refusal at the 2026-10-26 apply)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then
+    bad "locked trade probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (revision y absent, a fixture collision or the profile rows - ask Claude Code)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "locked trade probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    # no trailing-whitespace trim (section 22's reader): the ;END cut already drops everything the CLI adds after the raised text, so a
+    # trim could only reach the last case's value (P1 - the cases come sorted by name) - graded value for value like the other 17
+    results24=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//')
+    echo "$results24" | tr ';' '\n' | sed 's/^/   /'
+    # one case per line, the CLI's JSON escapes decoded ONCE (no AFTER string carries < > & or a double quote, a wrong value may); the
+    # graders then read a case in plain bash (no process per case)
+    lines24=$(echo "$results24" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
+    case_val24()   { CV24=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV24="${l#"$1="}"; return 0;; esac; done <<< "$lines24"; }
+    expect_eq24()  { case_val24 "$1"; v="$CV24"; [ "$v" = "$2" ] && ok "locked trade probe $1: $3" || bad "locked trade probe $1: $3 (got '$v', expected '$2')"; }
+    n24=$(echo "$lines24" | grep -c .)
+    [ "$n24" = "18" ] && ok "locked trade probe: 18 cases reported (with the 18 graded below, exactly its header's P1 L1-L7 N1-N8 C1 A1)" || bad "locked trade probe: $n24 cases reported, not the 18 of its header (P1 L1-L7 N1-N8 C1 A1 - a case lost, doubled or added without a grade here)"
+    expect_eq24 P1  "definer=t lock_check=f null_safe=t loop=t anon=f auth=t" "apply_trade: security definer, no lock refusal, the NULL-safe party test, revision y's offer loop; EXECUTE for authenticated, never anon"
+    expect_eq24 L1  "st=applied p=s3 pl=f src=trade" "a give of a locked primary: the receiver accepts and applies it - the lock clears, the day reads trade"
+    expect_eq24 L2  "st=applied 1=s3/f 2=s2/f" "a trade with both legs locked: the proposer applies it - both locks clear"
+    expect_eq24 L3  "st=applied b=s3 bl=f src=trade" "a give of a locked backup: the receiver applies it"
+    expect_eq24 L4  "st=applied p=s3/f b=s4/t" "the day's other role keeps its lock"
+    expect_eq24 L5  "st=applied 1=s3/f 2=s2/f" "only the return leg locked: the receiver applies it"
+    expect_eq24 L6  "st=applied p=s3 pl=f src=trade" "the scheduler applies a locked slot, as before"
+    expect_eq24 L7  "st=applied p=s3/f src=trade" "a server session (no signed-in user) applies an accepted locked give - it passes the party test as before"
+    expect_eq24 N1  "ERR TRADE_INELIGIBLE: Acton is on vacation on 2032-03-15" "on a locked slot the receiver's vacation still refuses"
+    expect_eq24 N2  "ERR TRADE_INELIGIBLE: Acton already holds backup on 2032-03-16" "... and so does his holding the other role"
+    expect_eq24 N3  "TRADE_PAST 2020-08-11" "... and a past day"
+    expect_eq24 N4  "ERR TRADE_NOT_ACCEPTED: status is pending" "... and a trade not accepted yet"
+    expect_eq24 N5  "ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade" "... and a surgeon who is no party"
+    expect_eq24 N6  "ERR TRADE_STALE: 2032-03-19 primary is no longer held by s2" "... and a slot the giver no longer holds"
+    expect_eq24 N7  "ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade" "a viewer with no roster link applies nothing (the NULL-safe party test)"
+    expect_eq24 N8  "ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade" "the office coordinator (no roster link) applies nothing"
+    expect_eq24 C1  "ERR CL007 CLAIM_LOCKED: 2032-03-22 primary is locked, ask the scheduler to assign it" "a locked OPEN slot stays the scheduler's to assign (claim_open_slot, unchanged)"
+    expect_eq24 A1  "actor=s3/Acton summary=Trade applied: Acton takes Primary Mon Mar 1 (from Burchett, one-way)" "the receiver's apply writes its trade.apply audit row with his own id and roster name"
+  fi
+  # 24b. leftovers, by the probe's own identity: tagged (its users, its trades, its vacation) and window (the schedule_days rows and the
+  # trade.apply audit rows of its two windows) - together docs/SCHEMA-REVIEW.md's leftover count
+  LEFTOVER24_SQL="select ((select count(*) from auth.users where email like 'probe-lockedtrade-%@example.test') + (select count(*) from public.shift_trade_requests where detail like 'probe-lockedtrade%') + (select count(*) from public.time_off where note = 'probe-lockedtrade'))::int as tagged, ((select count(*) from public.schedule_days where day between '2032-03-01' and '2032-03-31' or day between '2020-08-01' and '2020-08-31') + (select count(*) from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2032-03-01' and '2032-03-31' or (detail ->> 'day') between '2020-08-01' and '2020-08-31')))::int as win"
+  r=$(q "$LEFTOVER24_SQL")
+  rflat24=$(echo "$r" | tr -d ' \n')
+  tagged24=$(echo "$rflat24" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  win24=$(echo "$rflat24" | grep -oE '"win":"?[0-9]+' | head -1 | tr -cd '0-9')
+  # how 24a ended: results = the sentinel (the probe wrote its fixtures); setup = a PROBE_SETUP raise and no PROBE_RESULTS at all (its setup
+  # block stopped before its first schedule row); none = neither (a setup error or cut-off output - nobody can tell)
+  end24=none
+  if echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then end24=results
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then end24=setup; fi
+  if [ -z "$tagged24" ] || [ -z "$win24" ]; then
+    bad "locked trade probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  else
+    if [ "$tagged24" = "0" ] && [ "$win24" = "0" ]; then
+      ok "locked trade probe persisted nothing (leftover count 0: auth.users probe-lockedtrade-* / trades and the vacation tagged probe-lockedtrade / schedule_days and trade.apply audit rows of 2032-03 and 2020-08)"
+    fi
+    if [ "$tagged24" != "0" ]; then
+      bad "locked trade probe LEFT ROWS BEHIND (tagged=$tagged24 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.shift_trade_requests where detail like 'probe-lockedtrade%';"
+      echo "      delete from public.time_off where note = 'probe-lockedtrade';"
+      echo "      delete from auth.users where email like 'probe-lockedtrade-%@example.test';   -- user_profiles rows cascade"
+    fi
+    if [ "$win24" != "0" ]; then
+      if [ "$end24" = "results" ]; then
+        bad "locked trade probe LEFT ROWS BEHIND (window=$win24 - schedule_days / trade.apply audit rows of 2032-03 or 2020-08 after a run that wrote its fixtures): the batch did not run as one transaction. Review them before removing anything (a traded day and the audit row carry no tag of the probe's), then report:"
+      elif [ "$end24" = "setup" ]; then
+        echo "   24b: $win24 schedule_days / trade.apply audit row(s) of 2032-03 or 2020-08 - the probe stopped at a PROBE_SETUP raise before its first schedule row (24a), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
+      else
+        echo "   24b: $win24 schedule_days / trade.apply audit row(s) of 2032-03 or 2020-08 - the run reported neither PROBE_RESULTS nor PROBE_SETUP (24a), so whether the probe wrote them is unknown; review them before removing anything:"
+      fi
+      echo "      select * from public.schedule_days where day between '2032-03-01' and '2032-03-31' or day between '2020-08-01' and '2020-08-31';"
+      echo "      select * from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2032-03-01' and '2032-03-31' or (detail ->> 'day') between '2020-08-01' and '2020-08-31');"
+    fi
+  fi
+else
+  echo "   SKIP 24 (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

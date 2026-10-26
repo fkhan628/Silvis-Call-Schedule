@@ -1,13 +1,17 @@
 -- ============================================================================
--- Silvis Call Schedule - locked trade PROBE (2026-10-25, revision ab; sql/migrations/2026-10-25-locked-trade.sql, REPORT-FIRST, NOT APPLIED).
+-- Silvis Call Schedule - locked trade PROBE (2026-10-25, revision ab; sql/migrations/2026-10-25-locked-trade.sql, REPORT-FIRST; APPLIED 2026-10-26 03:50:31Z).
 -- Proves that apply_trade moves a LOCKED slot once the trade is accepted - whichever party applies it - that a signed-in account with
 -- no roster link can apply no trade, and that every other refusal still holds on a locked slot, on the LIVE database WITHOUT
 -- PERSISTING ANYTHING. Same mechanism as the other probes: ONE batch through the linked CLI (one implicit transaction, no
 -- BEGIN/COMMIT); every case records into probe_results; the LAST statement raises 'PROBE_RESULTS K=...;END', so everything - users,
 -- days, vacations, trades, audit rows - rolls back. A batch ending in RAISE persists nothing.
 --   supabase db query --linked --workdir <dir> -f <abs>/sql/probes/locked-trade-probe.sql
---   (graded by Faraz's apply-locked-trade.sh, kept in the private apply-scripts folder, value for value against the header lines below;
---   the record step adds scripts/verify-rls.sh section 24, which runs and grades it on every run)
+--   (graded by Faraz's apply-locked-trade.sh, kept in the private apply-scripts folder, and, since the record step, by scripts/verify-rls.sh
+--   section 24, value for value against the header lines below)
+-- As run: the migration was applied 2026-10-26 03:50:31Z (schema.sql revision ab); the probe read PROBE_SETUP (apply_trade still refuses a
+-- member on a locked slot) before it and all 18 cases below as listed after it, leftover count 0 (apply-locked-trade.sh steps 3 and 6). Since
+-- the record step verify-rls section 24 runs it on every run, grades each case against its line below and counts the leftovers it could
+-- leave; it FAILs a PROBE_SETUP (the lock refusal still there, revision y absent, a collision or the profile rows) or a missing sentinel.
 -- Run nothing else that writes trades or vacations at the same time: the probe takes the time_off SHARE lock (apply_trade) for the
 -- length of the batch - well under a second.
 -- Identity: users probe-lockedtrade-<uuid>@example.test; trades detail 'probe-lockedtrade <K>'; time_off note 'probe-lockedtrade';

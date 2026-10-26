@@ -175,7 +175,7 @@
 -- grants, EV001 / EV002 and the lock are unchanged. No table, column, policy, trigger, row or anon surface changes. Letter u stays
 -- taken by the weekend pair claim and z by the push follow-ups (prepared in parallel) - this revision's records follow z's; z was the
 -- last applied before it (2026-10-22 04:33:15Z; independent - either apply order).
--- Revision 2026-10-25 ab (locked trades, sql/migrations/2026-10-25-locked-trade.sql, report-first, NOT yet applied): Faraz 10/25 - "all
+-- Revision 2026-10-25 ab (locked trades, sql/migrations/2026-10-25-locked-trade.sql, applied 2026-10-26 03:50:31Z after the probe): Faraz 10/25 - "all
 -- locks, holidays included": apply_trade() moves a locked slot once the trade is accepted, whichever party applies - check (c), the
 -- lock refusal for every caller but the scheduler, is gone (a three-line comment in its place) - and its party test is NULL-safe (a
 -- signed-in caller with no roster link is refused TRADE_FORBIDDEN; a server session is unchanged); every other check, lock and write
@@ -1007,7 +1007,7 @@ create trigger trade_insert_guard_trg
 -- The trade.apply audit detail gains two booleans, offer (leg 1 wrote or merged a row) and return_offer (the return leg did). Every
 -- check, refusal, lock and write before the loop is revision m's, byte for byte; the loop adds save_offers' per-person advisory
 -- lock for every leg that reaches the period read (after the day rows, in person order - review 10/18).
--- 2026-10-25 ab (sql/migrations/2026-10-25-locked-trade.sql, report-first, NOT yet applied; Faraz 10/25, "all locks, holidays included"):
+-- 2026-10-25 ab (sql/migrations/2026-10-25-locked-trade.sql, report-first; applied 2026-10-26 03:50:31Z; Faraz 10/25, "all locks, holidays included"):
 -- check (c) above is gone - a locked slot moves like any other once the trade is accepted, whichever party applies (the receiver's
 -- Accept in the app, or Retry apply by either party), as it did when the scheduler applied it; the transfer still clears the moved
 -- role's lock flag and the other role's lock stays. The party test is NULL-safe: a signed-in caller with no roster link (the office,

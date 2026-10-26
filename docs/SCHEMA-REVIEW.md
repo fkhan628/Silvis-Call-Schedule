@@ -5074,10 +5074,13 @@ record step: verify-rls section 23 (added by this step) grades the probe on the 
 
 ## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab): apply_trade re-created (Faraz 10/25; `sql/migrations/2026-10-25-locked-trade.sql`)
 
-**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-locked-trade.sh`.**
-Revision ab (u stays reserved for the weekend pair claim; aa was the last letter applied, 2026-10-22 04:50:53Z). Nothing in the repo
-applies it: the apply script lives outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills the
-observed line at the end of this section.
+**Status: APPLIED 2026-10-26 03:50:31Z by Faraz** (`apply-locked-trade.sh`, log `apply-locked-trade-20261026T034928Z.log`, APPLIED AND
+VERIFIED; one `--dry-run` at 20261026T034722Z before it applied nothing); recorded by this section's record step (2026-10-26: the migration's
+trailer line, verify-rls section 24 added, sections 5 D and 21 A4 moved). The observed paragraph at the end of this section is copied from
+the log.
+*As prepared:* Revision ab (u stays reserved for the weekend pair claim; aa was the last letter applied, 2026-10-22 04:50:53Z). Nothing in
+the repo applies it: the apply script lives outside the repo (Faraz 10/1), Faraz runs it and pastes the log back, and the record step fills
+the observed line at the end of this section.
 
 **Why.** A partner told Faraz on 10/25 that changing the calendar was too hard "with the locks and the multiple verifications". The
 path he hit: the client never stops a trade on a locked slot (its trade checks read `rules.eligibility` with `ignoreLocks: true`), so
@@ -5130,8 +5133,8 @@ after) - verify-rls section 5 - and `sql/probes/trade-offer-probe.sql` case A4 (
 so the scheduler's apply after it finds the trade applied: `m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false` before,
 `ERR P0001 TRADE_NOT_ACCEPTED: status is applied` after) - verify-rls section 21. No existing probe applies as an account with no roster
 link (trade-offer's unlinked admin is the scheduler's role). Between the apply and the record step a plain `bash scripts/verify-rls.sh`
-reads exactly those two FAILs. **The record step** (test/schema.test.js keys its pins to this section's Status line - PREPARED: the old
-gradings and no section 24; APPLIED: the new ones): verify-rls section 5's D graded `status=applied locked=false` and the trade-guards
+reads exactly those two FAILs. **The record step** (done 2026-10-26; test/schema.test.js keys its pins to this section's Status line -
+PREPARED: the old gradings and no section 24; APPLIED: the new ones): verify-rls section 5's D graded `status=applied locked=false` and the trade-guards
 probe's D header line (and its E2 note - D is the first case whose block commits now); trade-offer A4 rewritten to read the member's
 own apply of the locked slot (skip the scheduler's apply when `m=applied`; it then observes the offer row and the stamps on the locked
 path, e.g. `m=applied st=applied by=s2/s3 o1=primary/s3/app a=true/false`) - its header line, section 21's grading and revision y's
@@ -5167,4 +5170,51 @@ migration after APPLY typed in capitals; 5 the gate after; 6 the probe AFTER, ca
 (revision y, idempotent - valid while its two trade guards are the live bodies, which the pre-check's bodies row shows; it also
 restores y's party test, under which an account with no roster link can apply an accepted trade on an unlocked slot again).
 
-**Observed** (the record step fills this in from the log Faraz pastes back): not applied yet.
+**Leftover count** (what the probe can leave: its users - their profiles cascade - its trades, its vacation, and the schedule rows and
+`trade.apply` audit rows of its two windows, which its collision guard proves empty first; verify-rls section 24 reads the first three terms
+as `tagged` and the last two as `win`):
+
+```sql
+select ((select count(*) from auth.users where email like 'probe-lockedtrade-%@example.test') + (select count(*) from public.shift_trade_requests where detail like 'probe-lockedtrade%') + (select count(*) from public.time_off where note = 'probe-lockedtrade') + (select count(*) from public.schedule_days where day between '2032-03-01' and '2032-03-31' or day between '2020-08-01' and '2020-08-31') + (select count(*) from public.audit_log where action = 'trade.apply' and ((detail ->> 'day') between '2032-03-01' and '2032-03-31' or (detail ->> 'day') between '2020-08-01' and '2020-08-31')))::int as leftover
+```
+
+**Observed** (apply, 2026-10-26): `apply-locked-trade.sh` (Faraz, from the main clone at `2b7a293` - the pins from `2b7a293`, all seven
+matched; the CLI 2.120.0 in agent mode, `AI_AGENT=1`; log `apply-locked-trade-20261026T034928Z.log`, outside the repo, result **APPLIED AND
+VERIFIED**). Step 1: the known-good read `ok`, the pre-check gate `apply_trade=yes lock_check=yes null_safe=no offer_loop=yes`, bodies
+`apply_trade=b5cca6f0f35b07923e6facb940d1f180 insert_guard=303f173367b9c386dc0786bc4892657a update_guard=304e0fddfcbda63c48340314003d441b
+claim=a38a708a166c28c7f3840387a366cb12` (the claim body's md5, derived offline, read live the same), sigs `apply_trade=definer claim=definer`,
+grants `anon=f authenticated=t public=f`, facts `locked_from_today=55 accepted=0 accepted_locked=0 pending=0 pending_locked=0` (no REVIEW
+line - no accepted trade sat on a locked leg). Step 2: trade-guards 34 cases (D the old refusal), claim-open-slot 15, trade-offer 32 (A4
+`m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false`). Step 3: the probe BEFORE, `PROBE_SETUP` (still refuses a member on a locked
+slot). Step 4: APPLY typed; applied 2026-10-26T03:50:31Z, exit 0. Step 5: the gate `apply_trade=yes lock_check=no null_safe=yes
+offer_loop=yes`, bodies `apply_trade=4d4bd67a722ff3e29b52b99a9a1cf1ef` and the other three unchanged, sigs and grants as before, the facts the
+same. Step 6: the probe AFTER, 18 cases, each as its header states:
+
+```text
+A1=actor=s3/Acton summary=Trade applied: Acton takes Primary Mon Mar 1 (from Burchett, one-way)
+C1=ERR CL007 CLAIM_LOCKED: 2032-03-22 primary is locked, ask the scheduler to assign it
+L1=st=applied p=s3 pl=f src=trade
+L2=st=applied 1=s3/f 2=s2/f
+L3=st=applied b=s3 bl=f src=trade
+L4=st=applied p=s3/f b=s4/t
+L5=st=applied 1=s3/f 2=s2/f
+L6=st=applied p=s3 pl=f src=trade
+L7=st=applied p=s3/f src=trade
+N1=ERR TRADE_INELIGIBLE: Acton is on vacation on 2032-03-15
+N2=ERR TRADE_INELIGIBLE: Acton already holds backup on 2032-03-16
+N3=TRADE_PAST 2020-08-11
+N4=ERR TRADE_NOT_ACCEPTED: status is pending
+N5=ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade
+N6=ERR TRADE_STALE: 2032-03-19 primary is no longer held by s2
+N7=ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade
+N8=ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade
+P1=definer=t lock_check=f null_safe=t loop=t anon=f auth=t
+```
+
+then the probe's leftover count: 0 (persisted nothing). Step 7: trade-guards D `status=applied locked=false` (before: the refusal), trade-offer
+A4 `ERR P0001 TRADE_NOT_ACCEPTED: status is applied` (before: `m=locked ...`), every other case the same as before - 33, 15 and 31 cases. The
+apply script runs no `scripts/verify-rls.sh` (no RESULT line). One earlier run applied nothing: the `--dry-run` at 20261026T034722Z (`main`,
+`2b7a293`) read steps 0-3 as above and stopped there by design - `DRY RUN - nothing applied`, `APPLY confirmation: not reached`,
+`migration: not run`. Not re-run against the live project after the record step: verify-rls section 24 (added by this step) grades the probe
+on the next plain `bash scripts/verify-rls.sh` - expected **657 passed, 0 failed** (637 + section 24's 20: its 18 cases, the count of 18 and
+the leftover count; sections 5 D and 21 A4 keep their counts and read the post-ab values).

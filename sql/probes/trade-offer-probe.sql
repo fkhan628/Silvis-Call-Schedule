@@ -10,6 +10,8 @@
 -- is absent) before it and all 32 cases below as listed after it, leftover count 0 (apply-trade-offer.sh steps 3 and 6). Since the record step
 -- verify-rls section 21 runs it on every run, grades each case against its line below and counts the leftovers it could leave; it FAILs
 -- a PROBE_SETUP (absent, partly applied, a collision or the profile rows) or a missing sentinel - there was never a not-applied grading.
+-- Since revision ab's record step (2026-10-26) case A4 reads the receiver's own apply of the locked slot (m=applied - his offer row on the
+-- locked path); the 2026-10-20 run read it before revision ab (m=locked: the scheduler applied), as docs/SCHEMA-REVIEW.md quotes.
 -- Run nothing else that writes trades, offers or vacations at the same time: the probe takes the time_off SHARE lock (apply_trade)
 -- and the per-person offers advisory locks (each consenting receiver's, in person order) for the length of the batch - well under a second.
 -- Identity: users probe-tradeoffer-<uuid>@example.test; trades detail 'probe-tradeoffer <K>'; periods label 'probe-tradeoffer P?';
@@ -41,7 +43,7 @@
 --   A1  give, u3 accepts and applies in the published PA -> st=applied by=s2/s3 o1=primary/s3/app a=true/false flag=off
 --   A2  two-way trade, u3 accepts, u2 applies (the backup return leg takes s2's offers lock too) -> st=applied by=s2/s3 o1=primary/s3/app o2=backup/s2/app a=true/true lock=f/t
 --   A3  u1 inserts a one-way trade, u3 accepts, u1 applies -> st=applied by=scheduler/s3 o1=primary/s3/app a=true/false
---   A4  locked slot: u3 accepts, u3's apply is refused, u1 applies -> m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false
+--   A4  locked slot: u3 accepts and u3's own apply moves it (revision ab, applied 2026-10-26; before it the apply was refused and u1 applied - m=locked) -> m=applied st=applied by=s2/s3 o1=primary/s3/app a=true/false
 --   A5  u1 accepts for s3, u3 applies (Retry apply) -> st=applied by=s2/scheduler o1=none a=false/false
 --   A6  ua (admin, unlinked) accepts for s3 and applies -> st=applied by=s2/scheduler o1=none a=false/false
 --   A7  u3 accepts, ua applies -> st=applied by=s2/s3 o1=primary/s3/app a=true/false upd=scheduler
@@ -373,7 +375,8 @@ do $$ declare tid uuid; res text; m text; begin
       m := 'applied';
     exception when others then m := case when sqlerrm like '%is locked%' then 'locked' else 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',') end;
     end;
-    perform pg_temp.apply('u1', tid);
+    -- since revision ab the receiver's own apply moves the locked slot; the scheduler applies only when it was refused (before revision ab)
+    if m <> 'applied' then perform pg_temp.apply('u1', tid); end if;
     res := 'm=' || m || ' ' || pg_temp.rd(tid, 's3', '2031-05-14', null, null);
   exception when others then res := 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',');
   end;

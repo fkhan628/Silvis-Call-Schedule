@@ -558,8 +558,8 @@ scheduler's only:
   office*.
 - **After Accept the units are kept as locks:** Generate never touches them (locks are respected); a trade or
   a give moves the whole unit (the trade card reads the unit from the holiday units, not from the row's source), and a
-  locked slot moves only when the scheduler applies the trade (the database's rule for every lock; ⟶ **10/25 (Faraz, revision ab -
-  prepared, not applied yet):** "all locks, holidays included" - once revision ab is applied, a locked slot moves like any other when
+  locked slot moved only when the scheduler applied the trade (the database's rule for every lock; ⟶ **10/25 (Faraz, revision ab -
+  applied 2026-10-26 03:50 UTC):** "all locks, holidays included" - since revision ab a locked slot moves like any other when
   either party applies an accepted trade, the moved role's lock clears and the other role's stays, a locked OPEN slot stays the
   scheduler's to assign, and a non-scheduler account with no roster link applies no trade). A hand edit or a
   trade turns the day's source into `manual` / `trade`. **The rules engine reads them as locks, not as the holder's

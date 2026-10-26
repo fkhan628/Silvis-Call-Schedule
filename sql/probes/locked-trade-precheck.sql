@@ -1,7 +1,14 @@
 -- ============================================================================
--- Silvis Call Schedule - locked trade PRE-CHECK (2026-10-25, revision ab; sql/migrations/2026-10-25-locked-trade.sql, REPORT-FIRST, NOT
--- APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right after it (Faraz's
+-- Silvis Call Schedule - locked trade PRE-CHECK (2026-10-25, revision ab; sql/migrations/2026-10-25-locked-trade.sql, REPORT-FIRST;
+-- APPLIED 2026-10-26 03:50:31Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right after it (Faraz's
 -- apply script, kept outside the repo, does both): rows 1-4 are the gate, row 5 is facts for the record (never a stop).
+-- As run (2026-10-26): before the apply the gate read apply_trade=yes lock_check=yes null_safe=no offer_loop=yes and right after it
+-- apply_trade=yes lock_check=no null_safe=yes offer_loop=yes; row 2 apply_trade=b5cca6f0f35b07923e6facb940d1f180 before (revision y) and
+-- apply_trade=4d4bd67a722ff3e29b52b99a9a1cf1ef after (revision ab), insert_guard=303f173367b9c386dc0786bc4892657a
+-- update_guard=304e0fddfcbda63c48340314003d441b claim=a38a708a166c28c7f3840387a366cb12 both times; rows 3-4 the same both times; row 5
+-- locked_from_today=55 accepted=0 accepted_locked=0 pending=0 pending_locked=0 both times (no accepted trade on a locked leg - no REVIEW
+-- line) - docs/SCHEMA-REVIEW.md "2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)" quotes them. This
+-- header was kept byte for byte as reviewed until the apply (the apply script pinned its sha256); the record step turned it APPLIED.
 --
 --   supabase db query --linked --workdir <dir> -o json -f <abs>/sql/probes/locked-trade-precheck.sql
 --
