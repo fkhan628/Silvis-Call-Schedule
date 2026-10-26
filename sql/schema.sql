@@ -176,12 +176,13 @@
 -- taken by the weekend pair claim and z by the push follow-ups (prepared in parallel) - this revision's records follow z's; z was the
 -- last applied before it (2026-10-22 04:33:15Z; independent - either apply order).
 -- Revision 2026-10-25 ab (locked trades, sql/migrations/2026-10-25-locked-trade.sql, report-first, NOT yet applied): Faraz 10/25 - "all
--- locks, holidays included": apply_trade() moves a locked slot once the two surgeons agreed, whichever party applies - check (c), the
--- lock refusal for every caller but the scheduler, is gone (a three-line comment in its place); every other check, lock and write is
--- revision y's byte for byte (the moved role's lock flag cleared, source 'trade' - Generate keeps such a row fixed; the other role's
--- lock on the day stays). No table, column, policy, trigger, grant, other function or anon surface changes; claim_open_slot keeps CL007
--- (a locked OPEN slot stays the scheduler's to assign). Letter u stays taken by the weekend pair claim; aa was the last applied before
--- it (2026-10-22 04:50:53Z; this body is y's, applied 2026-10-20 00:41:25Z, minus check (c)).
+-- locks, holidays included": apply_trade() moves a locked slot once the trade is accepted, whichever party applies - check (c), the
+-- lock refusal for every caller but the scheduler, is gone (a three-line comment in its place) - and its party test is NULL-safe (a
+-- signed-in caller with no roster link is refused TRADE_FORBIDDEN; a server session is unchanged); every other check, lock and write
+-- is revision y's byte for byte (the moved role's lock flag cleared, source 'trade' - Generate keeps such a row fixed; the other
+-- role's lock on the day stays). No table, column, policy, trigger, grant, other function or anon surface changes; claim_open_slot
+-- keeps CL007 (a locked OPEN slot stays the scheduler's to assign). Letter u stays taken by the weekend pair claim; aa was the last
+-- applied before it (2026-10-22 04:50:53Z; this body is y's, applied 2026-10-20 00:41:25Z, but for check (c) and the party test).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -810,8 +811,8 @@ alter table public.shift_trade_requests drop constraint if exists shift_trade_re
 alter table public.shift_trade_requests add constraint shift_trade_requests_give_one_way check (kind = 'trade' or (return_day is null and return_role is null));
 comment on column public.shift_trade_requests.kind is '''trade'' (day for day; the default) | ''give'' (one-way, no return leg - Prompt 19, Faraz 2026-09-24)';
 -- 2026-10-18 (revision y, sql/migrations/2026-10-18-trade-offer.sql): the consent stamps - who agreed, recorded on the row, so apply_trade
--- writes a receiver's offer only for a receiver who agreed himself, whoever applies the trade (a locked slot moves only when the scheduler
--- applies). Written ONLY by the triggers (trade_insert_guard / trade_update_guard overwrite whatever a client sends); null on every row
+-- writes a receiver's offer only for a receiver who agreed himself, whoever applies the trade (a locked slot moved only when the scheduler
+-- applied, until revision ab). Written ONLY by the triggers (trade_insert_guard / trade_update_guard overwrite whatever a client sends); null on every row
 -- from before revision y: such a trade accepted before it writes no offer, and one proposed before it and accepted after it writes the
 -- leg-1 receiver's only (his acceptance is stamped; the proposer's agreement never was). Values: a roster id, or 'scheduler' (the
 -- scheduler, an admin or a server session). Re-applying revision y after a rollback is its own report-first step: null the stamps of
@@ -1007,9 +1008,11 @@ create trigger trade_insert_guard_trg
 -- check, refusal, lock and write before the loop is revision m's, byte for byte; the loop adds save_offers' per-person advisory
 -- lock for every leg that reaches the period read (after the day rows, in person order - review 10/18).
 -- 2026-10-25 ab (sql/migrations/2026-10-25-locked-trade.sql, report-first, NOT yet applied; Faraz 10/25, "all locks, holidays included"):
--- check (c) above is gone - a locked slot moves like any other once the two surgeons agreed, whichever party applies (the receiver's
+-- check (c) above is gone - a locked slot moves like any other once the trade is accepted, whichever party applies (the receiver's
 -- Accept in the app, or Retry apply by either party), as it did when the scheduler applied it; the transfer still clears the moved
--- role's lock flag and the other role's lock stays. Every other check, refusal, lock and write is revision y's, byte for byte.
+-- role's lock flag and the other role's lock stays. The party test is NULL-safe: a signed-in caller with no roster link (the office,
+-- a viewer, a follower, an APP) is refused TRADE_FORBIDDEN - the old test was NULL for him and let him apply any accepted trade; a
+-- server session (no signed-in user) is unchanged. Every other check, refusal, lock and write is revision y's, byte for byte.
 create or replace function public.apply_trade(p_trade_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -1037,7 +1040,9 @@ declare
 begin
   select * into t from public.shift_trade_requests where id = p_trade_id for update;
   if not found then raise exception 'TRADE_NOT_FOUND' using errcode = 'P0001'; end if;
-  if not (sched or me = t.from_surgeon_id or me = t.to_surgeon_id) then
+  -- (2026-10-25, revision ab) a party by his roster link: a signed-in caller with none (the office, a viewer, a follower, an APP) is
+  -- refused too - `me = ...` is NULL for him, which the old test let through; a server session (no signed-in user) is unchanged
+  if not sched and auth.uid() is not null and (me is null or me not in (t.from_surgeon_id, t.to_surgeon_id)) then
     raise exception 'TRADE_FORBIDDEN: only a party or the scheduler may apply this trade' using errcode = 'P0001';
   end if;
   if t.status <> 'accepted' then
@@ -1094,8 +1099,8 @@ begin
       raise exception 'TRADE_INELIGIBLE: % starts a vacation on % (primary the day before is blocked)', fr_name, t.return_day + 1 using errcode = 'P0001';
     end if;
   end if;
-  -- (c) (2026-10-25, revision ab - Faraz: all locks, holidays included) a locked slot moves like any other once the two surgeons
-  -- agreed, whichever party applies: no lock refusal for any caller. The transfer below clears the moved role's lock flag (the
+  -- (c) (2026-10-25, revision ab - Faraz: all locks, holidays included) a locked slot moves like any other once the trade is
+  -- accepted, whichever party applies: no lock refusal for any caller. The transfer below clears the moved role's lock flag (the
   -- day's source becomes 'trade', which Generate keeps fixed); the other role's lock on that day stays as it was.
   -- (d) the receiver must not already hold the other role that day
   if (t.role = 'primary' and d1.backup_id = t.to_surgeon_id) or (t.role = 'backup' and d1.primary_id = t.to_surgeon_id) then

@@ -560,8 +560,8 @@ scheduler's only:
   a give moves the whole unit (the trade card reads the unit from the holiday units, not from the row's source), and a
   locked slot moves only when the scheduler applies the trade (the database's rule for every lock; ⟶ **10/25 (Faraz, revision ab -
   prepared, not applied yet):** "all locks, holidays included" - once revision ab is applied, a locked slot moves like any other when
-  either party applies a trade both surgeons agreed to, the moved role's lock clears and the other role's stays, and a locked OPEN slot
-  stays the scheduler's to assign). A hand edit or a
+  either party applies an accepted trade, the moved role's lock clears and the other role's stays, a locked OPEN slot stays the
+  scheduler's to assign, and an account with no roster link applies no trade). A hand edit or a
   trade turns the day's source into `manual` / `trade`. **The rules engine reads them as locks, not as the holder's
   availability** (rule 1 is the planner's alone): a slot the usual rules would refuse is listed by Generate as a **lock
   violation** — kept as a fact, never changed — and the day editor shows it as a locked holder who breaks a rule. On the

@@ -217,12 +217,19 @@ const TODAY_C = /today_c\s+date\s+:= \(now\(\) at time zone 'America\/Chicago'\)
 // applies / claims do not serialise). The definer function runs as the table owner, so the privilege check passes.
 const LOCK_TABLE = "lock table public.time_off in share mode;";
 // revision ab (2026-10-25, sql/migrations/2026-10-25-locked-trade.sql): check (c) is replaced by this comment - a locked slot moves once the
-// two surgeons agreed, whichever party applies. `lockCheck` = false for schema.sql and that migration; every earlier file keeps (c) (frozen
+// trade is accepted, whichever party applies. `lockCheck` = false for schema.sql and that migration; every earlier file keeps (c) (frozen
 // as applied).
 const AB_C_COMMENT = [
-  "  -- (c) (2026-10-25, revision ab - Faraz: all locks, holidays included) a locked slot moves like any other once the two surgeons",
-  "  -- agreed, whichever party applies: no lock refusal for any caller. The transfer below clears the moved role's lock flag (the",
+  "  -- (c) (2026-10-25, revision ab - Faraz: all locks, holidays included) a locked slot moves like any other once the trade is",
+  "  -- accepted, whichever party applies: no lock refusal for any caller. The transfer below clears the moved role's lock flag (the",
   "  -- day's source becomes 'trade', which Generate keeps fixed); the other role's lock on that day stays as it was.",
+].join("\n") + "\n";
+// ... and its party test is NULL-safe (review 10/25: the old `if not (sched or me = ... or me = ...)` is NULL - and passes - for a signed-in
+// account with no roster link; a server session, with no signed-in user, passes as before)
+const AB_F_NEW = [
+  "  -- (2026-10-25, revision ab) a party by his roster link: a signed-in caller with none (the office, a viewer, a follower, an APP) is",
+  "  -- refused too - `me = ...` is NULL for him, which the old test let through; a server session (no signed-in user) is unchanged",
+  "  if not sched and auth.uid() is not null and (me is null or me not in (t.from_surgeon_id, t.to_surgeon_id)) then",
 ].join("\n") + "\n";
 function checkApplyTrade(n, s, past, locks, lockCheck) {
   const fn = functionText(s, "apply_trade");
@@ -260,6 +267,7 @@ function checkApplyTrade(n, s, past, locks, lockCheck) {
   if (!withLock) {
     ok(!/is locked/.test(fn) && !/d[12]\.(primary|backup)_locked/.test(fn), n + ": apply_trade carries no lock refusal since revision ab (no `is locked`, no d1 / d2 lock flag test)");
     ok(fn.split(AB_C_COMMENT).length === 2, n + ": check (c)'s place carries revision ab's three-line comment, once");
+    ok(fn.split(AB_F_NEW).length === 2 && !fn.includes("if not (sched or me = t.from_surgeon_id or me = t.to_surgeon_id) then"), n + ": the party test is revision ab's NULL-safe one (a signed-in caller with no roster link is refused), once");
   }
   CHECKS.filter(([label]) => withLock || !/^\(c\)/.test(label)).forEach(([label, needle]) => {
     const at = fn.indexOf(needle);
@@ -1791,7 +1799,7 @@ const undoUpdate = (t) => t.replace("new.return_role is distinct from old.return
 });
 eq(undoUpdate(functionText(giveMig, "trade_update_guard")), functionText(pastMigration, "trade_update_guard"), "give-kind migration: with the kind line undone textually, trade_update_guard must equal the 9/23 applied body byte for byte (the status transitions untouched);");
 ok(functionText(auditMig, "apply_trade") !== null && !/\bkind\b/.test(functionText(auditMig, "apply_trade")), "apply_trade(): the 5b file's body (revision m) never names kind - Prompt 19 does not redefine it (revision y does, 2026-10-18 - pinned in its own step)");
-ok(/if not \(sched or me = t\.from_surgeon_id or me = t\.to_surgeon_id\) then/.test(functionText(schema, "apply_trade")), "apply_trade's caller check admits the RECEIVER (me = t.to_surgeon_id) - the reason Prompt 19 leaves it untouched");
+ok(/if not \(sched or me = t\.from_surgeon_id or me = t\.to_surgeon_id\) then/.test(functionText(auditMig, "apply_trade")) && functionText(schema, "apply_trade").includes("(me is null or me not in (t.from_surgeon_id, t.to_surgeon_id))"), "apply_trade's caller check admits the RECEIVER (me = t.to_surgeon_id in revision m; me not in (from, to) in schema.sql since revision ab, NULL-safe) - the reason Prompt 19 leaves it untouched");
 
 step("Prompt 19: trade probe GIVE_SETUP and O..U3 (after N, before the report); A / G / H / N carry a return leg; verify-rls.sh grades every case and 6a posts a return leg");
 const GIVE_CASES = {
@@ -5725,7 +5733,7 @@ step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (APPLIED 2026-10-19
   // widened 10/21: then revision aa's (the East reset backstop, prepared after z) - y's, z's, aa's
   {
     // widened 10/25: then revision ab's (locked trades, prepared after aa's record)
-    const XV_FOLLOWERS = ["## 2026-10-18 - apply_trade writes the receiver's offer (revision y)", "## 2026-10-20 - phone push follow-ups (revision z)", "## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)", "## 2026-10-25 - apply_trade moves a locked slot once the two surgeons agreed (revision ab)"];
+    const XV_FOLLOWERS = ["## 2026-10-18 - apply_trade writes the receiver's offer (revision y)", "## 2026-10-20 - phone push follow-ups (revision z)", "## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)", "## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)"];
     const after = end < 0 ? [] : review.slice(end + 1).split("\n").filter((l) => l.startsWith("## "));
     ok(at > review.indexOf("## 2026-10-03 - phone push:") && after.length <= XV_FOLLOWERS.length && after.every((l, i) => l.startsWith(XV_FOLLOWERS[i])), "the section is the last one after the Prompt 30 record (revision y's, 10/18, then revision z's, 10/20, then revision aa's, 10/21, then revision ab's, 10/25, alone may follow it): " + after.map((l) => l.slice(0, 60)).join(" | "));
   }
@@ -6361,7 +6369,7 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
   // (the East reset backstop, prepared after z) - z's, then aa's, and nothing else; widened 10/25: then revision ab's (locked trades)
   const yNext = end < 0 ? -1 : review.indexOf("\n## ", end + 1);
   const yNext2 = yNext < 0 ? -1 : review.indexOf("\n## ", yNext + 1);
-  ok(at > review.indexOf("## 2026-10-14 - East vacations:") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-20 - phone push follow-ups (revision z)") && (yNext < 0 || (review.slice(yNext + 1).startsWith("## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)") && (yNext2 < 0 || (review.slice(yNext2 + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the two surgeons agreed (revision ab)") && review.indexOf("\n## ", yNext2 + 1) < 0)))))), "the revision y section is the last one, after Part A's (revision z's, 10/20, then revision aa's, 10/21, then revision ab's, 10/25, alone may follow it)");
+  ok(at > review.indexOf("## 2026-10-14 - East vacations:") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-20 - phone push follow-ups (revision z)") && (yNext < 0 || (review.slice(yNext + 1).startsWith("## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)") && (yNext2 < 0 || (review.slice(yNext2 + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)") && review.indexOf("\n## ", yNext2 + 1) < 0)))))), "the revision y section is the last one, after Part A's (revision z's, 10/20, then revision aa's, 10/21, then revision ab's, 10/25, alone may follow it)");
   ok(yr.includes("x - Part A - went first (applied 2026-10-19 22:53:18Z)") && !/x - Part A - is prepared and goes first/.test(yr), "revision y's sentence on the order reads as run: x - Part A - went first (applied 2026-10-19 22:53:18Z)");
   // pin moved deliberately (revision y's record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
   ok(/^\*\*Status: APPLIED 2026-10-20 00:41:25Z\*\* \(Faraz - `apply-trade-offer\.sh`, which exports `AI_AGENT`[^)]*; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(yr) && !/^\*\*Status: PREPARED/m.test(yr), "the status line reads APPLIED 2026-10-20 00:41:25Z (Faraz - apply-trade-offer.sh, which exports AI_AGENT ...; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
@@ -7047,7 +7055,7 @@ step("revision z: docs - SCHEMA-REVIEW.md's revision z section (followed only by
   // widened 10/21: the section ends where revision aa's (prepared after z) begins - its 15 case rows are not z's
   const zr = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
   const zrFlat = zr.replace(/\s+/g, " ");
-  ok(at > review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)") && (review.indexOf("\n## ", end + 1) < 0 || (review.slice(review.indexOf("\n## ", end + 1) + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the two surgeons agreed (revision ab)") && review.indexOf("\n## ", review.indexOf("\n## ", end + 1) + 1) < 0)))), "the revision z section is the last one, after revision y's (revision aa's, 10/21, then revision ab's, 10/25, alone may follow it)");
+  ok(at > review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)") && (review.indexOf("\n## ", end + 1) < 0 || (review.slice(review.indexOf("\n## ", end + 1) + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)") && review.indexOf("\n## ", review.indexOf("\n## ", end + 1) + 1) < 0)))), "the revision z section is the last one, after revision y's (revision aa's, 10/21, then revision ab's, 10/25, alone may follow it)");
   // pin moved deliberately 10/22 (revision z's record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
   ok(/^\*\*Status: APPLIED 2026-10-22 04:33:15Z\*\* \(Faraz - `apply-push-followups\.sh`, its CLI in agent mode \(`AI_AGENT=1`\), from the main clone at `cc4cecc`; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(zr) && !/^\*\*Status: PREPARED/m.test(zr), "the status line reads APPLIED 2026-10-22 04:33:15Z (Faraz - apply-push-followups.sh, its CLI in agent mode, from the main clone at cc4cecc; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
   // review 10/22 (the order as run): D16 ordered the apply, then the client - the client shipped first (2026.10.20b) and fell back until the
@@ -7472,7 +7480,7 @@ step("revision aa: docs - SCHEMA-REVIEW.md's section (APPLIED 2026-10-22 04:50:5
   // the newest section: revision z's record (the push follow-ups, prepared in parallel - aa's records follow z's) goes before it (pin
   // moved 10/21, the rebase onto z: the x / y / z "may follow" pins above name aa's); this pin moves only if a section lands after this one
   // widened 10/25: revision ab's section (locked trades, prepared after aa's record) alone may follow it
-  ok(at > review.indexOf("## 2026-10-20 - phone push follow-ups (revision z)") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the two surgeons agreed (revision ab)") && review.indexOf("\n## ", end + 1) < 0)), "the revision aa section is the last one, after revision z's (revision ab's, 10/25, alone may follow it)");
+  ok(at > review.indexOf("## 2026-10-20 - phone push follow-ups (revision z)") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)") && review.indexOf("\n## ", end + 1) < 0)), "the revision aa section is the last one, after revision z's (revision ab's, 10/25, alone may follow it)");
   // pin moved deliberately 10/22 (the record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
   ok(/^\*\*Status: APPLIED 2026-10-22 04:50:53Z\*\* \(Faraz - `apply-east-reset-backstop\.sh`, its CLI in agent mode \(`AI_AGENT=1`\), from the main clone at `cc4cecc`; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(ar) && !/^\*\*Status: PREPARED/m.test(ar), "the status line reads APPLIED 2026-10-22 04:50:53Z (Faraz - apply-east-reset-backstop.sh, its CLI in agent mode, from the main clone at cc4cecc; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
   ok(af.includes("Faraz ran it and pasted the log back, and the record step filled the observed lines at the end of this section and added verify-rls section 23. As run, revision z's apply went first (2026-10-22 04:33:15Z) and this one followed about 18 minutes later; z's record step (`32e9f20`) merged before this one.") && !/the record step fills the observed line/.test(ar), "the status paragraph reads as run: the log pasted back, the observed lines filled, section 23 added; z's apply first, its record step merged first");
@@ -7827,20 +7835,24 @@ step("revision aa: no apply script in the repo (Faraz 10/1: apply scripts live o
 }
 console.log("- revision aa (2026-10-21): the East reset backstop - the migration (x's body plus three insertions), its mirror, the probe (15 cases), the pre-check, the x probe still valid, the docs (APPLIED 2026-10-22 04:50:53Z), the trailer and verify-rls.sh section 23");
 
-/* ---------------------------------------------- revision ab (2026-10-25): apply_trade moves a locked slot once the two surgeons agreed */
+/* ---------------------------------------------- revision ab (2026-10-25): apply_trade moves a locked slot once the trade is accepted */
 // Faraz 10/25 (a partner found trading too hard "with the locks and the multiple verifications"): "build the locked-trade fix (all locks,
 // holidays included) on a branch with the usual review and gate, and prepare the apply script for me to run once".
 // sql/migrations/2026-10-25-locked-trade.sql (report-first; NOT applied - Faraz runs apply-locked-trade.sh, kept outside the repo):
-// apply_trade is revision y's body with check (c) - the lock refusal for every caller but the scheduler - replaced by a comment. Pinned
-// here: the file's shape and its mirror; the body = y's with the comment put back to check (c), byte for byte (every other check, lock
-// and write untouched); no lock flag read; the two bodies' md5 (the gate the apply script reads); the probe's and the pre-check's
-// shapes; the docs' prepared words; no apply script in the repo; and scripts/verify-rls.sh not naming the probe yet - the record step
-// adds section 24 and moves section 5's D and section 21's A4, which grade the old refusal.
+// apply_trade is revision y's body but two places - check (c), the lock refusal for every caller but the scheduler, replaced by a
+// comment; the party test made NULL-safe (review 10/25: `if not (sched or me = ... or me = ...)` is NULL - and passes - for a signed-in
+// account with no roster link). Pinned here: the file's shape and its mirror; the body = y's with both places put back, byte for byte
+// (every other check, lock and write untouched); no lock flag read; the two bodies' md5 (the gate the apply script reads); the probe -
+// its 18 AFTER strings exactly, each case recorded once - and the pre-check (read-only, facts only); the docs' prepared words; no apply
+// script in the repo; and verify-rls.sh keyed to the section's Status line: while PREPARED, sections 5 (D) and 21 (A4) grade the old
+// refusal and there is no section 24; once APPLIED (the record step), D reads the applied value, the trade-offer probe's A4 no longer
+// reads m=locked, and section 24 runs the probe.
 const AB_FILE = "2026-10-25-locked-trade.sql";
 const AB_MIGRATION = path.join(ROOT, "sql", "migrations", AB_FILE);
 const AB_PROBE = path.join(ROOT, "sql", "probes", "locked-trade-probe.sql");
 const AB_PRECHECK = path.join(ROOT, "sql", "probes", "locked-trade-precheck.sql");
-// check (c) exactly as revision y carries it (the text revision ab removes)
+const AB_HEADING = "## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab): apply_trade re-created (Faraz 10/25; `sql/migrations/" + AB_FILE + "`)";
+// check (c) and the party test exactly as revision y carries them (the text revision ab replaces)
 const AB_C_OLD = [
   "  -- (c) locked slots move only when the scheduler applies (the transfer below clears the lock)",
   "  if not sched then",
@@ -7852,11 +7864,34 @@ const AB_C_OLD = [
   "    end if;",
   "  end if;",
 ].join("\n") + "\n";
+const AB_F_OLD = "  if not (sched or me = t.from_surgeon_id or me = t.to_surgeon_id) then\n";
 // the md5 of apply_trade's prosrc (the text between its $$ quotes), derived offline from the files (PGlite's pre-check read the same, 10/25):
 // revision y's is the live body - the md5 revision y's apply read right after it (2026-10-20); revision ab's is the gate after its apply
 const AB_Y_MD5 = "b5cca6f0f35b07923e6facb940d1f180";
-const AB_MD5 = "1b4bf4792b6a164f382683661edaecc2";
+const AB_MD5 = "4d4bd67a722ff3e29b52b99a9a1cf1ef";
 const abMd5 = (t) => { const s = t || "", a = s.indexOf("$$") + 2; return crypto.createHash("md5").update(s.slice(a, s.lastIndexOf("$$"))).digest("hex"); };
+// the probe's AFTER strings - the apply script grades the live run against the header lines, so a typo here would only surface after the
+// migration is live: the header must read exactly these (the PGlite proof of 10/25 read them)
+const AB_AFTER = {
+  P1: "definer=t lock_check=f null_safe=t loop=t anon=f auth=t",
+  L1: "st=applied p=s3 pl=f src=trade",
+  L2: "st=applied 1=s3/f 2=s2/f",
+  L3: "st=applied b=s3 bl=f src=trade",
+  L4: "st=applied p=s3/f b=s4/t",
+  L5: "st=applied 1=s3/f 2=s2/f",
+  L6: "st=applied p=s3 pl=f src=trade",
+  L7: "st=applied p=s3/f src=trade",
+  N1: "ERR TRADE_INELIGIBLE: Acton is on vacation on 2032-03-15",
+  N2: "ERR TRADE_INELIGIBLE: Acton already holds backup on 2032-03-16",
+  N3: "TRADE_PAST 2020-08-11",
+  N4: "ERR TRADE_NOT_ACCEPTED: status is pending",
+  N5: "ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade",
+  N6: "ERR TRADE_STALE: 2032-03-19 primary is no longer held by s2",
+  N7: "ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade",
+  N8: "ERR TRADE_FORBIDDEN: only a party or the scheduler may apply this trade",
+  C1: "ERR CL007 CLAIM_LOCKED: 2032-03-22 primary is locked, ask the scheduler to assign it",
+  A1: "actor=s3/Acton summary=Trade applied: Acton takes Primary Mon Mar 1 (from Burchett, one-way)",
+};
 
 step("revision ab: migration 2026-10-25-locked-trade.sql - LF / ASCII, apply_trade + its grants + the reload (nothing else), byte-identical in schema.sql; report-first, NOT applied");
 const abMig = fs.existsSync(AB_MIGRATION) ? read(AB_MIGRATION) : "";
@@ -7877,35 +7912,41 @@ ok(!/^-- supersedes:/m.test(abMig) && !/^-- PREPARED FOLLOW-UP/m.test(abMig), "n
 ok(functionText(schema, "apply_trade") === functionText(abMig, "apply_trade"), "apply_trade(): schema.sql mirrors revision ab (the newest migration touching it)");
 {
   const hdr = abMig.slice(0, abMig.indexOf("create or replace function public.apply_trade("));
-  const flat = hdr.replace(/\n-- ?/g, " ");
+  const flat = hdr.replace(/\n-- ?/g, " ").replace(/\s+/g, " ");
   ok(/REPORT-FIRST, NOT APPLIED/.test(hdr) && /Blast radius\./.test(hdr) && /Who it binds\./.test(hdr) && /Behaviour change\./.test(hdr) && flat.includes("ONE implicit transaction") && flat.includes("all locks, holidays included"), "the migration header says report-first / not applied, the behaviour change, who it binds, the blast radius, one transaction, and quotes Faraz's go");
+  ok(flat.includes("is NULL - and so passes - for a signed-in account with no roster link") && flat.includes("refused TRADE_FORBIDDEN") && flat.includes("a server session (no signed-in user: the SQL editor, the service role) passes as before"), "the header names the review's finding (the NULL party test) and its fix, and that a server session passes as before");
   ok(hdr.includes("\n--   bash <run folder>/apply-locked-trade.sh       (Faraz, one command; the apply script lives OUTSIDE the repo - Faraz 10/1)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/" + AB_FILE + "   (what it runs)\n"), "the migration header carries the two apply lines (Faraz's script, outside the repo; what it runs)");
-  ok(hdr.includes("\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/" + TRADE_OFFER_FILE + "   (revision y, idempotent: apply_trade with check (c); its two guards are the live bodies)\n"), "the migration header's rollback is revision y's file");
-  ok(flat.includes("sql/probes/trade-guards-probe.sql case D") && flat.includes("sql/probes/trade-offer-probe.sql case A4") && flat.includes("verify-rls section 24") && flat.includes("15 cases, each as its header lists"), "the header names the two probe cases that grade the old refusal, the record step's section 24 and the probe's 15 cases");
+  ok(hdr.includes("\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/" + TRADE_OFFER_FILE + "   (revision y, idempotent: apply_trade with check (c); its two guards are the live bodies)\n") && flat.includes("Valid while the two trade guards are still revision y's"), "the migration header's rollback is revision y's file, valid while the two trade guards are y's");
+  ok(flat.includes("sql/probes/trade-guards-probe.sql case D") && flat.includes("sql/probes/trade-offer-probe.sql case A4") && flat.includes("verify-rls section 24") && flat.includes("18 cases, each as its header lists"), "the header names the two probe cases that grade the old refusal, the record step's section 24 and the probe's 18 cases");
+  ok(flat.includes("Residuals (recorded, not fixed):") && flat.includes("cannot be withdrawn in the app") && flat.includes("derived-lock-held"), "the header records the residuals (units applied row by row, no withdrawal of an accepted trade) and the East-derived locks the client's rules keep");
   ok(!/bash scripts\/apply-|[A-Za-z]:[\\/]/.test(abMig), "no in-repo apply script path and no machine path in the migration");
 }
 
-step("revision ab: apply_trade - revision y's body byte for byte with check (c) replaced by a three-line comment; no lock flag read; the transfers still clear the moved role's lock");
+step("revision ab: apply_trade - revision y's body byte for byte but check (c) (a three-line comment) and the NULL-safe party test; no lock flag read; the transfers still clear the moved role's lock");
 {
   const fnAb = functionText(abMig, "apply_trade"), fnY = functionText(yMig, "apply_trade");
-  ok(fnY && fnY.split(AB_C_OLD).length === 2, "revision y's apply_trade carries check (c) exactly as AB_C_OLD, once (the text revision ab removes)");
-  ok(fnAb && fnAb.split(AB_C_COMMENT).length === 2, "revision ab's apply_trade carries the (c) comment exactly once");
-  eq(cutOnce(fnAb, AB_C_COMMENT, AB_C_OLD), fnY, "with the comment put back to check (c), revision ab's apply_trade equals revision y's byte for byte (every other check, refusal, lock and write untouched);");
+  ok(fnY && fnY.split(AB_C_OLD).length === 2 && fnY.split(AB_F_OLD).length === 2, "revision y's apply_trade carries check (c) and the party test exactly as AB_C_OLD / AB_F_OLD, once each (the text revision ab replaces)");
+  ok(fnAb && fnAb.split(AB_C_COMMENT).length === 2 && fnAb.split(AB_F_NEW).length === 2, "revision ab's apply_trade carries the (c) comment and the NULL-safe party test exactly once each");
+  eq(cutOnce(cutOnce(fnAb, AB_C_COMMENT, AB_C_OLD), AB_F_NEW, AB_F_OLD), fnY, "with check (c) and the party test put back, revision ab's apply_trade equals revision y's byte for byte (every other check, refusal, lock and write untouched);");
   const code = (fnAb || "").split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
   eq((code.match(/_locked = false/g) || []).length, 4, "the four transfers (primary / backup, both legs) still clear the moved role's lock flag;");
   eq((code.match(/_locked\b/g) || []).length, 4, "apply_trade names a lock flag only in those four writes (it reads none any more);");
-  ok(/if not \(sched or me = t\.from_surgeon_id or me = t\.to_surgeon_id\) then/.test(code) && /if not sched and \(t\.day < today_c or \(t\.return_day is not null and t\.return_day < today_c\)\) then/.test(code), "sched still gates TRADE_FORBIDDEN (a party or the scheduler) and TRADE_PAST (a member)");
+  ok(code.indexOf("if not sched and auth.uid() is not null and (me is null or me not in (t.from_surgeon_id, t.to_surgeon_id)) then\n    raise exception 'TRADE_FORBIDDEN: only a party or the scheduler may apply this trade' using errcode = 'P0001';") > 0 && code.indexOf("TRADE_FORBIDDEN") < code.indexOf("TRADE_NOT_ACCEPTED"), "the NULL-safe party test raises the same TRADE_FORBIDDEN, still first after TRADE_NOT_FOUND");
+  ok(/if not sched and \(t\.day < today_c or \(t\.return_day is not null and t\.return_day < today_c\)\) then/.test(code), "TRADE_PAST still binds every caller but the scheduler");
   eq([abMd5(fnY), abMd5(fnAb), abMd5(functionText(schema, "apply_trade"))], [AB_Y_MD5, AB_MD5, AB_MD5], "apply_trade's body md5: revision y's (the live body until the apply) and revision ab's, derived from the files (schema.sql = ab) - the gate the apply script reads before and after;");
 }
 
-step("revision ab: the probe (15 cases, rolled back, PROBE_SETUP before the apply) and the pre-check (read-only, one SELECT)");
+step("revision ab: the probe (18 cases, rolled back, PROBE_SETUP before the apply; each AFTER string exact, each case recorded once) and the pre-check (read-only, one SELECT, facts only)");
 {
   const p = fs.existsSync(AB_PROBE) ? read(AB_PROBE) : "";
   ok(p && !/\r/.test(p) && /^[\x00-\x7f]*$/.test(p), "sql/probes/locked-trade-probe.sql exists, LF and ASCII");
-  const cases = p.split("\n").filter((l) => /^--   [A-Z][0-9]+ /.test(l) && l.includes(" -> ")).map((l) => l.slice(5).split(" ")[0]);
-  eq(cases, ["P1", "L1", "L2", "L3", "L4", "L5", "L6", "N1", "N2", "N3", "N4", "N5", "N6", "C1", "A1"], "the probe's header lists its 15 cases, each with its AFTER string after ' -> ';");
-  ok(/^-- 15 cases\.$/m.test(p), "the probe's header counts 15 cases");
+  const lines = p.split("\n").filter((l) => /^--   [A-Z][0-9]+ /.test(l) && l.includes(" -> "));
+  eq(lines.map((l) => l.slice(5).split(" ")[0]), Object.keys(AB_AFTER), "the probe's header lists its 18 cases in AB_AFTER's order, each with its AFTER string after ' -> ';");
+  eq(Object.fromEntries(lines.map((l) => [l.slice(5).split(" ")[0], l.slice(l.lastIndexOf(" -> ") + 4)])), AB_AFTER, "each header AFTER string equals AB_AFTER's, exactly (the apply script grades the live run against these lines);");
+  ok(Object.values(AB_AFTER).every((v) => !/[;"<>&\\]/.test(v)), "no AFTER string carries ; \" < > & or a backslash (the report flattens or escapes them)");
+  ok(/^-- 18 cases\.$/m.test(p), "the probe's header counts 18 cases");
   const code = p.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  Object.keys(AB_AFTER).forEach((k) => eq((code.match(new RegExp("insert into probe_results values \\('" + k + "', ", "g")) || []).length, 1, "the probe records case " + k + " exactly once;"));
   ok(!/^\s*(begin|commit|rollback|start transaction)\s*;/im.test(code), "no BEGIN / COMMIT / ROLLBACK statement (one implicit transaction, rolled back by the final raise)");
   ok(code.trimEnd().endsWith("raise exception 'PROBE_RESULTS %;END', coalesce(msg, '(no results)');\nend $$;"), "the probe's last statement raises 'PROBE_RESULTS ...;END' (the whole batch rolls back)");
   const guard = code.indexOf("PROBE_SETUP: live rows already sit in the probe window"), notY = code.indexOf("PROBE_SETUP: apply_trade is not revision y"), notAb = code.indexOf("PROBE_SETUP: apply_trade still refuses a member on a locked slot - sql/migrations/" + AB_FILE + " is not applied");
@@ -7916,46 +7957,62 @@ step("revision ab: the probe (15 cases, rolled back, PROBE_SETUP before the appl
   ok(days.length > 20 && outside.length === 0, "every date the probe names lies in 2032-03 or 2020-08, the windows its guard proves empty (outside: " + outside.join(", ") + ")");
   ["schedule_days where day between '2032-03-01' and '2032-03-31' or day between '2020-08-01' and '2020-08-31'", "public.time_off where", "public.call_offers where", "public.availability where", "public.call_periods where", "action = 'trade.apply'", "shift_trade_requests where detail like 'probe-lockedtrade%'"].forEach((x) => ok(code.slice(Math.max(0, guard - 2000), guard).includes(x), "the collision guard reads " + x));
   ok(code.includes("'probe-lockedtrade-' || u || '@example.test'") && code.includes("'probe-lockedtrade ' || p_key") && code.includes("'probe-lockedtrade', 'probe')"), "identity: users probe-lockedtrade-<uuid>@example.test, trades 'probe-lockedtrade <K>', the vacation note 'probe-lockedtrade'");
+  ok(code.includes("set person_id = null, role = 'viewer', display_name = null where id = u5") && code.includes("set person_id = null, role = 'coordinator', display_name = null where id = u6"), "N7 / N8 act as a viewer and the office coordinator with no roster link");
   ok(!/call_schedule_data|call_periods \(|insert into public\.call_offers|insert into public\.availability/.test(code), "the probe writes no blob, period, offer or availability row (its days lie in no offer period, so y's offer loop writes none either)");
-  ok(/^--   A1 [^\n]* -> actor=s3\/Acton summary=Trade applied: Acton takes Primary Mon Mar 1 \(from Burchett, one-way\)$/m.test(p) && /^--   N1 [^\n]* -> ERR TRADE_INELIGIBLE: Acton is on vacation on 2032-03-15$/m.test(p), "A1 and N1 name the live roster's s3 Acton and s2 Burchett (as verify-rls section 5's N and E3 do)");
-  ok(/^--   L4 [^\n]* -> st=applied p=s3\/f b=s4\/t$/m.test(p) && /^--   C1 [^\n]* -> ERR CL007 CLAIM_LOCKED: 2032-03-22 primary is locked, ask the scheduler to assign it$/m.test(p), "L4 keeps the other role's lock; C1 keeps the claim refusal of a locked open slot");
   const c = fs.existsSync(AB_PRECHECK) ? read(AB_PRECHECK) : "";
   ok(c && !/\r/.test(c) && /^[\x00-\x7f]*$/.test(c), "sql/probes/locked-trade-precheck.sql exists, LF and ASCII");
   const cc = c.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
-  ok(!/\b(insert|update|delete|create|alter|drop|grant|revoke|truncate|notify|lock\s+table|for\s+update|for\s+share)\b/i.test(cc.replace(/'[^']*'/g, "''")), "the pre-check is read-only (no write, lock or DDL outside strings and comments)");
-  ok(/^with objects as \(/m.test(cc) && (cc.replace(/'[^']*'/g, "''").match(/;/g) || []).length === 1 && cc.trimEnd().endsWith("order by ord, role;"), "the pre-check is one SELECT, ordered by ord, role");
-  ok(cc.includes("p.prosrc like '%is locked; ask the scheduler%'") && cc.includes("p.prosrc like '%for leg_n, leg_pid, leg_day, leg_role in%'"), "the gate's lock_check and offer_loop read apply_trade's body (the same tests as the probe's setup)");
+  const ccBare = cc.replace(/'[^']*'/g, "''");
+  ok(!/\b(insert|update|delete|create|alter|drop|grant|revoke|truncate|notify|lock\s+table|for\s+update|for\s+share)\b/i.test(ccBare), "the pre-check is read-only (no write, lock or DDL outside strings and comments)");
+  ok(/^with objects as \(/m.test(cc) && (ccBare.match(/;/g) || []).length === 1 && cc.trimEnd().endsWith("order by ord, role;"), "the pre-check is one SELECT, ordered by ord, role");
+  ok(!/display_name|email|\.note\b|\.detail\b|summary/.test(ccBare), "the pre-check prints facts only - no name, e-mail, note or trade detail");
+  ok(cc.includes("p.prosrc like '%is locked; ask the scheduler%'") && cc.includes("p.prosrc like '%if not sched and auth.uid() is not null and (me is null or me not in (t.from_surgeon_id, t.to_surgeon_id)) then%'") && cc.includes("p.prosrc like '%for leg_n, leg_pid, leg_day, leg_role in%'"), "the gate's lock_check, null_safe and offer_loop read apply_trade's body (the same tests as the probe's)");
   const ch = c.replace(/\n-- ?/g, " ");
-  ok(ch.includes("REPORT-FIRST, NOT APPLIED") && ch.includes("apply_trade=yes lock_check=yes offer_loop=yes") && ch.includes("apply_trade=yes lock_check=no offer_loop=yes") && ch.includes("anon=f authenticated=t public=f"), "the pre-check's header states the gate before and after and the grants");
+  ok(ch.includes("REPORT-FIRST, NOT APPLIED") && ch.includes("apply_trade=yes lock_check=yes null_safe=no offer_loop=yes") && ch.includes("apply_trade=yes lock_check=no null_safe=yes offer_loop=yes") && ch.includes("anon=f authenticated=t public=f"), "the pre-check's header states the gate before and after and the grants");
 }
 
-step("revision ab: the docs - SCHEMA-REVIEW's section (PREPARED, the last one), the rules doc and the build guide say prepared, not applied; schema.sql's two ab lines");
+step("revision ab: the docs - SCHEMA-REVIEW's section (the last one), the rules doc and the build guide; schema.sql's two ab lines; verify-rls.sh keyed to the section's Status (PREPARED: the old gradings; APPLIED: the record step's)");
 {
-  ok(review.includes("\n## 2026-10-25 - apply_trade moves a locked slot once the two surgeons agreed (revision ab): apply_trade re-created (Faraz 10/25; `sql/migrations/" + AB_FILE + "`)\n"), "SCHEMA-REVIEW.md has the revision ab section");
-  const at = review.indexOf("\n## 2026-10-25 - apply_trade moves a locked slot");
+  ok(review.includes("\n" + AB_HEADING + "\n"), "SCHEMA-REVIEW.md has the revision ab section");
+  const at = review.indexOf("\n" + AB_HEADING);
   const sec = at < 0 ? "" : review.slice(at + 1);
-  ok(sec.includes("**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-locked-trade.sh`.**") && sec.includes("**Observed** (the record step fills this in from the log Faraz pastes back): not applied yet."), "the section says PREPARED and leaves the observed line to the record step");
   ok(sec && sec.slice(3).indexOf("\n## ") < 0, "the revision ab section is the last one in SCHEMA-REVIEW.md");
-  ok(sec.includes("`apply_trade=b5cca6f0f35b07923e6facb940d1f180`") && sec.includes("`1b4bf4792b6a164f382683661edaecc2`"), "the section quotes the two md5 the gate reads");
+  const prepared = sec.includes("**Status: PREPARED - report-first, NOT applied - Faraz runs `apply-locked-trade.sh`.**");
+  const applied = /\*\*Status: APPLIED /.test(sec);
+  ok(prepared !== applied, "the section's Status reads PREPARED (until the record step) or APPLIED (after it), not both or neither");
+  ok(sec.includes("`apply_trade=b5cca6f0f35b07923e6facb940d1f180`") && sec.includes("`" + AB_MD5 + "`"), "the section quotes the two md5 the gate reads");
+  ok(sec.includes("**The review's finding, fixed here too.**") && sec.includes("**The record step**"), "the section records the review's finding and the record step's plan");
   const rules = read(path.join(ROOT, "docs", "SILVIS-CALL-RULES.md")).replace(/\n\s*/g, " ");
-  ok(rules.includes("**10/25 (Faraz, revision ab - prepared, not applied yet):** \"all locks, holidays included\""), "the rules doc names revision ab as prepared, not applied (beside the scheduler-only rule it changes)");
-  ok(guide.includes("- **Locked trades (2026-10-25, revision ab, report-first, NOT applied yet; `sql/migrations/" + AB_FILE + "`).**") && guide.includes("until revision ab\n  (prepared 10/25, not applied yet)"), "the build guide's revision ab bullet and its holiday-plan line say prepared, not applied");
+  ok(rules.includes("**10/25 (Faraz, revision ab - prepared, not applied yet):** \"all locks, holidays included\"") || applied, "the rules doc names revision ab as prepared, not applied (beside the scheduler-only rule it changes), until the record step");
+  ok((guide.includes("- **Locked trades (2026-10-25, revision ab, report-first, NOT applied yet; `sql/migrations/" + AB_FILE + "`).**") && guide.includes("until revision ab\n  (prepared 10/25, not applied yet)")) || applied, "the build guide's revision ab bullet and its holiday-plan line say prepared, not applied, until the record step");
   const abLines = schema.split("\n").filter((l) => /NOT yet applied/.test(l));
-  eq(abLines.length, 2, "schema.sql: exactly two lines say NOT yet applied - revision ab's header line and its apply_trade block comment line;");
-  ok(abLines.every((l) => l.includes("sql/migrations/" + AB_FILE + ", report-first, NOT yet applied")), "both name revision ab's file");
-  const aaAt = header.search(/^-- Revision 2026-10-21 aa /m), abAt = header.search(/^-- Revision 2026-10-25 ab \(locked trades, sql\/migrations\/2026-10-25-locked-trade\.sql, report-first, NOT yet applied\): /m);
+  if (prepared) {
+    eq(abLines.length, 2, "schema.sql: exactly two lines say NOT yet applied - revision ab's header line and its apply_trade block comment line;");
+    ok(abLines.every((l) => l.includes("sql/migrations/" + AB_FILE + ", report-first, NOT yet applied")), "both name revision ab's file");
+  }
+  const aaAt = header.search(/^-- Revision 2026-10-21 aa /m), abAt = header.search(/^-- Revision 2026-10-25 ab \(locked trades, sql\/migrations\/2026-10-25-locked-trade\.sql, /m);
   ok(aaAt > 0 && abAt > aaAt && abAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-25 ab after revision aa and before the same-day rule");
   const revAb = header.slice(abAt).split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
-  ok(revAb.includes("all locks, holidays included") && revAb.includes("check (c)") && revAb.includes("claim_open_slot keeps CL007") && revAb.includes("Letter u stays taken by the weekend pair claim"), "revision ab's header line names the decision, check (c), the claim's CL007 and the taken letter u");
+  ok(revAb.includes("all locks, holidays included") && revAb.includes("check (c)") && revAb.includes("NULL-safe") && revAb.includes("claim_open_slot keeps CL007") && revAb.includes("Letter u stays taken by the weekend pair claim"), "revision ab's header line names the decision, check (c), the NULL-safe party test, the claim's CL007 and the taken letter u");
+  // the record step's trap (review 10/25): two existing gradings read the old refusal until it moves them - pinned to the Status line
+  const topProbe = read(path.join(ROOT, "sql", "probes", "trade-offer-probe.sql"));
+  const a4 = (topProbe.match(/^--   A4 [^\n]*$/m) || [""])[0];
+  if (prepared) {
+    ok(/expect_ineligible D "locked"/.test(vr) && !/expect_eq\s+D "status=applied locked=false"/.test(vr), "PREPARED: verify-rls.sh section 5 grades D as the old refusal (the record step moves it)");
+    ok(a4.endsWith(" -> m=locked st=applied by=s2/s3 o1=primary/s3/app a=true/false"), "PREPARED: the trade-offer probe's A4 header line reads the old m=locked (the record step rewrites the case)");
+    ok(!vr.includes("locked-trade-probe") && !vr.includes('echo "== 24. '), "PREPARED: verify-rls.sh names no section 24 and not the locked-trade probe yet");
+  } else {
+    ok(/expect_eq\s+D "status=applied locked=false"/.test(vr) && !/expect_ineligible D "locked"/.test(vr), "APPLIED: verify-rls.sh section 5 grades D as applied with the lock cleared");
+    ok(a4 && !a4.includes("m=locked"), "APPLIED: the trade-offer probe's A4 no longer reads the old m=locked (the record step rewrote it - and revision y's A4 pins with it)");
+    ok(vr.indexOf('echo "== 24. ') > 0 && vr.indexOf("locked-trade-probe") > vr.indexOf('echo "== 24. '), "APPLIED: verify-rls.sh section 24 runs the locked-trade probe");
+  }
 }
 
-step("revision ab: no apply script in the repo; scripts/verify-rls.sh does not name revision ab's probe yet (the record step adds section 24 and moves section 5's D and section 21's A4)");
+step("revision ab: no apply script in the repo (Faraz 10/1: apply scripts live outside it)");
 {
   ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-locked-trade.sh")), "scripts/apply-locked-trade.sh must not be in the repo (it lives outside it)");
   [AB_MIGRATION, AB_PROBE, AB_PRECHECK].forEach((p) => ok(!/bash scripts\/apply-|scripts\/apply-locked-trade\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script (they live outside the repo since 10/1)"));
-  ok(!vr.includes("locked-trade-probe") && !vr.includes('echo "== 24. '), "verify-rls.sh names no section 24 and not the locked-trade probe yet (the record step adds them)");
-  ok(/expect_ineligible D "locked"/.test(vr), "verify-rls.sh section 5 still grades D as the old refusal (the record step moves it, with section 21's A4, once the apply is observed)");
 }
-console.log("- revision ab (2026-10-25): locked trades - the migration (y's apply_trade minus check (c)), its mirror, the probe (15 cases), the pre-check, the docs (PREPARED, not applied)");
+console.log("- revision ab (2026-10-25): locked trades - the migration (y's apply_trade minus check (c), the party test NULL-safe), its mirror, the probe (18 cases), the pre-check, the docs (PREPARED, not applied), verify-rls keyed to the Status line");
 
 console.log("schema.test.js: " + N + " assertions passed");
