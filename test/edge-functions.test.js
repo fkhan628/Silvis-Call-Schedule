@@ -32,11 +32,14 @@ const ROOT = path.join(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
 const snSrc = read("edge-functions/send-notification/index.ts");
 const readme = read("edge-functions/README.md");
-// 2026-10-26 (the PGRST303 retry - README section 3, "2026-10-26 - the PGRST303 retry"): the five sources are the PREPARED next
-// versions, raw bytes. Each was byte-identical to its deployed version until this change (the three deployed-hash pins below
-// recorded that and now point here); deploy-rest-retry.sh (the private apply-scripts folder) pins the same five, and the deploy's
-// record step re-labels them deployed.
-const RETRY_PREPARED_SHA256 = {
+// 2026-10-26 (the PGRST303 retry - README section 3, "2026-10-26 - the PGRST303 retry"): the five sources, raw bytes. Prepared
+// 10/26 (each had been byte-identical to its deployed version until then - the three deployed-hash pins below recorded that and
+// point here since); pin kept deliberately 10/27 (the deploy's record step): these ARE the deployed versions - calendar-sync v8,
+// east-feed-refresh v2, office-notifications v7, send-notification v13, daily-reminder v11, deployed 2026-10-27 03:30:11-03:30:19
+// UTC by Faraz (deploy-rest-retry.sh: the staged files these hashes, the re-downloads equal to them CRLF-normalised; the workdir's
+// re-downloaded copies byte-identical - cmp, checked after the run). Their headers keep
+// the as-deployed "prepared, NOT deployed" wording; that wording flips, with these pins, at the next source change.
+const RETRY_DEPLOYED_SHA256 = {
   "calendar-sync": "c11c4ff3d8ebe19f5d8ffd6c7dda563bb38c80f81cf3dac225fabef1f20f41a3",
   "daily-reminder": "ad3dbc5a5baed3ca953ae742445bb25501686b24dbc9b28b32b787d20edcfe15",
   "east-feed-refresh": "0cd0d9b7198e2c7e06ad29260d502a4ce253bb75cb18799111abb6eab0ea6114",
@@ -606,14 +609,17 @@ check("Prompt 19 S4 source pins - send-notification: buildEmail heads the frame 
   // the PHONE PUSH wording flips, with its pin, at the next source change - so the paragraph now records v12 as deployed (2026-10-03
   // 16:37:59 UTC; the re-download was ab7a6a70...) and the TOKEN RACE RETRY paragraph is the pending v13 on base v12
   assert.ok(/PHONE PUSH \(Prompt 30, Faraz 10\/2 "Davenport's look, Silvis's own push"; deployed 2026-10-03 16:37:59 UTC as v12; README section 3\)/.test(head), "the PHONE PUSH paragraph records v12 as deployed 2026-10-03 16:37:59 UTC");
-  assert.ok(/TOKEN RACE RETRY \(2026-10-26; v13 on base v12 - prepared, NOT deployed; README section 3 "2026-10-26 - the PGRST303 retry"\)/.test(head), "the TOKEN RACE RETRY paragraph is the pending v13 on base v12");
+  // pin kept deliberately 10/27 (the deploy's record step): v13 is deployed (2026-10-27 03:30:17 UTC), so the TOKEN RACE RETRY paragraph
+  // keeps its as-deployed wording until the next source change
+  assert.ok(/TOKEN RACE RETRY \(2026-10-26; v13 on base v12 - prepared, NOT deployed; README section 3 "2026-10-26 - the PGRST303 retry"\)/.test(head), "the TOKEN RACE RETRY paragraph keeps its as-deployed wording (v13 on base v12 - prepared, NOT deployed; v13 deployed 2026-10-27 03:30:17 UTC) until the next source change");
   {
     // the record step (10/3): README section 3 carries the deploy record and the flip rule; the source is byte-identical to what was deployed
     const s3p = readme.slice(readme.indexOf("### Deploy record - Prompt 30 (phone push)"), readme.indexOf("### Deploy record - Prompt 26"));
     assert.ok(/DEPLOYED 2026-10-03 16:37:59 UTC by Faraz \(v11 -> v12\)/.test(s3p) && /The source's own header still reads `v10 on base v9 - prepared, NOT deployed`/.test(s3p) && /that wording flips,\nwith its pin, at the next source change/.test(s3p), "README section 3's Prompt 30 record: DEPLOYED v11 -> v12, the header kept as deployed until the next source change");
     // pin moved deliberately 10/26: was the deployed v12's ab7a6a70dd6d2556af967a57040df64827c3acbf710d13784023d3ed847847fa (the 10/3
-    // re-download) - this source is the prepared v13, the PGRST303 retry (RETRY_PREPARED_SHA256, at the top of this file)
-    assert.strictEqual(sha256Of("edge-functions/send-notification/index.ts"), RETRY_PREPARED_SHA256["send-notification"], "edge-functions/send-notification/index.ts is the prepared v13 (the PGRST303 retry) that deploy-rest-retry.sh pins - a source change needs a new deploy and record, and this pin moves with it");
+    // re-download) - this source became the prepared v13, the PGRST303 retry; pin kept deliberately 10/27 (the deploy's record step):
+    // it IS the deployed v13 (2026-10-27 03:30:17 UTC; RETRY_DEPLOYED_SHA256, at the top of this file)
+    assert.strictEqual(sha256Of("edge-functions/send-notification/index.ts"), RETRY_DEPLOYED_SHA256["send-notification"], "edge-functions/send-notification/index.ts must stay byte-identical to the deployed v13 (the PGRST303 retry, deployed 2026-10-27 03:30:17 UTC - the staged file and the re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
   }
   const pc = (head.split("\n").find((l) => l.includes("POST { type: string, data: {")) || "");
   assert.ok(pc.includes("kind?: 'give'"), "the Payload contract line names the optional data.kind: " + pc.trim());
@@ -3618,13 +3624,14 @@ check("A2 source pins: the handler's FIRST statement is the gate (CRON_SECRET fr
   // pin moved deliberately 10/26 (the PGRST303 retry, the next source change): README section 3 ("Deploy record - Prompt 31 Part A")
   // said the NOT DEPLOYED wording flips, with its pin, at the next source change - so the header now records v1 as deployed
   // (2026-10-20 01:42:59 UTC; the upload and the re-download were ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0) and
-  // names the pending v2 on base v1; this source is that v2 (RETRY_PREPARED_SHA256, at the top of this file)
+  // names the pending v2 on base v1; this source is that v2 (RETRY_DEPLOYED_SHA256, at the top of this file) - pin kept deliberately
+  // 10/27 (the deploy's record step): v2 is deployed (2026-10-27 03:30:13 UTC), so the header keeps its as-deployed wording
   {
     const top = erSrc.split("\n").slice(0, 16).join("\n");
     assert.ok(!/NOT DEPLOYED/.test(top) && /^\/\/ Deployed 2026-10-20 01:42:59 UTC by Faraz \(v1\)\. /m.test(top), "the header records v1 as deployed 2026-10-20 01:42:59 UTC");
-    assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v2 on base v1 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(top), "the header names the pending v2 on base v1 (the PGRST303 retry)");
+    assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v2 on base v1 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(top), "the header keeps its as-deployed wording for the retry (v2 on base v1 - prepared, NOT deployed; v2 deployed 2026-10-27 03:30:13 UTC) until the next source change");
   }
-  assert.strictEqual(sha256Of("edge-functions/east-feed-refresh/index.ts"), RETRY_PREPARED_SHA256["east-feed-refresh"], "edge-functions/east-feed-refresh/index.ts is the prepared v2 (the PGRST303 retry) that deploy-rest-retry.sh pins - a source change needs a new deploy and record, and this pin moves with it");
+  assert.strictEqual(sha256Of("edge-functions/east-feed-refresh/index.ts"), RETRY_DEPLOYED_SHA256["east-feed-refresh"], "edge-functions/east-feed-refresh/index.ts must stay byte-identical to the deployed v2 (the PGRST303 retry, deployed 2026-10-27 03:30:13 UTC - the staged file and the re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(erSrc), "the source is ASCII");
 });
 check("A2 pins on the in-app refresh this function mirrors (index-source.html refreshEastFeed) - the lines the re-statement above runs: the main read with the codes, the plan (planVacationCache or keepCachedVacations), the two row maps, the merge-duplicates upsert, coverageOf + the forecast prune, the reload, the reset floor fromMon, the extra leg (fetchEastWeeks over eastWin.extra, eastExtraWeeks, keepCachedVacations over the reloaded cache) - and their order", () => {
@@ -4363,10 +4370,11 @@ check("revision z (4) source pins - daily-reminder: the push fan-out sits AFTER 
   // pin moved deliberately 10/26 (the PGRST303 retry, the next source change): README section 3 ("Deploy record - push reminders
   // (revision z)") said the NOT DEPLOYED wording flips, with its pin, at the next source change - so the PHONE PUSH item now records
   // v10 as deployed (2026-10-22 23:18:10 UTC; the upload and the re-download were
-  // e7a345dab1b6ec2e68db2ed370c439a61a79484cec0078947bc582d2de22e82b) and the TOKEN RACE RETRY paragraph is the pending v11 on base v10
+  // e7a345dab1b6ec2e68db2ed370c439a61a79484cec0078947bc582d2de22e82b) and the TOKEN RACE RETRY paragraph is the pending v11 on base v10 -
+  // pin kept deliberately 10/27 (the deploy's record step): v11 is deployed (2026-10-27 03:30:19 UTC), the header kept as deployed
   assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - deployed 2026-10-22 23:18:10 UTC; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the PHONE PUSH item records v10 as deployed 2026-10-22 23:18:10 UTC, the record named");
-  assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v11 on base v10 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(head), "the header names the pending v11 on base v10 (the PGRST303 retry)");
-  assert.strictEqual(sha256Of("edge-functions/daily-reminder/index.ts"), RETRY_PREPARED_SHA256["daily-reminder"], "edge-functions/daily-reminder/index.ts is the prepared v11 (the PGRST303 retry) that deploy-rest-retry.sh pins - a source change needs a new deploy and record, and this pin moves with it");
+  assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v11 on base v10 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(head), "the header keeps its as-deployed wording for the retry (v11 on base v10 - prepared, NOT deployed; v11 deployed 2026-10-27 03:30:19 UTC) until the next source change");
+  assert.strictEqual(sha256Of("edge-functions/daily-reminder/index.ts"), RETRY_DEPLOYED_SHA256["daily-reminder"], "edge-functions/daily-reminder/index.ts must stay byte-identical to the deployed v11 (the PGRST303 retry, deployed 2026-10-27 03:30:19 UTC - the staged file and the re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
   assert.ok(!/OneSignal push \(send-push/.test(head) && /shift_reminders_push/.test(head) && /VAPID_PUBLIC_KEY,\n\/\/ VAPID_PRIVATE_KEY, VAPID_SUBJECT/.test(head), "the header no longer says push was dropped; it names the switch and the three secrets");
   assert.ok(/^\/\/ Deploy: supabase functions deploy daily-reminder --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api$/m.test(head), "the deploy line");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(drSrc), "the source is ASCII");
@@ -4630,25 +4638,51 @@ check("10/26 retry: no PostgREST call of this project bypasses rest() - each fun
     assert.strictEqual(s.split("restFetchWithRetry(").length - 1, 2, n + ": restFetchWithRetry defined once, called once (by rest())");
   });
 });
-check("10/26 retry: each header names the retry as the pending next version on its deployed base (calendar-sync v8 on v7, daily-reminder v11 on v10, east-feed-refresh v2 on v1, office-notifications v7 on v6, send-notification v13 on v12), and each source is the prepared file RETRY_PREPARED_SHA256 pins (raw bytes)", () => {
+check("10/26 retry (pins kept deliberately 10/27 - the deploy's record step): each header keeps its as-deployed wording, the retry as 'prepared, NOT deployed' on its base (calendar-sync v8 on v7, daily-reminder v11 on v10, east-feed-refresh v2 on v1, office-notifications v7 on v6, send-notification v13 on v12 - all five deployed 2026-10-27 03:30 UTC), and each source is the deployed file RETRY_DEPLOYED_SHA256 pins (raw bytes)", () => {
   const V = { "calendar-sync": [8, 7], "daily-reminder": [11, 10], "east-feed-refresh": [2, 1], "office-notifications": [7, 6], "send-notification": [13, 12] };
   Object.entries(RETRY_FNS).forEach(([n, s]) => {
     const head = s.slice(0, s.indexOf("\nimport "));
     const [v, base] = V[n];
     assert.strictEqual(head.split("TOKEN RACE RETRY (2026-10-26; v" + v + " on base v" + base + " - prepared, NOT deployed;").length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");
     assert.ok(/PGRST303/.test(head) && /1 s, then 3 s/.test(head.replace(/\n\/\/\s*/g, " ")), n + ": the header says what the retry does");
-    assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), RETRY_PREPARED_SHA256[n], n + ": the source is the prepared file deploy-rest-retry.sh pins (a source change moves this pin, the script's and the record together)");
+    assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), RETRY_DEPLOYED_SHA256[n], n + ": the source is the deployed v" + v + " (2026-10-27 03:30 UTC - the staged file and the re-download) - it must stay byte-identical until the next deploy; a source change flips the header wording and moves this pin with a new deploy and record");
   });
 });
-check("10/26 retry: the README carries the deploy record - section 3's '2026-10-26 - the PGRST303 retry' (all five, NOT deployed until Faraz runs the deploy script) and section 7's rollback (the five backups)", () => {
+check("10/26 retry: the README carries the deploy record - section 3's '2026-10-26 - the PGRST303 retry' (Status DEPLOYED 2026-10-27 03:30:11-03:30:19 UTC by Faraz, the five versions; the observed paragraph - the log's hashes, the lists before and after, the live checks, the flip rule; the resend in the wild not observed yet), the east-feed-refresh row's v2, and section 7's rollback (the five backups)", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
-  const rec = s3.slice(s3.indexOf("### 2026-10-26 - the PGRST303 retry"));
-  assert.ok(s3.indexOf("### 2026-10-26 - the PGRST303 retry") > 0, "section 3 has the subsection");
+  const iR = s3.indexOf("### 2026-10-26 - the PGRST303 retry"), jR = s3.indexOf("\n### ", iR + 10);
+  const rec = s3.slice(iR, jR < 0 ? undefined : jR);
+  assert.ok(iR > 0, "section 3 has the subsection");
   const flat = rec.replace(/\s+/g, " ");
   ["calendar-sync", "daily-reminder", "east-feed-refresh", "office-notifications", "send-notification"].forEach((f) => assert.ok(flat.indexOf(f) > 0, "the record names " + f));
   assert.ok(flat.includes("JWT issued at future") && flat.includes("PGRST303") && flat.includes("deploy-rest-retry.sh"), "the record names the error and the deploy script");
+  // the record step (10/27): DEPLOYED, the versions, the observed paragraph from the log
+  assert.ok(flat.includes("*Status: DEPLOYED 2026-10-27 03:30:11-03:30:19 UTC by Faraz (`deploy-rest-retry.sh`, log `deploy-rest-retry-20261027T032936Z.log`, DEPLOYED AND VERIFIED): `calendar-sync` v7 -> v8, `east-feed-refresh` v1 -> v2, `office-notifications` v6 -> v7, `send-notification` v12 -> v13, `daily-reminder` v10 -> v11.") && !/Status: NOT deployed/.test(flat), "the Status line says DEPLOYED with the five versions");
+  const ob = flat.slice(flat.indexOf("**Observed** (deploy, 2026-10-27"));
+  assert.ok(flat.indexOf("**Observed** (deploy, 2026-10-27") > 0, "the observed paragraph");
+  Object.entries(RETRY_DEPLOYED_SHA256).forEach(([n, h]) => assert.ok(ob.indexOf("`" + n + "` `" + h.slice(0, 12) + "...`") > 0, "the observed paragraph quotes " + n + "'s staged hash " + h.slice(0, 12)));
+  assert.ok(ob.includes("each main `57dd93d`'s file (`f88f9289...`, `ff717c93...`, `9b806cef...`, `ab7a6a70...`, `e7a345da...`)") && ob.includes("and each re-download the staged file"), "the backups in the deploy order, each 57dd93d's; each re-download the staged file");
+  {
+    // where each function's new code stands live: two readings observed, the rest named as not observed - in that sentence
+    const nA = ob.indexOf("Not observed yet: `east-feed-refresh`"), nB = ob.indexOf("vacation e-mail).", nA);
+    assert.ok(nA > 0 && nB > nA, "the not-observed sentence");
+    const not = ob.slice(nA, nB), seen = ob.slice(0, nA);
+    ["`east-feed-refresh` v2's first scheduled run (2026-10-27 10:30 UTC", "`daily-reminder` v11's first `offers` run", "first `open-shifts` run", "`office-notifications` v7's first scheduled digest (Monday 2026-11-02 11:00 UTC)", "`send-notification` v13's first real send"].forEach((s) => assert.ok(not.includes(s), "not observed yet: " + s));
+    assert.ok(seen.includes("`daily-reminder` v11's hourly run at 04:00 UTC") && seen.includes("`net._http_response` id 905") && seen.includes("no `[rest]` line, nothing resent") && seen.includes("`calendar-sync` v8's live reading is step 7's GET"), "observed: the 04:00 run (id 905, no resend) and calendar-sync's step 7 GET");
+    assert.ok(seen.includes("the script compares CRLF-normalised hashes") && seen.includes("byte-identical to the repo files - `cmp`"), "the re-download compare says how it was checked");
+  }
+  assert.ok(ob.includes("(v7, v1, v6, v12, v10)") && ob.includes("(v8, v2, v7, v13, v11") && ob.includes("`calendar-sync` GET 200 `BEGIN:VCALENDAR`, the four gated POSTs 401"), "the lists before and after, the live checks");
+  assert.ok(ob.includes("The source's own headers still read `prepared, NOT deployed` (pinned in `test/edge-functions.test.js`) on purpose") && ob.includes("that wording flips, with its pins, at the next source change"), "the flip rule");
+  const efRow = readme.split("\n").find((l) => l.startsWith("| `east-feed-refresh` |")) || "";
+  assert.ok(efRow.includes("v2 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:13 UTC"), "the east-feed-refresh row names v2");
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.indexOf("deploy-rest-retry.sh") > 0 && /PGRST303/.test(s7), "section 7: the rollback of the retry deploy");
+  assert.ok(/v11 - v10 plus the PGRST303 retry/.test(s7.replace(/\s+/g, " ")), "section 7: revision z's rollback says it now takes the retry away too");
+  assert.ok(ob.includes("Not observed yet: a resend in the wild"), "the resend in the wild named as not observed");
+  const gateRow = readme.split("\n").find((l) => l.startsWith("| east-feed-refresh | OFF")) || "";
+  assert.ok(gateRow.includes("v2 (the PGRST303 retry - the gate unchanged) since 2026-10-27 03:30:13 UTC"), "the gate table's east-feed-refresh row names v2");
+  assert.ok(s7.replace(/\s+/g, " ").includes("(the `@restRetry` block and `rest()` sending through it, as in `d318cd9`)"), "section 7: keeping the retry means the block and rest() through it");
+  assert.ok(!flat.includes("`attempt 3 of 3` lines show") && flat.includes("never as an `attempt 3 of 3` line"), "no 'attempt 3 of 3' line is promised (the block warns only before a wait)");
 });
 
 (async () => {

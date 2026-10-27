@@ -11,7 +11,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts. Revision z (v10, deployed 2026-10-22 23:18:10 UTC; its first live push not observed yet - section 3's "Deploy record - push reminders (revision z)"): v10 also pushes the day-before reminder to the same people's phones, and their followers', on `shift_reminders_push` (the hourly default mode only) |
-| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A" | never |
+| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A"; v2 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:13 UTC | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -220,7 +220,7 @@ Each function carries its own gate instead:
 | office-notifications | OFF | `x-cron-secret` == `CRON_SECRET` (digest / rebaseline; constant-time compare since Prompt 16 B5 - SHA-256 both sides, XOR the bytes) OR a GoTrue-verified session whose `user_profiles.role` is admin/scheduler |
 | send-notification | OFF | GoTrue-verified user session (`/auth/v1/user`) AND a role/party gate on `user_profiles.role` (2026-09-23, audit RLS-1; since Prompt 16 B5 also: the mail-config 500s only after this gate, `targetIds` capped at roster size + 1, and every `trade_*` send names its `shift_trade_requests` row in `data.trade_id` whose two parties must be exactly `targetIds`): admin / scheduler send every category (on role alone - no `person_id` link required, as for office-notifications); a linked surgeon only `trade_*` to the two parties (himself among them), `shift_claimed` to himself + scheduler-linked ids, `vacation_logged` to scheduler-linked ids, `test` to himself - never a broadcast, and never `offers_reminder` / `offers_closed` (Prompt 14 part 4: the scheduler's Periods -> Remind button, or the daily offers cron through `daily-reminder`, which does not pass this gate); a viewer, a coordinator (Prompt 16 A7 - the office account relays vacations / offers in the app but never mails through the group sender), a missing row or an unlinked surgeon gets 403. Prompt 19 S3 (v7, deployed 2026-09-25 05:36 UTC): `trade_applied` may also carry scheduler-linked ids beside the two parties (an accepted give is reported to the scheduler) - the parties stay required, nobody else is allowed, a surgeon sender must be a party; the other `trade_*` stay exactly the two parties. A follower (Prompt 20 F3, v8, deployed 2026-09-27 00:46 UTC: a viewer / coordinator whose `user_profiles.follows` names roster surgeons) only ever RECEIVES - added after this gate for `trade_*` / `shift_claimed` / `open_shifts` / `schedule_published`, never counted in `targetIds`, the cap or the party check; as a caller it is the same 403 - and never one of Prompt 19's scheduler-linked `trade_applied` copies either. Prompt 30 (phone push, v12 - deployed 2026-10-03 16:37:59 UTC): GET `?vapid=public` - the public key only, no auth (no other GET is served: 405); POST `?push=test` - any GoTrue-verified session (viewer, follower, APP and the office included - it is answered before the role read), its own devices only, no body read; every other POST is judged by the gate above exactly as before, and its push goes only to the people its e-mail is resolved for (before their e-mail flags; each on his own `*_push` switch) |
 | daily-reminder | OFF | `x-cron-secret` == `CRON_SECRET`, fail closed (constant-time compare since Prompt 16 B5) |
-| east-feed-refresh | OFF (must stay OFF - the cron's pg_net call carries no JWT; a gateway 401 FAILs verify-rls 20i) | `x-cron-secret` == `CRON_SECRET`, fail closed, before the method, the body or any read (the `@cronSecret` block, byte-identical to daily-reminder's and office-notifications'); no CORS; v1 deployed 2026-10-20 01:42:59 UTC |
+| east-feed-refresh | OFF (must stay OFF - the cron's pg_net call carries no JWT; a gateway 401 FAILs verify-rls 20i) | `x-cron-secret` == `CRON_SECRET`, fail closed, before the method, the body or any read (the `@cronSecret` block, byte-identical to daily-reminder's and office-notifications'); no CORS; v1 deployed 2026-10-20 01:42:59 UTC; v2 (the PGRST303 retry - the gate unchanged) since 2026-10-27 03:30:13 UTC |
 
 Gotcha carried over from Davenport: a DASHBOARD deploy re-enables "Verify JWT"
 for that function. Always deploy from the CLI, and after any deploy re-run the
@@ -821,7 +821,10 @@ into a missing `supabase\functions\<slug>` fails, and `deploy` from an unlinked 
 
 ### 2026-10-26 - the PGRST303 retry (all five functions)
 
-*Status: NOT deployed - prepared 2026-10-26 by Claude Code on branch `fix/rest-retry` (Faraz 10/26: "Yeah go ahead" to the retry fix).*
+*Status: DEPLOYED 2026-10-27 03:30:11-03:30:19 UTC by Faraz (`deploy-rest-retry.sh`, log `deploy-rest-retry-20261027T032936Z.log`,
+DEPLOYED AND VERIFIED): `calendar-sync` v7 -> v8, `east-feed-refresh` v1 -> v2, `office-notifications` v6 -> v7, `send-notification`
+v12 -> v13, `daily-reminder` v10 -> v11. Prepared 2026-10-26 by Claude Code on branch `fix/rest-retry`, merged as main `3e934b6`
+(Faraz 10/26: "Yeah go ahead" to the retry fix); the paragraphs below are the plan as prepared, then the observed paragraph.*
 
 Why: on 2026-10-26 the 11:00 UTC weekly digest answered 502 before it sent anything (`call_schedule_data GET failed: HTTP 401
 {"code":"PGRST303",...,"message":"JWT issued at future"}`; nothing sent and the baseline kept, so the week was not lost - Faraz ran
@@ -840,8 +843,9 @@ gate, no mail text, no database or client change. Two side effects, both in what
 a resend comes back as that error (the handler answers 500, not 502); and the hourly reminder and the weekly digest jobs keep pg_net's
 default timeout (section 4 - a few seconds), so a run that resends may show in `net._http_response` as a timeout while the function
 finishes its work (the 10/12 cron digest ran 5.9 s - `function_edge_logs` execution time 5856 ms, status 200 - its mail went out
-and its baseline was written). After the deploy, the function logs' `attempt 2 of 3` /
-`attempt 3 of 3` lines show whether one resend was enough.
+and its baseline was written). After the deploy, the function logs show how a resend went: an `attempt 1 of 3` line followed by
+the run's normal lines - one resend was enough; an `attempt 2 of 3` line - the first resend was refused too; a third refusal shows
+as rest()'s `failed: HTTP 401 ... PGRST303` error (and the handler's error answer), never as an `attempt 3 of 3` line.
 
 The deploy: `deploy-rest-retry.sh` in the private apply-scripts folder (it carries machine paths, so it stays out of this repo), run
 from a clean `main` that carries this change. `--dry-run` first: it checks the CLI and the `supa-silvis` link, reads `functions list`
@@ -857,6 +861,30 @@ list` again (each one version up, `verify_jwt` still false), re-downloads each a
 `calendar-sync` still serves the group feed (200, `BEGIN:VCALENDAR` - a read through the new `rest()`) and that an unauthenticated
 POST to the four gated functions still answers 401. Then its PASTE THIS BACK block, for the record step (this subsection's Status
 line, the test pins re-labelled deployed).
+
+**Observed** (deploy, 2026-10-27 - the log and the PASTE THIS BACK block Faraz pasted back, read again by Claude Code): started
+03:29:36Z from the main clone at `3e934b6`. Step 0: the five repo files the pinned hashes - `calendar-sync` `c11c4ff3d8eb...`,
+`east-feed-refresh` `0cd0d9b7198e...`, `office-notifications` `fb37ea31885c...`, `send-notification` `03ba467016d5...`,
+`daily-reminder` `ad3dbc5a5bae...`; CLI 2.120.0, the `supa-silvis` workdir linked to `bzhsroegtagqhutbnsrp`. Step 1: all five ACTIVE,
+`verify_jwt` false (v7, v1, v6, v12, v10). Step 2: the backups in `supa-silvis\backup-rest-retry-20261027T032936Z`, each main
+`57dd93d`'s file (`f88f9289...`, `ff717c93...`, `9b806cef...`, `ab7a6a70...`, `e7a345da...`). Step 4: the clock 03:29 UTC, 03:30
+after DEPLOY was typed. Step 5: each deploy answered `Deployed Functions.` Step 6: all five ACTIVE, one version up, `verify_jwt` false
+(v8, v2, v7, v13, v11 - `functions list` read by Claude Code afterwards: updated 03:30:11.6, 03:30:13.6, 03:30:15.5, 03:30:17.3 and
+03:30:19.2 UTC in the order above), and each re-download the staged file (the script compares CRLF-normalised hashes; the workdir's
+re-downloaded copies are also byte-identical to the repo files - `cmp`, checked by Claude Code after the run). Step 7: `calendar-sync` GET 200 `BEGIN:VCALENDAR`, the four
+gated POSTs 401. The source's own headers still read `prepared, NOT deployed` (pinned in `test/edge-functions.test.js`) on purpose: the
+repo copies stay byte-identical to the deployed versions, and that wording flips, with its pins, at the next source change.
+First scheduled run on the new code: `daily-reminder` v11's hourly run at 04:00 UTC (23:00 Central, nobody's reminder hour)
+answered 200 (`net._http_response` id 905: `sent` 0, `skipped_wrong_hour` 2; the function's own `done: sent=0 failed=0 wrong_hour=2`,
+followers and push lines; `function_edge_logs` POST 200 in 4139 ms) - no `[rest]` line, nothing resent. `calendar-sync` v8's live
+reading is step 7's GET (200, `BEGIN:VCALENDAR` - the feed is read through its `rest()`). Not observed yet: `east-feed-refresh` v2's
+first scheduled run (2026-10-27 10:30 UTC - its `east.refresh` audit row from `cron`, `ok` true), `daily-reminder` v11's first
+`offers` run (`silvis-offers-daily`, 2026-10-27 13:00 UTC) and first `open-shifts` run (`silvis-open-shifts-weekly`, Monday
+2026-11-02 12:00 UTC), `office-notifications` v7's first scheduled digest (Monday 2026-11-02 11:00 UTC) - or an earlier digest or
+publish from the app - and `send-notification` v13's first real send (the next trade, schedule-change or vacation e-mail). The comments of `scripts/verify-rls.sh` 19i / 20i still name `send-notification` v12 / `east-feed-refresh` v1 as
+deployed - left for the next verify-rls change (a change there moves its sha pins).
+Not observed yet: a resend in the wild - an `[rest] <table>: HTTP 401 PGRST303 (attempt 1 of 3) - again in 1000 ms` line in the
+function logs, followed by the run's normal lines; the next platform refusal is its first live reading.
 
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
@@ -1275,6 +1303,11 @@ then the SQL rollback (the header of `sql/migrations/2026-10-20-push-followups.s
 lines). With the column dropped while v10 still runs, a missing key reads as on and the function would push with no switch. The
 client needs no rollback: a missing function or column reads as "unavailable" (the third phone switch hides; Enable and the re-arm
 fall back to the plain save).
+
+Since 2026-10-27 03:30:19 UTC the live `daily-reminder` is v11 - v10 plus the PGRST303 retry (section 3, "2026-10-26 - the PGRST303
+retry"): the revision z rollback above (the v9 backup) takes the retry away too. To keep it, roll back to v9's file with the
+retry added (the `@restRetry` block and `rest()` sending through it, as in `d318cd9`) - a source change of its own, with its own
+record.
 
 The PGRST303 retry (section 3, "2026-10-26 - the PGRST303 retry"): `deploy-rest-retry.sh` downloads every live function before it
 deploys anything, into `$env:USERPROFILE\projects\supa-silvis\backup-rest-retry-<UTC stamp>\<slug>\index.ts`, and prints the rollback
