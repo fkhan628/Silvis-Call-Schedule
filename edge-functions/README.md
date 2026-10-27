@@ -11,7 +11,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts. Revision z (v10, deployed 2026-10-22 23:18:10 UTC; its first live push not observed yet - section 3's "Deploy record - push reminders (revision z)"): v10 also pushes the day-before reminder to the same people's phones, and their followers', on `shift_reminders_push` (the hourly default mode only) |
-| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A"; v2 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:13 UTC | never |
+| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A"; v2 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:13 UTC (its first scheduled run 2026-10-27 10:30 UTC, its audit row `ok` `true`) | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -824,7 +824,8 @@ into a missing `supabase\functions\<slug>` fails, and `deploy` from an unlinked 
 *Status: DEPLOYED 2026-10-27 03:30:11-03:30:19 UTC by Faraz (`deploy-rest-retry.sh`, log `deploy-rest-retry-20261027T032936Z.log`,
 DEPLOYED AND VERIFIED): `calendar-sync` v7 -> v8, `east-feed-refresh` v1 -> v2, `office-notifications` v6 -> v7, `send-notification`
 v12 -> v13, `daily-reminder` v10 -> v11. Prepared 2026-10-26 by Claude Code on branch `fix/rest-retry`, merged as main `3e934b6`
-(Faraz 10/26: "Yeah go ahead" to the retry fix); the paragraphs below are the plan as prepared, then the observed paragraph.*
+(Faraz 10/26: "Yeah go ahead" to the retry fix); the paragraphs below are the plan as prepared, then the observed paragraphs (the
+deploy; the first day on the new code).*
 
 Why: on 2026-10-26 the 11:00 UTC weekly digest answered 502 before it sent anything (`call_schedule_data GET failed: HTTP 401
 {"code":"PGRST303",...,"message":"JWT issued at future"}`; nothing sent and the baseline kept, so the week was not lost - Faraz ran
@@ -877,14 +878,44 @@ repo copies stay byte-identical to the deployed versions, and that wording flips
 First scheduled run on the new code: `daily-reminder` v11's hourly run at 04:00 UTC (23:00 Central, nobody's reminder hour)
 answered 200 (`net._http_response` id 905: `sent` 0, `skipped_wrong_hour` 2; the function's own `done: sent=0 failed=0 wrong_hour=2`,
 followers and push lines; `function_edge_logs` POST 200 in 4139 ms) - no `[rest]` line, nothing resent. `calendar-sync` v8's live
-reading is step 7's GET (200, `BEGIN:VCALENDAR` - the feed is read through its `rest()`). Not observed yet: `east-feed-refresh` v2's
-first scheduled run (2026-10-27 10:30 UTC - its `east.refresh` audit row from `cron`, `ok` true), `daily-reminder` v11's first
-`offers` run (`silvis-offers-daily`, 2026-10-27 13:00 UTC) and first `open-shifts` run (`silvis-open-shifts-weekly`, Monday
-2026-11-02 12:00 UTC), `office-notifications` v7's first scheduled digest (Monday 2026-11-02 11:00 UTC) - or an earlier digest or
-publish from the app - and `send-notification` v13's first real send (the next trade, schedule-change or vacation e-mail). The comments of `scripts/verify-rls.sh` 19i / 20i still name `send-notification` v12 / `east-feed-refresh` v1 as
-deployed - left for the next verify-rls change (a change there moves its sha pins).
-Not observed yet: a resend in the wild - an `[rest] <table>: HTTP 401 PGRST303 (attempt 1 of 3) - again in 1000 ms` line in the
-function logs, followed by the run's normal lines; the next platform refusal is its first live reading.
+reading is step 7's GET (200, `BEGIN:VCALENDAR` - the feed is read through its `rest()`). The other scheduled runs and a resend in
+the wild were not observed at the deploy - the next paragraphs have what was read since. The comments of `scripts/verify-rls.sh`
+19i / 20i still name `send-notification` v12 / `east-feed-refresh` v1 as deployed - left for the next verify-rls change (a change
+there moves its sha pins).
+
+**Observed** (the first day on the new code, 2026-10-27 - read-only by Claude Code at 16:17-17:30 UTC from `cron.job_run_details`,
+`net._http_response`, `audit_log`, `function_logs` and `function_edge_logs`; Faraz 10/27: "check the east-feed-refresh 10:30 run and
+the 13:00 offers run"): `east-feed-refresh` v2's first scheduled run (`silvis-east-feed-daily`, 2026-10-27 10:30 UTC) answered 200
+(`net._http_response` id 912: `ok` true, `errors` [], `source` `cron`, 21 published weeks 2026-09-28..2027-04-26, 9 East vacation
+ranges for FAK with `trusted` true and an empty `guard`, no review reset, 39 more weeks cached, `"audit":"inserted"`) and left its
+`east.refresh` audit row from `cron` (10:30:05Z, `ok` true) - no `[rest]` line. `daily-reminder` v11's first `offers` run
+(`silvis-offers-daily`, 2026-10-27 13:00 UTC) answered 200 (`net._http_response` id 916: `mode` `offers`, one period, "Jan 2027 -
+Jun 2027", `reason` `no-trigger`, offers close 2026-11-23, reminders due 2026-11-09 and 2026-11-20 - `sent` 0) - no `[rest]` line. The first
+resends in the wild: three, all in `daily-reminder` v11's hourly runs - 09:00 UTC (`call_schedule_data`), 10:00 UTC
+(`schedule_days`) and 11:00 UTC (`call_schedule_data`) each logged one `[rest] <table>: HTTP 401 PGRST303 (attempt 1 of 3) - again
+in 1000 ms` line, then the run's normal lines (`tomorrow on-call`, `done: sent=0 failed=0 ...`, followers, push): one resend was
+enough each time - no `attempt 2 of 3` line and no `failed:` line in any function's log. On v10 each would have stopped its run
+(2026-10-26: `daily-reminder` v10 answered 502 three times in 26 calls - 03:00, 04:00 and 10:00 UTC, the refusals named above - and
+`office-notifications` v6 once, the digest). Every function invocation from 03:31 to 16:40 UTC answered 200 - the three refused
+reads were inside runs that answered 200 (`function_edge_logs`: `daily-reminder` v11 14 - the 13 hourly runs from 04:00 and the
+offers run; `calendar-sync` v8 65; `east-feed-refresh` v2 1; no `office-notifications` or `send-notification` call).
+
+The pg_net timeout, seen (on a run with no resend): pg_net's default timeout is 5 s (`Timeout of 5000 ms reached`), and four of the
+five jobs keep it (`silvis-daily-reminder-hourly`, `silvis-offers-daily`, `silvis-office-digest-weekly` and
+`silvis-open-shifts-weekly` - only `silvis-east-feed-daily` sets `timeout_milliseconds`, 60000). The 14:00 UTC hourly run (no
+resend; 4890 ms in `function_edge_logs` - pg_net's 5 s also counts its DNS lookup and TCP/SSL handshake: `net._http_response` id
+917's `error_msg` reads 5001 ms in all, DNS 198, TCP/SSL handshake 58, request/response 4745) shows in `net._http_response` (id 917) as `timed_out` with no
+content, while the function finished its run (its `done`, followers and push lines) and answered 200 (`function_edge_logs`):
+nothing lost but the stored answer. The 10:00 UTC run took 7002 ms (its resend's wait was 1 s of that) - past the 5 s, so its pg_net
+answer most likely timed out too (not read: its `net._http_response` row had expired before it was read - `pg_net.ttl` is 6 hours).
+Not new with the retry - the 14:00 run had no resend, v10's slowest hourly run on 10/26 took 4549 ms (near the limit - the 14:00
+run's 4890 ms timed out), and the 10/12 digest 5856 ms; but a resend's wait adds 1 s (4 s for two). While those four jobs keep the default, a long run's outcome is read from the function
+logs, not from `net._http_response`.
+
+Not observed yet: `daily-reminder` v11's first `open-shifts` run (`silvis-open-shifts-weekly`, Monday 2026-11-02 12:00 UTC),
+`office-notifications` v7's first scheduled digest (Monday 2026-11-02 11:00 UTC) - or an earlier digest or publish from the app -
+`send-notification` v13's first real send (the next trade, schedule-change or vacation e-mail), and a resend refused again (an
+`attempt 2 of 3` line).
 
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
@@ -1004,8 +1035,8 @@ with the statement below, after `east-feed-refresh` was deployed and its dryRun 
 Prompt 31 Part A"); `cron.job` then read five rows, all active - this one jobid 8, `30 10 * * *`. Its first run, 2026-10-20 10:30
 UTC, left one `east.refresh` audit row (10:30:08Z, `ok` `true` - section 3's step 6). 10:30 UTC = 05:30 CDT / 04:30 CST, before
 the Monday 11:00 UTC digest (it reads `east_feed`) and the 13:00 UTC offers job. `timeout_milliseconds` is set because pg_net's
-default is a few seconds while one run makes up to five reads of the other project (8 s cap each); none of the other four jobs
-sets it. The same Vault secret, the same fail-closed `unset`.
+default is 5 s (`Timeout of 5000 ms reached` - seen 2026-10-27, section 3's "2026-10-26 - the PGRST303 retry") while one run makes
+up to five reads of the other project (8 s cap each); none of the other four jobs sets it. The same Vault secret, the same fail-closed `unset`.
 
 ```sql
 -- Prompt 31 Part A: the daily East feed refresh, 10:30 UTC (created 2026-10-20, jobid 8 - see above)

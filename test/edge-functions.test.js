@@ -4648,7 +4648,7 @@ check("10/26 retry (pins kept deliberately 10/27 - the deploy's record step): ea
     assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), RETRY_DEPLOYED_SHA256[n], n + ": the source is the deployed v" + v + " (2026-10-27 03:30 UTC - the staged file and the re-download) - it must stay byte-identical until the next deploy; a source change flips the header wording and moves this pin with a new deploy and record");
   });
 });
-check("10/26 retry: the README carries the deploy record - section 3's '2026-10-26 - the PGRST303 retry' (Status DEPLOYED 2026-10-27 03:30:11-03:30:19 UTC by Faraz, the five versions; the observed paragraph - the log's hashes, the lists before and after, the live checks, the flip rule; the resend in the wild not observed yet), the east-feed-refresh row's v2, and section 7's rollback (the five backups)", () => {
+check("10/26 retry: the README carries the deploy record - section 3's '2026-10-26 - the PGRST303 retry' (Status DEPLOYED 2026-10-27 03:30:11-03:30:19 UTC by Faraz, the five versions; the observed paragraph - the log's hashes, the lists before and after, the live checks, the flip rule; then the first day on the new code - the 10:30 East refresh, the 13:00 offers run, the first resends, the pg_net timeout seen - and what is still not observed), the east-feed-refresh row's v2 and its first run, section 4's 5 s, and section 7's rollback (the five backups)", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const iR = s3.indexOf("### 2026-10-26 - the PGRST303 retry"), jR = s3.indexOf("\n### ", iR + 10);
   const rec = s3.slice(iR, jR < 0 ? undefined : jR);
@@ -4663,13 +4663,45 @@ check("10/26 retry: the README carries the deploy record - section 3's '2026-10-
   Object.entries(RETRY_DEPLOYED_SHA256).forEach(([n, h]) => assert.ok(ob.indexOf("`" + n + "` `" + h.slice(0, 12) + "...`") > 0, "the observed paragraph quotes " + n + "'s staged hash " + h.slice(0, 12)));
   assert.ok(ob.includes("each main `57dd93d`'s file (`f88f9289...`, `ff717c93...`, `9b806cef...`, `ab7a6a70...`, `e7a345da...`)") && ob.includes("and each re-download the staged file"), "the backups in the deploy order, each 57dd93d's; each re-download the staged file");
   {
-    // where each function's new code stands live: two readings observed, the rest named as not observed - in that sentence
-    const nA = ob.indexOf("Not observed yet: `east-feed-refresh`"), nB = ob.indexOf("vacation e-mail).", nA);
-    assert.ok(nA > 0 && nB > nA, "the not-observed sentence");
-    const not = ob.slice(nA, nB), seen = ob.slice(0, nA);
-    ["`east-feed-refresh` v2's first scheduled run (2026-10-27 10:30 UTC", "`daily-reminder` v11's first `offers` run", "first `open-shifts` run", "`office-notifications` v7's first scheduled digest (Monday 2026-11-02 11:00 UTC)", "`send-notification` v13's first real send"].forEach((s) => assert.ok(not.includes(s), "not observed yet: " + s));
+    // the deploy paragraph: the 04:00 run and calendar-sync's step 7 GET; what it did not see is in the first day's paragraphs
+    const iD = ob.indexOf("**Observed** (the first day on the new code, 2026-10-27");
+    assert.ok(iD > 0, "the first day's observed paragraph follows the deploy's");
+    const seen = ob.slice(0, iD), day = ob.slice(iD);
     assert.ok(seen.includes("`daily-reminder` v11's hourly run at 04:00 UTC") && seen.includes("`net._http_response` id 905") && seen.includes("no `[rest]` line, nothing resent") && seen.includes("`calendar-sync` v8's live reading is step 7's GET"), "observed: the 04:00 run (id 905, no resend) and calendar-sync's step 7 GET");
     assert.ok(seen.includes("the script compares CRLF-normalised hashes") && seen.includes("byte-identical to the repo files - `cmp`"), "the re-download compare says how it was checked");
+    assert.ok(seen.includes("The other scheduled runs and a resend in the wild were not observed at the deploy - the next paragraphs have what was read since.") && !seen.includes("Not observed yet"), "the deploy paragraph names nothing as still not observed - the first day's paragraphs do");
+    // the first day (10/27, read-only): the 10:30 East refresh, the 13:00 offers run, the three resends, every call 200
+    [
+      "read-only by Claude Code at 16:17-17:30 UTC",
+      "`east-feed-refresh` v2's first scheduled run (`silvis-east-feed-daily`, 2026-10-27 10:30 UTC) answered 200 (`net._http_response` id 912: `ok` true, `errors` [], `source` `cron`",
+      "`east.refresh` audit row from `cron` (10:30:05Z, `ok` true) - no `[rest]` line.",
+      "`daily-reminder` v11's first `offers` run (`silvis-offers-daily`, 2026-10-27 13:00 UTC) answered 200 (`net._http_response` id 916: `mode` `offers`",
+      "reminders due 2026-11-09 and 2026-11-20 - `sent` 0) - no `[rest]` line.",
+      "The first resends in the wild: three, all in `daily-reminder` v11's hourly runs - 09:00 UTC (`call_schedule_data`), 10:00 UTC (`schedule_days`) and 11:00 UTC (`call_schedule_data`)",
+      "one resend was enough each time - no `attempt 2 of 3` line and no `failed:` line in any function's log",
+      "`daily-reminder` v10 answered 502 three times in 26 calls - 03:00, 04:00 and 10:00 UTC",
+      "Every function invocation from 03:31 to 16:40 UTC answered 200 - the three refused reads were inside runs that answered 200",
+      "`calendar-sync` v8 65;",
+    ].forEach((s) => assert.ok(day.includes(s), "the first day: " + s));
+    // the pg_net timeout, seen on a run with no resend: the 5 s default, the four jobs that keep it, the 14:00 run timed out with its work done
+    [
+      "The pg_net timeout, seen (on a run with no resend): pg_net's default timeout is 5 s (`Timeout of 5000 ms reached`), and four of the five jobs keep it (`silvis-daily-reminder-hourly`, `silvis-offers-daily`, `silvis-office-digest-weekly` and `silvis-open-shifts-weekly` - only `silvis-east-feed-daily` sets `timeout_milliseconds`, 60000)",
+      "id 917's `error_msg` reads 5001 ms in all, DNS 198, TCP/SSL handshake 58, request/response 4745",
+      "`net._http_response` (id 917) as `timed_out` with no content, while the function finished its run (its `done`, followers and push lines) and answered 200",
+      "The 10:00 UTC run took 7002 ms (its resend's wait was 1 s of that) - past the 5 s, so its pg_net answer most likely timed out too (not read: its `net._http_response` row had expired before it was read - `pg_net.ttl` is 6 hours)",
+      "a long run's outcome is read from the function logs, not from `net._http_response`",
+    ].forEach((s) => assert.ok(day.includes(s), "the timeout reading: " + s));
+    // what is still not observed - and the readings taken on the first day are not in it
+    const nA = day.indexOf("Not observed yet: `daily-reminder` v11's first `open-shifts` run"), nB = day.indexOf("`attempt 2 of 3` line).", nA);
+    assert.ok(nA > 0 && nB > nA, "the not-observed sentence");
+    const not = day.slice(nA, nB);
+    ["first `open-shifts` run (`silvis-open-shifts-weekly`, Monday 2026-11-02 12:00 UTC)", "`office-notifications` v7's first scheduled digest (Monday 2026-11-02 11:00 UTC)", "`send-notification` v13's first real send", "a resend refused again"].forEach((s) => assert.ok(not.includes(s), "not observed yet: " + s));
+    // keyed on the readings taken on 10/27, so a later reading of the same functions (e.g. the first offers run that sends) can still be listed
+    ["`east-feed-refresh` v2's first scheduled run", "first `offers` run (`silvis-offers-daily`, 2026-10-27", "2026-10-27 10:30 UTC", "2026-10-27 13:00 UTC", "resend in the wild"].forEach((s) => assert.ok(!not.includes(s), "no longer in the not-observed sentence: " + s));
+    assert.ok(!flat.includes("Not observed yet: a resend in the wild") && !flat.includes("Not observed yet: `east-feed-refresh`"), "the deploy's not-observed lines are gone");
+    const ny = [];
+    flat.replace(/not observed yet/gi, (m, k) => { ny.push(k); return m; });
+    assert.ok(ny.length === 1 && ny[0] === flat.indexOf("Not observed yet: `daily-reminder` v11's first `open-shifts` run"), "'not observed yet' only in the closing sentence, in any case: " + ny.join(", "));
   }
   assert.ok(ob.includes("(v7, v1, v6, v12, v10)") && ob.includes("(v8, v2, v7, v13, v11") && ob.includes("`calendar-sync` GET 200 `BEGIN:VCALENDAR`, the four gated POSTs 401"), "the lists before and after, the live checks");
   assert.ok(ob.includes("The source's own headers still read `prepared, NOT deployed` (pinned in `test/edge-functions.test.js`) on purpose") && ob.includes("that wording flips, with its pins, at the next source change"), "the flip rule");
@@ -4678,7 +4710,9 @@ check("10/26 retry: the README carries the deploy record - section 3's '2026-10-
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.indexOf("deploy-rest-retry.sh") > 0 && /PGRST303/.test(s7), "section 7: the rollback of the retry deploy");
   assert.ok(/v11 - v10 plus the PGRST303 retry/.test(s7.replace(/\s+/g, " ")), "section 7: revision z's rollback says it now takes the retry away too");
-  assert.ok(ob.includes("Not observed yet: a resend in the wild"), "the resend in the wild named as not observed");
+  assert.ok(efRow.includes("deployed 2026-10-27 03:30:13 UTC (its first scheduled run 2026-10-27 10:30 UTC, its audit row `ok` `true`)"), "the east-feed-refresh row names v2's first scheduled run");
+  const flatAll = readme.replace(/\s+/g, " ");
+  assert.ok(flatAll.includes("`timeout_milliseconds` is set because pg_net's default is 5 s (`Timeout of 5000 ms reached` - seen 2026-10-27, section 3's \"2026-10-26 - the PGRST303 retry\")") && !flatAll.includes("pg_net's default is a few seconds"), "section 4 names pg_net's default timeout as seen: 5 s");
   const gateRow = readme.split("\n").find((l) => l.startsWith("| east-feed-refresh | OFF")) || "";
   assert.ok(gateRow.includes("v2 (the PGRST303 retry - the gate unchanged) since 2026-10-27 03:30:13 UTC"), "the gate table's east-feed-refresh row names v2");
   assert.ok(s7.replace(/\s+/g, " ").includes("(the `@restRetry` block and `rest()` sending through it, as in `d318cd9`)"), "section 7: keeping the retry means the block and rest() through it");
