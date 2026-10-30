@@ -981,7 +981,8 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
 - **Fairness = everyone as equal as possible**: implied equal shares of primary slots and, separately, of backup slots
   for every pool member; no neutral/zero terms; primary spread then backup spread in the score; smoothing moves backup
   days too. Sarkar is outside the equal-share pool; her soft target is 2 primary days per window week instead (the clinic manager
-  9/22 evening; supersedes the daytime 3–4; Prompt 12 N revised).
+  9/22 evening; supersedes the daytime 3–4; Prompt 12 N revised) (⟶ 3 since Faraz 10/29 - the roster row and this section's
+  Sarkar bullet).
 - **Water-filled share + convex deviation (Faraz 9/23, item WF, after the November-backups report - history, `docs/HISTORY.md`)** —
   supersedes §6's "flat share" paragraph. *Model* (`generator.js genTargets` / `genWaterFill` / `genDevCost`): per role and
   calendar month the pool's slots = the open in-range slots (primary: after Sarkar's reserved window primaries) **plus every

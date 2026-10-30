@@ -5036,7 +5036,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // pin moved deliberately 10/29 (Prompt 33, Faraz): her windows end on Thursday and her target is 3 (was "11/16-11/20, 12/14-12/18,
     // 1/11-1/15 (about 2 primary days per window week)"); preferAlternateDays and maxConsecutiveAnyRole came off, so no line names them
     const s6 = words("s6"); assert.ok(s6.some(s => s === "Windows: 10/19-10/23, 11/16-11/19, 12/14-12/17, 1/11-1/14 (about 3 primary days per window week)."), JSON.stringify(s6)); assert.ok(s6.some(s => s === "Weekends: one day at a time."));
-    assert.ok(!s6.some(s => /alternate|any role/i.test(s)), "10/29: no alternate-days or any-role words for her: " + JSON.stringify(s6));
+    // review 10/30: her whole word list - the old negative /alternate|any role/ could never see "Prefer alternating days."
+    assert.deepStrictEqual(s6, ["Windows: 10/19-10/23, 11/16-11/19, 12/14-12/17, 1/11-1/14 (about 3 primary days per window week).", "Weekends: one day at a time.", "Soft limit: 7 primary days a month (the group's).", "At most 2 consecutive primary days."], "10/29: her words in full - no alternate-days or any-role line: " + JSON.stringify(s6));
+    assert.ok(H.offerRulesWords(Object.assign({}, seed.surgeonRules.s6, { preferAlternateDays: true }), seed.groupRules).some(s => /alternat/i.test(s)) && H.offerRulesWords(Object.assign({}, seed.surgeonRules.s6, { maxConsecutiveAnyRole: 2 }), seed.groupRules).some(s => /any role/i.test(s)), "10/29: the two removed keys WOULD be spoken (the pin above can fail)");
     assert.deepStrictEqual(H.offerRulesWords(null, seed.groupRules), ["No rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({}, {}), ["No recurring rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({ name: "X" }, { defaultMonthlyCap: { primary: 8 } }), ["Cap: the group default of 8 primary days a month."]);

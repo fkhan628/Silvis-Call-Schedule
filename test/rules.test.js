@@ -364,6 +364,14 @@ okElig(dec16, "10/29 seed: her December shape (Mon B, Tue P, Wed P, Thu B) - Wed
 lacksSoft(dec16, "consecutive-primary", "10/29 seed: ...with no consecutive-primary");
 lacksSoft(dec16, "long-run", "10/29 seed: ...and no long-run over the four days");
 eq(softW(dec16, "window-week-below-target:3"), -3, "10/29 seed: ...and the target-3 bonus (2 primaries in the week)");
+// review 10/30: every placement of both weeks is ELIGIBLE with the other three held (a soft weight alone cannot stand in for it -
+// rules.js keeps the soft list on a hard-blocked result)
+const SK_SHAPES = { November: [["2026-11-16", P], ["2026-11-17", P], ["2026-11-18", B], ["2026-11-19", P]], December: [["2026-12-14", B], ["2026-12-15", P], ["2026-12-16", P], ["2026-12-17", B]] };
+for (const [wk, shape] of Object.entries(SK_SHAPES)) shape.forEach(([d, role]) => {
+  const held = {};
+  shape.filter(([o]) => o !== d).forEach(([o, r]) => { held[o] = r === P ? { primary: SARKAR } : { primary: null, backup: SARKAR }; });
+  okElig(R.eligibility(makeCtx({ schedule: held }), d, role, SARKAR), "10/29 seed: her " + wk + " shape - " + d + " " + role + " is eligible with the other three held");
+});
 const dec3 = makeCtx({ schedule: { "2026-12-15": { primary: SARKAR }, "2026-12-17": { primary: SARKAR } } });
 blocked(R.eligibility(dec3, "2026-12-16", P, SARKAR), "max-consecutive:2", "10/29 seed: Wed 12/16 between her Tue and Thu primaries is three in a row - the hard limit 2 (why Thu 12/17 went to Acton)");
 okElig(R.eligibility(sk2, "2026-10-22", B, SARKAR), "backup after two primaries is legal (primary-only counting)");

@@ -375,27 +375,33 @@ decides the Trauma Director role.
   on call Monday to Thursday of a window week: primary on most of those days, backup on the rest.** Her rules since 10/29:
   `availableWindows` [1–3] end on Thursday (October's past window stays), `daysPerWindowWeek.target` **3** (`countsBackup`
   false), `preferAlternateDays` and `maxConsecutiveAnyRole` **removed** (consecutive window days are her pattern now);
-  `maxConsecutiveDays` 2 stays hard. Her two weeks: **November** Mon 11/16 P, Tue 11/17 P, Wed 11/18 B, Thu 11/19 P;
-  **December** Mon 12/14 B, Tue 12/15 P, Wed 12/16 P, Thu 12/17 B — Khan gave her his traded 12/16 primary, so the Thursday
-  primary went to Acton (the only surgeon eligible that day) and Burchett kept 12/14. §8 item 28 has the details; the
-  bullets below are the 9/22 record (superseded where they say Mon–Fri, a window Friday, every other day or the limit 2).
+  `maxConsecutiveDays` 2 stays hard. Her two weeks: **November** Mon 11/16 P, Tue 11/17 P, Wed 11/18 B, Thu 11/19 P (three
+  primaries); **December** Mon 12/14 B, Tue 12/15 P, Wed 12/16 P, Thu 12/17 B — Khan gave her his traded 12/16 primary, so the
+  Thursday primary went to Acton (the only surgeon eligible that day), who gives her the 12/14 backup, and Burchett kept the
+  12/14 primary. December's two primaries are one under her target of 3 by that choice: Generate's diagnostics read that
+  week as under its target, as expected. §8 item 28 has the details; the bullets below are the 9/22 record (superseded where
+  they say Mon–Fri, a window Friday, every other day, the target 2 or the any-role soft limit 2; the hard limit of 2
+  consecutive primary days stands).
 - Available **only** inside windows supplied by administration. ⟶ **9/22 evening (the clinic manager, after
   meeting Dr. Sarkar): the weeks are Oct 19–23, Nov 16–20, Dec 14–18, Jan 11–15 — Mon–Fri.** (Earlier, via the administrator
   and Burchett's 9/17 plan: Oct 19–24, Nov 16–21, Jan 11–16 with Saturdays. The Saturdays are no longer stated; see §7
   for what that does to 10/24.)
 - ⟶ **9/22 evening: she starts with 2 primary days per window week** ("open to adding more days but wants to see how
   call goes first and then reassess"). This supersedes the 9/22 daytime "3–4 days". Primary days count; backup days do
-  not.
+  not. (⟶ 3 since 10/29, Faraz - the first bullet.)
 - ⟶ **Faraz 9/22 evening: none of Sarkar's rules are hard and fast at this point — "she will adjust once she gets here
   because she will need to."** So: the **2 days is a SOFT target** (`daysPerWindowWeek` target 2, no hard min/max — a
-  week with 1 or 3 is a warning in diagnostics, not a violation); every-other-day is a soft preference; the only hard
+  week with 1 or 3 is a warning in diagnostics, not a violation; ⟶ the target is 3 since 10/29, still soft); every-other-day
+  is a soft preference (⟶ removed 10/29); the only hard
   facts are her **windows** (she is physically here only those weeks) and the group-wide vacation/lock rules. Keep all
   of it as data in Setup → Rules so it can be tightened after her first window.
 - **Mainly every other day when possible** (soft). **A Friday may be taken as a standalone day, separate from
   Saturday/Sunday**; a Saturday standalone is fine if it is ever inside a window again; no Fri–Sun block (soft, strong);
-  Sunday is never inside a window. Backup on her remaining window days is allowed but not required.
+  Sunday is never inside a window. Backup on her remaining window days is allowed but not required. (⟶ 10/29: no
+  every-other-day preference and no Friday - her windows end on Thursday; the first bullet.)
 - Her target is her window-week days, not an equal share. A handoff partner the next morning is a diagnostics check.
-- ⟶ **Seed keys (Prompt 12 N, 9/22 evening):** `daysPerWindowWeek.target` = 2 (soft; a primary placement that keeps her **at or under** the target earns the bonus `window-week-below-target`, every day over it costs `window-week-over-target`; `countsBackup: false` = primary days only; the old `min`/`max` keys are ignored with a warning), `preferAlternateDays: true` (soft `consecutive-primary`), `weekendBlockPenalty: "strong"` (soft, on any multi-day block or split membership), `weekendStyle: "daily"` (a window Friday is a standalone day; `saturday-only` is legacy), `handoffPartnerRequired: true` = diagnostic only (`diagnostics.handoffGaps`); no `hardNeverWeekdays` — `availableWindows` is her only hard rule; her monthly primary target = target × window weeks in the month (`diagnostics.impliedTargets…windowTarget`, `diagnostics.windowWeeks`).
+- ⟶ **Seed keys (Prompt 12 N, 9/22 evening; ⟶ since 10/29 the target is 3 and `preferAlternateDays` is gone - the first
+  bullet):** `daysPerWindowWeek.target` = 2 (soft; a primary placement that keeps her **at or under** the target earns the bonus `window-week-below-target`, every day over it costs `window-week-over-target`; `countsBackup: false` = primary days only; the old `min`/`max` keys are ignored with a warning), `preferAlternateDays: true` (soft `consecutive-primary`), `weekendBlockPenalty: "strong"` (soft, on any multi-day block or split membership), `weekendStyle: "daily"` (a window Friday is a standalone day; `saturday-only` is legacy), `handoffPartnerRequired: true` = diagnostic only (`diagnostics.handoffGaps`); no `hardNeverWeekdays` — `availableWindows` is her only hard rule; her monthly primary target = target × window weeks in the month (`diagnostics.impliedTargets…windowTarget`, `diagnostics.windowWeeks`).
 - ⟶ **9/22 (Prompt 12 A): max 2 consecutive primary days is hard on real days**; any-role soft limit **2** (⟶ removed
   10/29, Faraz - see the first bullet).
 - ⟶ **Monthly cap (10/11, Prompt 32):** no cap key — the group default, the **soft limit of 7 primary days a month** (a hard 8
@@ -408,7 +414,7 @@ The generator treats Fri/Sat/Sun as one unit and chooses a pattern per weekend:
 1. **Block** — one surgeon Fri+Sat+Sun (Khan (his backup weekends; as primary, Fri–Sun is legal but earns no bonus since 9/30), Philip, Fierce — for Fierce this is the *only* way he takes a Friday).
 2. **Split** — one surgeon Fri+Sun, another Sat (Acton/Burchett pair; also valid for any two surgeons who both accept split). Keeps each under the 2-consecutive limit. Sarkar is offered in a split or block only under her `weekendBlockPenalty` (strong soft, 9/22 evening); with Mon–Fri windows she holds no Saturday or Sunday anyway (⟶ since 10/29 her windows end on Thursday: no Friday either).
 3. **Daily** — three independent days; fallback only — except for Sarkar (`weekendStyle: "daily"`), for whom a window Friday is a standalone day, the normal pattern (9/22 evening); no window carries a Saturday or Sunday now (⟶ and since 10/29 no Friday: her windows end on Thursday).
-4. **Friday** (Prompt 23, 9/30) — one surgeon takes the **Friday alone** and the **Saturday–Sunday is its own reduced unit**: a two-day block by one surgeon, or two daily days (with the daily-pattern penalty). Primary only, on a whole weekend, and only when the Friday holder or the Sat–Sun block holder carries `standaloneFriday` (Khan today): Khan's Friday alone beside someone else's Sat–Sun, or someone else's Friday beside Khan's Sat–Sun pair (two daily days go only beside his Friday). Costs: Khan's lone Friday has no style penalty (it is his shape; it earns his weekday bonus) and his Sat–Sun pair no mismatch. Anyone else's two-day block pays his style's mismatch (+3) — a **block-style holder too** (Philip: his style wants the Friday as well; ⟶ *review 10/1: the unit choice used to charge him nothing while the per-day check and the diagnostics flagged the mismatch*), a split-style holder (Acton, Burchett) +3. Anyone else's lone Friday beside Khan's pair costs his style's daily-member penalty: 0 for Sarkar's window Fridays (daily style), +3 for a block- or split-style Friday. **Fierce never takes one** — his Friday, Saturday and Sunday outside his derived weeks are block-only (`weekend-block-only`), so neither a lone Friday nor a Sat–Sun pair is open to him. With nobody carrying the key, no `friday` pattern exists at all.
+4. **Friday** (Prompt 23, 9/30) — one surgeon takes the **Friday alone** and the **Saturday–Sunday is its own reduced unit**: a two-day block by one surgeon, or two daily days (with the daily-pattern penalty). Primary only, on a whole weekend, and only when the Friday holder or the Sat–Sun block holder carries `standaloneFriday` (Khan today): Khan's Friday alone beside someone else's Sat–Sun, or someone else's Friday beside Khan's Sat–Sun pair (two daily days go only beside his Friday). Costs: Khan's lone Friday has no style penalty (it is his shape; it earns his weekday bonus) and his Sat–Sun pair no mismatch. Anyone else's two-day block pays his style's mismatch (+3) — a **block-style holder too** (Philip: his style wants the Friday as well; ⟶ *review 10/1: the unit choice used to charge him nothing while the per-day check and the diagnostics flagged the mismatch*), a split-style holder (Acton, Burchett) +3. Anyone else's lone Friday beside Khan's pair costs his style's daily-member penalty: 0 for Sarkar's window Fridays (daily style; ⟶ none from November since 10/29 - her windows end on Thursday), +3 for a block- or split-style Friday. **Fierce never takes one** — his Friday, Saturday and Sunday outside his derived weeks are block-only (`weekend-block-only`), so neither a lone Friday nor a Sat–Sun pair is open to him. With nobody carrying the key, no `friday` pattern exists at all.
 
 Backup for the weekend is filled with the same unit logic after primary. A surgeon's `weekendStyle` is a preference; the hard constraints (availability, caps, max consecutive) always win.
 
@@ -986,7 +992,7 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
 4. ~~Khan as backup on ordinary Tue/Thu~~ — answered 9/22: backup is open to everyone.
 5. **Philip's monthly cap** — none stated; the group default (8 primary) applies from November although his own October was 15 days. ⟶ **10/11 (Prompt 32): the group default is now the soft limit of 7 primary days a month, with no hard cap** (it was a hard 8); still open: does he want a number of his own (Setup → Rules → Philip → add the "Monthly cap" rule → "a number")? ⟶ B10 (9/23): and his **2027 weeks remain a rule** (`availableWeeks`, §3) for Jan 2027 (1/11, 1/25) and Feb–Apr 2027 until he paints them — he has no offer and no mode there, so he is *not started* and the list governs primary; ask him to paint (or set him `preferred`) before the freezes (Jan 2027: 11/23; Feb–Apr 2027: 12/21) rather than importing the weeks as `either` offers again (item 15's consequence).
 6. ~~**Sat 10/24 primary** — open since Sarkar dropped to two days (Faraz 9/22 evening); who covers it (see §7 candidates).~~ ⟶ published 9/23: Khan primary, Fierce backup (generated, UNLOCKED — lock the row in the day editor if it should survive a re-Generate: the default range starts at the first open slot, 10/15, and covers 10/24). ⟶ 9/25: 10/15 is filled (item 1), so the default range no longer starts there — it starts at the first open slot on or after today.
-7. **Sarkar's day count after her first window** — soft target 2 for now; tighten or raise `daysPerWindowWeek` in Setup → Rules once she has been here.
+7. ~~**Sarkar's day count after her first window** — soft target 2 for now; tighten or raise `daysPerWindowWeek` in Setup → Rules once she has been here.~~ ⟶ **answered 10/29 (Faraz, Prompt 33): raised to `daysPerWindowWeek.target` 3** after her October window (still soft, primary days only — `countsBackup` false); item 28 (d), §3 Sarkar.
 8. ~~Thanksgiving 11/26–29 for Khan~~ — **confirmed by Faraz 9/22 (evening)** (Prompt 12 Z): the item-B `awaitingConfirmation` flag and the "confirm" badge are cleared; the four rows stay locked (source `faraz-2026-09-21`). Wed 11/25 stays a separate locked one-off for Khan (2026 only), not part of the unit.
 9. **Backup opt-outs** — the 9/22 rule says anyone may opt out of backup explicitly; nobody has. Ask the group once.
 10. ~~11/9, 11/14, 11/15 backup~~ — decided 9/22 evening: **Fierce is backup 11/9–11/16** and **Khan is primary 11/25 (2026 only)**; Burchett's four backup days and his 11/25 are superseded (in the app; the ER-panel author's document is retired).
@@ -1042,13 +1048,16 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     every pool member stands at or above his backup share she becomes the preferred backup on a window day (the what-if hands
     her Fri 11/20). Legal since 9/22 (backup allowed inside her window; §3, Sarkar). Ask the group: should she take backup on
     her window days at all, and if not, should a no-target candidate carry a flat soft weight for that role? Either answer is
-    data — her `backupOptOut` / a `groupRules` weight — never a name branch. Not changed for now.
+    data — her `backupOptOut` / a `groupRules` weight — never a name branch. Not changed for now. (⟶ 10/29, item 28: Fri 11/20
+    is outside her window now, and Faraz put her on backup on three window days by hand - Wed 11/18, Mon 12/14, Thu 12/17;
+    the generator question, a no-target candidate's backup weight, is unchanged.)
 19. **Philip's H2-2027 weeks (audit RG-7, 9/23).** His `availableWeeks` list ends with the week of 2027-06-28, so any Generate whose end passes 2027-07-04 has no Philip primary at all from 2027-07-05 on (today only the 12-month preset, ending 2027-09-30; after the milestone the 9- and 12-month presets) — ask him for his July–December 2027 weeks (and confirm the 6/7 tentative vacation) before such a run and enter them in Setup → Rules → Philip → availableWeeks (blob data; no seed change needed for the live app); the generator warns when a range outruns the list.
 20. **Offer modes per surgeon for the first period (Nov 2026 – Jan 2027) — defaults set 9/23 (Prompt 14 P5/P6),
     confirm.** Burchett and Philip **exhaustive** (Burchett's November list was published by the ER-panel author as his days and his
     December list governs both roles since 9/23; Philip's listed weeks are a whitelist — item T), Acton and Fierce **preferred**
     (Acton's relayed November days are preferences — item 13; Fierce's single days are extras on his pattern), Khan
-    and Sarkar **rules-only** (East feed; windows — her two days a week are a soft target, not offers). Data, not code:
+    and Sarkar **rules-only** (East feed; windows — her two days a week are a soft target, not offers; ⟶ three since 10/29,
+    item 28). Data, not code:
     `docs/silvis-seed.json` `offerPeriods[0].offerModes` / `rulesOnly` → `call_periods.offer_modes` / `rules_only_ids`
     through `node scripts/import-seed.js --apply`; from the next wave each surgeon sets it in the painter (the seed's
     keys win on a re-import — `offer_modes = coalesce(call_periods.offer_modes, '{}') || excluded.offer_modes` — so
@@ -1275,17 +1284,26 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     any list; none in the seed): his call days of the unit are one stretch, and so is any call day of his between two of them; a day
     listed in two units is the last one's, as everywhere in the engine (review 10/18).
 28. **Sarkar's November and December weeks, and her rules (Faraz 10/29, Prompt 33) — DECIDED.** (a) **No Friday call** in either
-    week; she is on call **Monday to Thursday**, primary on most of those days and backup on the rest. (b) **November:** Mon 11/16
+    week; she is on call **Monday to Thursday**, primary on most of those days and backup on the rest - three primaries in
+    November, two in December (c). (b) **November:** Mon 11/16
     primary (from Acton, a locked holder), Tue 11/17 primary, Wed 11/18 backup (from Burchett, a locked holder), Thu 11/19 primary
     — three primaries, the most her hard limit of 2 in a row allows in four days. (c) **December:** Faraz (Khan) gave her his
     traded Wed 12/16 primary instead of Burchett's 12/14; with her Tue 12/15 and Thu 12/17 that would be three primaries in a
     row, so the **Thu 12/17 primary goes to Acton** (the only surgeon eligible that Thursday - nobody else can take Tue 12/15
-    either) and she is backup on Mon 12/14 and Thu 12/17: Mon B, Tue P, Wed P, Thu B. Burchett keeps 12/14; Philip leaves the
-    12/17 backup, which also brings him back to his December backup cap of 7 (he held 8). Every edited role is locked; the
-    12/16 row keeps its `trade` source (Acton's backup is unchanged), as the day editor does. (d) **Her rules** ("Put her rules
+    either) and she is backup on Mon 12/14 (from Acton) and Thu 12/17 (from Philip): Mon B, Tue P, Wed P, Thu B. Burchett
+    keeps the 12/14 primary; Acton gives up the 12/14 backup and takes the 12/17 primary; Philip leaves the 12/17 backup,
+    which also brings him back to his December backup cap of 7 (he held 8 - the live read of 10/30). Her December week holds
+    two primaries, one under her target of 3, by that choice (Generate's diagnostics read it as under its target, as
+    expected). She holds no role on Fri 11/20, Sat 11/21, Fri 12/18 or Sat 12/19 (the live read of 10/30), so nothing of hers
+    falls outside the Thursday-ending windows. Every edited role is locked; the
+    12/16 row keeps its `trade` source (Acton's backup is unchanged), as the day editor does. Tallies (the live read of
+    10/30): November - Acton one primary fewer, Burchett one backup fewer, Sarkar 2 -> 3 primaries and 0 -> 1 backup;
+    December - Khan 4 -> 3 primaries, Acton 6 -> 7 primaries and 7 -> 6 backups, Philip 8 -> 7 backups, Sarkar 2 primaries
+    and 0 -> 2 backups; nobody else moves. (d) **Her rules** ("Put her rules
     in best you can"): windows end on Thursday (11/19, 12/17, 1/14), `daysPerWindowWeek.target` 3, `preferAlternateDays` and
-    `maxConsecutiveAnyRole` removed (her §3 entry; the seed carries the same values since 10/29). (e) **How it lands:** one
-    apply script Faraz runs (the rules, then the five November / December roles as two day-edit batches - 12/16 only after
+    `maxConsecutiveAnyRole` removed (her §3 entry; the seed carries the same values since 10/29; item 7 struck). (e) **How it
+    lands:** one apply script Faraz runs (the rules, then the five November / December days - six roles: her five and Acton's
+    12/17 primary - as two day-edit batches, 12/16 only after
     12/17 has moved, because the tool gates a batch as editor saves in date order); nothing was written by Claude Code. Its
     record (the snapshot ids, the audit rows, the read-back) is added here after the run. (f) **The January window** (the 11/23
     Generate): with these rules no Friday can be placed (her window ends Thursday); the Generate gives her one or two primaries
