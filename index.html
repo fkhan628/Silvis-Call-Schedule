@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+qCBhj41TAXbruLX9a8BJu00BGW0d57PrPg4wP4WahI=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-gJ7O/dVugp69QvXBu2ATNwneu4cOGwDe8p+1zew10xA=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-K724Cu3CeYXlJst8WsKp//3iC9KEfCk2gzAcD3GrkH4=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-tVRFkRvDTm5P2p3NB20rL57gCWLa/yJ4Y5p+ljQztgk=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -54,6 +54,8 @@
       .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
       /* the header's "N errors" the same way - its 36 px do not make the status line (and the header) taller */
       .hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }
+      /* 10/30: the nav tabs take 8 px side padding on a phone - a surgeon's eight buttons fit two rows at 390 px (three before; measured with the fallback font) */
+      .navtab { padding-left: 8px !important; padding-right: 8px !important; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -72,6 +74,8 @@
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
     /* Prompt 32 step 4: the over-soft-limit badge reads "over 7"; on a phone (below) ">7" */
     .cal-os-short { display: none; }
+    /* 10/30: the Open shifts board's role word - "Primary (TRAUMA)" on a wide screen, "Primary" on a phone (below) */
+    .ob-role-short { display: none; }
     /* 10/21 (Faraz: "put the people on vacation in the bottom of each day ... similar to how the Davenport calendar looks"):
        the vacation bar - one grey bar at the bottom of the day, the names inside (codes on a phone), joined to the next
        day's bar when the same people are off (cal-vac-l / cal-vac-r: it reaches into the cell's padding on that side). */
@@ -148,6 +152,10 @@
       .cal-badges { top: 2px; right: 2px; }
       .cal-os-long { display: none; }
       .cal-os-short { display: inline; }
+      .ob-role-long { display: none; }
+      .ob-role-short { display: inline; }
+      /* 10/30: on a phone the scheduler's all-clear strip items (a count of 0) give way - counts above 0 and the dates stay */
+      .cov-zero { display: none; }
       .cal-app { font-size: 9px; }
       /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
          tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
@@ -200,7 +208,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.22a";
+    var APP_VERSION = "2026.10.30a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -2190,7 +2198,7 @@ function CallSchedule() {
           message: why,
           db: true
         });
-        showToast("Couldn't save the vacation: " + why, "error");
+        showToast("Couldn't save the vacation: " + vacationGuardWords(why), "error");
         return {
           ok: false,
           error: why
@@ -2373,7 +2381,7 @@ function CallSchedule() {
           message: why,
           db: true
         });
-        showToast("Couldn't save that change: " + why, "error");
+        showToast("Couldn't save that change: " + vacationGuardWords(why), "error");
         return {
           ok: false
         };
@@ -6813,7 +6821,7 @@ function CallSchedule() {
           ok: false,
           error: guardRefused[0].message
         };
-        const ask = guardRefused.length === 1 ? guardRefused[0].confirmText : guardRefused.map(g => g.message.slice(0, g.message.length - VG_TAIL.length)).join("\n") + "\n\nAs the scheduler you may still enter them - enter them anyway?";
+        const ask = guardRefused.length === 1 ? vacationGuardWords(guardRefused[0].confirmText) : guardRefused.map(g => vacationGuardWords(g.message.slice(0, g.message.length - VG_TAIL.length))).join("\n") + "\n\nAs the scheduler you may still enter them - enter them anyway?";
         if (!confirm(ask)) return {
           ok: false,
           error: "Not saved - fewer surgeons than the minimum would be around."
@@ -6841,10 +6849,10 @@ function CallSchedule() {
       if (!res.ok) {
         const t = await res.text().catch(() => "");
         console.warn("Paint vacations: time_off bulk insert failed", res.status, t.slice(0, 300));
-        showToast("Paint vacations: nothing was saved - " + describeDbError(t), "error");
+        showToast("Paint vacations: nothing was saved - " + vacationGuardWords(describeDbError(t)), "error");
         return {
           ok: false,
-          error: describeDbError(t)
+          error: vacationGuardWords(describeDbError(t))
         };
       }
       const overrideWords = paintOverride ? paintOverride.map(ov => nameOf(ov.person_id) + " " + vacationGuardOverrideText(ov)).join("; ") : "";
@@ -7703,6 +7711,7 @@ function CallSchedule() {
     if (daysReadOkRef.current) showToast("Schedule loaded.", "info");else showToast("Still couldn't load the schedule - check your connection and try again. Nothing was changed.", "error");
   };
   const [copied, setCopied] = useState(false);
+  const [shareMsgShown, setShareMsgShown] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState("");
   const copyText = async (text, label) => {
     try {
@@ -7748,6 +7757,7 @@ function CallSchedule() {
       setTimeout(() => setCopied(false), 2000);
     } catch (e) {
       console.warn("Copy to clipboard failed:", e);
+      setShareMsgShown(true);
       showToast("Couldn't copy - long-press the message to copy it manually.", "error");
     }
   };
@@ -7955,7 +7965,7 @@ function CallSchedule() {
         message: guard.message
       };
     }
-    if (isScheduler) return confirm(guard.confirmText) ? {
+    if (isScheduler) return confirm(vacationGuardWords(guard.confirmText)) ? {
       ok: true,
       guard,
       overridden: true,
@@ -7966,7 +7976,7 @@ function CallSchedule() {
       cancelled: true,
       message: "Not saved - fewer surgeons than the minimum would be around."
     };
-    showToast(guard.message, "error");
+    showToast(vacationGuardWords(guard.message), "error");
     return {
       ok: false,
       guard,
@@ -8107,7 +8117,7 @@ function CallSchedule() {
     }
     return new Set(openSlots(base, gridDays[0], gridDays[gridDays.length - 1], todayStr).map(s => openSlotKey(s.day, s.role)));
   }, [schedule, previewGen, gridDays, todayStr]);
-  const [obHorizon, setObHorizon] = useState(30);
+  const [obHorizon, setObHorizon] = useState("all");
   const [obRole, setObRole] = useState("all");
   const [obWeekend, setObWeekend] = useState(false);
   const [claimSheet, setClaimSheet] = useState(null);
@@ -9003,7 +9013,7 @@ function CallSchedule() {
     }
   }, React.createElement("strong", null, "Refused:"), " ", React.createElement("span", {
     "data-testid": prefix + "-guard-message"
-  }, refusalMsg)), React.createElement("button", {
+  }, vacationGuardWords(refusalMsg))), React.createElement("button", {
     onClick: onDismiss,
     "aria-label": "Dismiss",
     style: {
@@ -10662,6 +10672,7 @@ function CallSchedule() {
     return tabs.map(([k, l]) => React.createElement("button", {
       key: k,
       "data-tab": k,
+      className: "navtab",
       style: _objectSpread(_objectSpread({}, css.tab(view === k, T.accent)), {}, {
         position: "relative"
       }),
@@ -10706,6 +10717,7 @@ function CallSchedule() {
       }
     }, boardSlots.length)));
   })(), React.createElement("button", {
+    className: "navtab",
     onClick: () => {
       setShowNotifs(p => !p);
       if (!showNotifs) markNotifsSeen();
@@ -10735,6 +10747,7 @@ function CallSchedule() {
     }
   }, myUnreadCount)), scheduleHistory.length > 0 && isScheduler && React.createElement("button", {
     "data-testid": "undo-btn",
+    className: "navtab",
     onClick: undoLastChange,
     style: _objectSpread(_objectSpread({}, css.tab(false)), {}, {
       fontSize: 12,
@@ -10744,6 +10757,7 @@ function CallSchedule() {
     title: `Undo (${scheduleHistory.length} steps)`
   }, "Undo"), mySurgeon && React.createElement("button", {
     "data-testid": "nav-paint-offers",
+    className: "navtab",
     onClick: () => setOfferSheet({
       personId: mySurgeon
     }),
@@ -10812,6 +10826,7 @@ function CallSchedule() {
       top: 0,
       right: 14,
       width: 340,
+      maxWidth: "calc(100vw - 28px)",
       maxHeight: 400,
       overflowY: "auto",
       background: "#fff",
@@ -10834,7 +10849,7 @@ function CallSchedule() {
       fontWeight: 700,
       color: "#1F2A3A"
     }
-  }, "Notifications"), React.createElement("div", {
+  }, "Alerts"), React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -10860,7 +10875,12 @@ function CallSchedule() {
       border: "none",
       fontSize: 16,
       cursor: "pointer",
-      color: "#8a94a0"
+      color: "#8a94a0",
+      minWidth: 36,
+      minHeight: 36,
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center"
     }
   }, "x"))), myNotifications.length === 0 ? React.createElement("p", {
     "data-testid": "notif-empty",
@@ -11610,6 +11630,11 @@ function CallSchedule() {
       fontFamily: mono,
       letterSpacing: 0.3
     });
+    const gridRow = gd => previewGen && previewGen.schedule && previewGen.schedule[gd] || schedule[gd] || null;
+    const legendExtH = gridDays.map(gd => dayHolder(gridRow(gd), "primary")).find(h => typeof h === "string" && h.indexOf("ext:") === 0);
+    const legendExt = legendExtH ? legendExtH.slice(4) : "";
+    const legendHol = rulesCtx ? gridDays.map(gd => isHolidayDay(rulesCtx, gd)).filter(Boolean).map(u => u.name).filter((n, i, all) => all.indexOf(n) === i) : [];
+    const legendVac = gridDays.some(gd => calVac(gd).length > 0);
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: css.card
     }, (() => {
@@ -11620,6 +11645,7 @@ function CallSchedule() {
         return React.createElement("button", {
           key: key,
           type: "button",
+          className: isScheduler && daysShown && !n && key === "cov-forecast-primary" ? "cov-zero" : undefined,
           "data-testid": key,
           "data-count": daysShown ? n : "",
           "data-first": daysShown ? first || "" : "",
@@ -11676,6 +11702,7 @@ function CallSchedule() {
         "data-testid": "cov-eastvac-unreviewed",
         "data-count": eastVacUnreviewed,
         onClick: openEastVacPanel,
+        className: eastVacUnreviewed ? undefined : "cov-zero",
         title: (eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + "Opens Setup > East feed.",
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
           color: eastVacUnreviewed ? "#8a5a10" : "#1a8040",
@@ -11693,6 +11720,7 @@ function CallSchedule() {
         "data-testid": "cov-eastvac-warn",
         "data-count": eastVacWarnings.length,
         onClick: openEastVacPanel,
+        className: eastVacWarnings.length ? undefined : "cov-zero",
         title: (eastVacWarnings.length ? eastVacWarnings.map(w => eastVacationWarnText(w, nameOf)).join(" | ") + " - " : "No upcoming East vacation breaks the vacation minimum or overlaps a published day. ") + "Opens Setup > East feed.",
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
           color: eastVacWarnings.length ? "#c04040" : "#1a8040",
@@ -11861,16 +11889,25 @@ function CallSchedule() {
       }
     }, React.createElement("strong", {
       title: "The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"
-    }, "On call now (until 07:00 ", onCall.handoffDow, "):"), React.createElement("span", null, "P"), " ", React.createElement(HolderTag, {
+    }, "On call now (until 07:00 ", onCall.handoffDow, "):"), React.createElement("span", {
+      style: {
+        whiteSpace: "nowrap"
+      }
+    }, "P ", React.createElement(HolderTag, {
       a: onCall.current,
       role: "primary",
       small: true
-    }), React.createElement("span", null, "B"), " ", React.createElement(HolderTag, {
+    })), React.createElement("span", {
+      style: {
+        whiteSpace: "nowrap"
+      }
+    }, "B ", React.createElement(HolderTag, {
       a: onCall.current,
       role: "backup",
       small: true
-    }), React.createElement("span", {
+    })), React.createElement("span", {
       "data-testid": "today-banner-msg",
+      hidden: !isPublicMode && !shareMsgShown,
       style: {
         fontFamily: mono,
         fontSize: 11,
@@ -11880,7 +11917,7 @@ function CallSchedule() {
       "data-testid": "share-today",
       onClick: shareTonightMsg,
       disabled: !daysShown,
-      title: daysShown ? undefined : "The schedule has not loaded - nothing to share yet",
+      title: daysShown ? "Shares: " + buildTonightMsg() : "The schedule has not loaded - nothing to share yet",
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "4px 10px",
         fontSize: 11,
@@ -12027,7 +12064,8 @@ function CallSchedule() {
       } : {};
       const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
       if (hol) titleBits.push(hol.name + " (holiday unit)");
-      if (a && a.note) titleBits.push("note: " + a.note);
+      const noteT = a && a.note ? isScheduler ? a.note : dayNoteShown(a.note) : "";
+      if (noteT) titleBits.push("note: " + noteT);
       const appE = !isPublicMode ? appByDay[d] || null : null;
       if (appE) titleBits.push("APP " + appE.name);
       const ovS = overSoftByDay[d] || null;
@@ -12211,11 +12249,13 @@ function CallSchedule() {
         color: T.open,
         fontWeight: 800
       }
-    }, "OPEN"), " = nobody assigned (today onward)"), React.createElement("span", null, React.createElement("span", {
+    }, "OPEN"), " = nobody assigned (today onward)"), legendExt && React.createElement("span", {
+      "data-testid": "legend-ext"
+    }, React.createElement("span", {
       style: {
         fontStyle: "italic"
       }
-    }, "Atwell"), " = external cover"), !isPublicMode && (isScheduler || gridDays.some(gd => {
+    }, legendExt), " = external cover"), !isPublicMode && (isScheduler || gridDays.some(gd => {
       const g = schedule[gd];
       return !!g && slotIsOpen(gd, null, todayStr) && (g.primaryLocked && !dayHolder(g, "primary") || g.backupLocked && !g.backup);
     })) && React.createElement("span", {
@@ -12225,7 +12265,21 @@ function CallSchedule() {
         alignItems: "center",
         gap: 3
       }
-    }, React.createElement(Padlock, null), " locked slot", isScheduler ? "" : " (ask the scheduler)"), React.createElement("span", null, "Fri-Sun tinted = weekend unit"), React.createElement("span", null, "gold = holiday unit"), React.createElement("span", {
+    }, React.createElement(Padlock, null), " locked slot", isScheduler ? "" : " (ask the scheduler)"), legendHol.length > 0 && React.createElement("span", {
+      className: "cal-mobile-note",
+      "data-testid": "legend-hol"
+    }, React.createElement("span", {
+      style: {
+        display: "inline-block",
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: T.holiday,
+        border: "1px solid " + dkCardBorder,
+        marginRight: 4,
+        verticalAlign: "-1px"
+      }
+    }), legendHol.join(", ")), legendVac && React.createElement("span", {
       "data-testid": "legend-vac"
     }, React.createElement("span", {
       style: {
@@ -12245,7 +12299,11 @@ function CallSchedule() {
         color: T.accentText,
         fontWeight: 800
       }
-    }, overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))), " = the primary is past his soft limit of primary days this month (the group's, or his own)"), !isPublicMode && appDaysState === "failed" && React.createElement("span", {
+    }, React.createElement("span", {
+      className: "cal-os-long"
+    }, overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))), React.createElement("span", {
+      className: "cal-os-short"
+    }, overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean)).replace(/over /g, ">"))), " = past the primary's monthly soft limit"), !isPublicMode && appDaysState === "failed" && React.createElement("span", {
       "data-testid": "legend-app-failed",
       style: {
         color: T.open,
@@ -12265,21 +12323,21 @@ function CallSchedule() {
         fontStyle: "italic",
         fontWeight: 700
       }
-    }, "A"), " name = the APP on call that day (third line)"), eastDetailsVisible && eastVacPeople.length > 0 && React.createElement("span", {
+    }, "A"), " name = APP on call"), eastDetailsVisible && eastVacPeople.length > 0 && gridDays.some(gd => calVac(gd).some(v => v.east === "unreviewed")) && React.createElement("span", {
       style: {
         display: "inline-flex",
         alignItems: "center",
         gap: 5
       },
-      title: "A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"
-    }, React.createElement("strong", null, "name?"), " in the vacation bar = an East vacation not reviewed yet (an away range shows as a plain name; home shows nothing - the hover keeps the state)"), React.createElement("span", null, "orange outline = today"), isScheduler && !isPublicMode && React.createElement("span", null, "Click a day to edit (eligibility-checked); saves per day with compare-and-swap."))), React.createElement(Collapsible, {
+      title: "A Davenport vacation of the person with the East code, not reviewed yet - decide it in Setup > East feed. An away range shows as a plain name, a home range not at all; the day's hover keeps the state."
+    }, React.createElement("strong", null, "name?"), " = an East vacation not reviewed yet"))), React.createElement(Collapsible, {
       css: css,
       ck: "cal_weekrows",
-      defaultOpen: true,
+      defaultOpen: isPublicMode,
       title: "Week rows (ER Call Panels layout)"
     }, React.createElement("p", {
       style: sectionNote
-    }, "ER-panel layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too."), React.createElement("div", {
+    }, "One row per Mon-Sun week; a run of days with the same surgeon is one line, open days in red."), React.createElement("div", {
       className: "table-wrap",
       style: {
         overflowX: "auto"
@@ -12631,6 +12689,7 @@ function CallSchedule() {
   }), view === "openshifts" && !isPublicMode && (() => {
     const rows = boardRows;
     const canAct = !!mySurgeon || isScheduler;
+    const nCols = 4 + (canAct ? 1 : 0) + (isScheduler ? 2 : 0);
     const horizonBtn = (v, text) => React.createElement("button", {
       key: String(v),
       type: "button",
@@ -12695,7 +12754,7 @@ function CallSchedule() {
       }
     }, !loaded ? "Loading schedule" : !daysReadOk ? "Schedule not loaded" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`)), React.createElement("p", {
       style: sectionNote
-    }, "Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.", mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : "", isScheduler ? " As the scheduler you can assign anyone from the day editor or write in outside cover." : "", " The generator's reason for leaving a slot open appears after the next Generate."), React.createElement("div", {
+    }, isScheduler ? React.createElement(React.Fragment, null, "Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.", mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : "", " As the scheduler you can assign anyone from the day editor or write in outside cover. The generator's reason for leaving a slot open appears after the next Generate.") : React.createElement(React.Fragment, null, "Open shifts in the published schedule from today on - each is one 24-hour shift, 07:00 to 07:00.", mySurgeon ? " Take one the rules allow you: it is yours at once (no approval) and the scheduler is told." : "")), React.createElement("div", {
       style: {
         display: "flex",
         flexWrap: "wrap",
@@ -12783,8 +12842,8 @@ function CallSchedule() {
       "data-to": boardEnd || "",
       "data-total": boardSlots.length,
       "data-ranges": boardRanges.map(r => r.start + ".." + r.end).join(",")
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Role"), React.createElement("th", null, "Unit"), React.createElement("th", null, "Why"), React.createElement("th", null, "Eligible now"), React.createElement("th", null, "Last announced"), canAct && React.createElement("th", null, "Action"))), React.createElement("tbody", null, rows.length === 0 && React.createElement("tr", null, React.createElement("td", {
-      colSpan: canAct ? 7 : 6,
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Role"), canAct && React.createElement("th", null, "Action"), React.createElement("th", null, "Unit"), React.createElement("th", null, "Eligible now"), isScheduler && React.createElement("th", null, "Why"), isScheduler && React.createElement("th", null, "Last announced"))), React.createElement("tbody", null, rows.length === 0 && React.createElement("tr", null, React.createElement("td", {
+      colSpan: nCols,
       style: {
         fontWeight: 600,
         padding: "12px 8px"
@@ -12834,41 +12893,24 @@ function CallSchedule() {
           fontSize: 10,
           letterSpacing: 0.5
         }
-      }, "OPEN"), " ", s.role === "primary" ? "Primary (TRAUMA)" : "Backup"), React.createElement("td", {
-        style: {
-          whiteSpace: "nowrap",
-          fontSize: 12
-        }
-      }, boardUnitText(s.unit, s.role)), React.createElement("td", {
-        style: {
-          fontSize: 12,
-          minWidth: 110
-        }
-      }, s.reason || "-"), React.createElement("td", {
-        style: {
-          fontSize: 12,
-          minWidth: 150
-        }
-      }, !rulesCtx ? "-" : eligible.length ? eligible.map(chip) : React.createElement("span", {
-        style: {
-          color: T.open,
-          fontStyle: "italic"
-        }
-      }, "nobody under the current rules")), React.createElement("td", {
-        "data-testid": "ob-announced",
-        style: {
-          whiteSpace: "nowrap",
-          fontSize: 12
-        }
-      }, announced ? fmtAuditTime(announced) : "never"), canAct && React.createElement("td", {
+      }, "OPEN"), " ", s.role === "primary" ? React.createElement(React.Fragment, null, React.createElement("span", {
+        className: "ob-role-long"
+      }, "Primary (TRAUMA)"), React.createElement("span", {
+        className: "ob-role-short"
+      }, "Primary")) : "Backup"), canAct && React.createElement("td", {
         style: {
           whiteSpace: "nowrap"
         }
       }, React.createElement("div", {
-        style: {
+        style: isScheduler ? {
           display: "flex",
           gap: 4,
           alignItems: "center"
+        } : {
+          display: "flex",
+          flexDirection: "column",
+          gap: 3,
+          alignItems: "flex-start"
         }
       }, mySurgeon ? me && me.ok && !locked ? React.createElement("button", {
         type: "button",
@@ -12920,7 +12962,33 @@ function CallSchedule() {
         style: _objectSpread(_objectSpread({}, css.mini(false)), {}, {
           padding: "6px 9px"
         })
-      }, "Outside cover"))));
+      }, "Outside cover"))), React.createElement("td", {
+        style: {
+          whiteSpace: "nowrap",
+          fontSize: 12
+        }
+      }, boardUnitText(s.unit, s.role)), React.createElement("td", {
+        style: {
+          fontSize: 12,
+          minWidth: 150
+        }
+      }, !rulesCtx ? "-" : eligible.length ? eligible.map(chip) : React.createElement("span", {
+        style: {
+          color: T.open,
+          fontStyle: "italic"
+        }
+      }, "nobody under the current rules")), isScheduler && React.createElement("td", {
+        style: {
+          fontSize: 12,
+          minWidth: 110
+        }
+      }, s.reason || "-"), isScheduler && React.createElement("td", {
+        "data-testid": "ob-announced",
+        style: {
+          whiteSpace: "nowrap",
+          fontSize: 12
+        }
+      }, announced ? fmtAuditTime(announced) : "never"));
     })))), boardTail.unread ? React.createElement("div", {
       "data-testid": "openshifts-tail",
       "data-unread": "1",
@@ -12942,7 +13010,7 @@ function CallSchedule() {
         marginTop: 8,
         lineHeight: 1.5
       }
-    }, boardTail.primary + boardTail.backup > 0 ? React.createElement(React.Fragment, null, "Not listed: ", boardTail.primary, " primary / ", boardTail.backup, " backup day(s) between ", fmtMD(boardTail.from), " and ", fmtMD(boardTail.through), " have no schedule row yet", boardEnd ? ` (after the last published day, ${boardEndText})` : "", ". The coverage strip counts them as open; Generate covers them.") : React.createElement(React.Fragment, null, "The published schedule runs through ", boardEndText, " - this board and the coverage strip's next-60-days counts agree.")), React.createElement("div", {
+    }, boardTail.primary + boardTail.backup > 0 ? isScheduler ? React.createElement(React.Fragment, null, "Not listed: ", boardTail.primary, " primary / ", boardTail.backup, " backup day(s) between ", fmtMD(boardTail.from), " and ", fmtMD(boardTail.through), " have no schedule row yet", boardEnd ? ` (after the last published day, ${boardEndText})` : "", ". The coverage strip counts them as open; Generate covers them.") : React.createElement(React.Fragment, null, "Not listed: ", boardTail.primary, " primary / ", boardTail.backup, " backup day(s) from ", fmtMD(boardTail.from), " to ", fmtMD(boardTail.through), " - not published yet.") : isScheduler ? React.createElement(React.Fragment, null, "The published schedule runs through ", boardEndText, " - this board and the coverage strip's next-60-days counts agree.") : React.createElement(React.Fragment, null, "Published through ", boardEndText, ".")), isScheduler && React.createElement("div", {
       "data-testid": "openshifts-lastgen",
       "data-mode": lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : "",
       "data-fixed": lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : "",
@@ -12996,7 +13064,7 @@ function CallSchedule() {
         fontSize: 13,
         lineHeight: 1.7
       }
-    }, React.createElement("div", null, React.createElement("strong", null, DAY_HDR[parse(claimSheet.day).getDay()], " ", fmtMD(claimSheet.day)), " - ", sheetDate(claimSheet.day)), React.createElement("div", null, "Role: ", React.createElement("strong", null, claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"), " - one 24-hour shift, 07:00 to 07:00."), React.createElement("div", null, "Unit: ", boardUnitText(claimSheet.unit, claimSheet.role))), claimSheet.mates.length > 0 && React.createElement("div", {
+    }, React.createElement("div", null, React.createElement("strong", null, DAY_HDR[parse(claimSheet.day).getDay()], " ", fmtMD(claimSheet.day)), " - ", sheetDate(claimSheet.day)), React.createElement("div", null, "Role: ", React.createElement("strong", null, claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"), " - one 24-hour shift, 07:00 to 07:00."), claimSheet.unit && React.createElement("div", null, "Unit: ", boardUnitText(claimSheet.unit, claimSheet.role))), claimSheet.mates.length > 0 && React.createElement("div", {
       "data-testid": "claim-unit-mates",
       style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
         marginTop: 10
@@ -13013,12 +13081,12 @@ function CallSchedule() {
       }
     }, claimSheet.soft.map((x, i) => React.createElement("li", {
       key: i
-    }, reasonLabel(x.reason, nameOf), " ", React.createElement("span", {
+    }, reasonLabel(x.reason, nameOf), isScheduler && React.createElement("span", {
       style: {
         fontFamily: mono,
         fontSize: 11
       }
-    }, "(weight ", x.weight, ")"))))) : React.createElement("div", {
+    }, " (weight ", x.weight, ")"))))) : React.createElement("div", {
       "data-testid": "claim-no-warnings",
       style: _objectSpread(_objectSpread({}, css.okBox), {}, {
         marginTop: 10
@@ -13030,7 +13098,7 @@ function CallSchedule() {
         margin: "10px 0 0",
         lineHeight: 1.5
       }
-    }, "Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away."), React.createElement("div", {
+    }, "Confirm puts you on the published schedule now (no approval step) and tells the scheduler. To hand it back later, propose a trade or give it away."), React.createElement("div", {
       "data-testid": "claim-actions",
       style: {
         display: "flex",
@@ -13327,9 +13395,18 @@ function CallSchedule() {
         }
       }, React.createElement("div", {
         style: css.subT
-      }, "Upcoming - next 90 days (", daysShown ? upcoming.length : "...", ")"), React.createElement("span", {
-        style: muted
-      }, "H holiday unit", eastDetailsVisible ? " - E East-derived week - F East forecast busy - EV East (Davenport) vacation" : "")), !daysShown ? React.createElement("p", {
+      }, "Upcoming - next 90 days (", daysShown ? upcoming.length : "...", ")"), (() => {
+        const seen = new Set();
+        upcoming.forEach(x => badgesFor(x.day, who).forEach(b => seen.add(b.k)));
+        const east = eastDetailsVisible ? [["E", "E East-derived week"], ["O", "O East override (no East call)"], ["F", "F East forecast busy"], ["V", "EV East (Davenport) vacation"]].filter(([k]) => seen.has(k)).map(([, w]) => w) : [];
+        if (!seen.has("H") && !east.length) return null;
+        return React.createElement("span", {
+          "data-testid": "mine-legend",
+          style: muted
+        }, seen.has("H") && React.createElement("span", {
+          className: "mine-hol-letter"
+        }, "H holiday", east.length ? " - " : ""), east.join(" - "));
+      })()), !daysShown ? React.createElement("p", {
         style: _objectSpread(_objectSpread({}, muted), {}, {
           fontStyle: "italic"
         })
@@ -13589,12 +13666,7 @@ function CallSchedule() {
       }, "My offers (", mine.length, " upcoming day", mine.length === 1 ? "" : "s", ")"), nextPer && React.createElement("span", {
         style: muted,
         "data-testid": "mine-offer-status"
-      }, nextPer.label, ": ", st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : pid === mySurgeon ? "following your rules" : "following their rules", nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : "")), mine.length === 0 ? React.createElement("p", {
-        style: _objectSpread(_objectSpread({}, muted), {}, {
-          fontStyle: "italic",
-          margin: 0
-        })
-      }, "No future dates offered - use Paint my offers above.") : React.createElement("div", {
+      }, nextPer.label, ": ", st === "submitted" ? "submitted" : st === "rules_only" ? pid === mySurgeon ? "going by your rules" : "going by their rules" : pid === mySurgeon ? "following your rules" : "following their rules", nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : "")), mine.length === 0 ? null : React.createElement("div", {
         style: {
           display: "flex",
           flexWrap: "wrap",
@@ -13704,12 +13776,12 @@ function CallSchedule() {
     "data-testid": "viewer-timeoff-note"
   }, "The surgeons enter their own vacations here (the office coordinator can enter one for them); this account reads them. An entry is refused over a day the surgeon is already published, so the list below never contradicts the calendar. Notes are operational and visible to the whole group.") : React.createElement("p", {
     style: sectionNote
-  }, isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : React.createElement(React.Fragment, null, "Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record", isScheduler ? " (as the scheduler you can enter or remove anyone's)" : "", "."), " Notes are operational and visible to the whole group."), !mySurgeon && !canEnterForAnyone && !isViewer ? React.createElement("p", {
+  }, isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct). Notes are operational and visible to the whole group." : React.createElement(React.Fragment, null, "Your vacations need no approval - the group is notified. If you are on call on any of their days (or primary the day before), trade those shifts first. Notes are visible to the whole group.", isScheduler ? " As the scheduler you can enter or remove anyone's vacation." : "")), !mySurgeon && !canEnterForAnyone && !isViewer ? React.createElement("p", {
     style: muted
   }, "Your account is not linked to a roster entry yet - the scheduler will link it.") : React.createElement(React.Fragment, null, !isViewer && React.createElement("p", {
     style: sectionNote,
     "data-testid": "vac-guard-note"
-  }, "At least ", vacationRules(groupRules).minSurgeonsAround, " surgeons must stay around on every day: an entry that would leave fewer is refused", isScheduler ? " (as the scheduler you are asked to confirm and may enter it anyway)" : "", ". The form shows who else is off before you save."), !isViewer && renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
+  }, "At least ", vacationRules(groupRules).minSurgeonsAround, " surgeons must stay around on every day: an entry that would leave fewer is refused", isScheduler ? " (as the scheduler you are asked to confirm and may enter it anyway)" : "", "."), !isViewer && renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon)), React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -13821,7 +13893,10 @@ function CallSchedule() {
       style: css.cardT
     }, "Propose a shift trade"), React.createElement("p", {
       style: sectionNote
-    }, "By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. ", isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "A trade is two-way: pick the day and role you take in return.", " ", React.createElement("strong", null, "Give away"), " offers the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back; they accept or decline, and an accepted give is applied like a trade."), fromId && React.createElement("div", {
+    }, isScheduler ? React.createElement(React.Fragment, null, "By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor. ", React.createElement("strong", null, "Give away"), " offers the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back; they accept or decline, and an accepted give is applied like a trade.") : React.createElement(React.Fragment, null, "Your colleague accepts or declines; an accepted trade or give goes straight onto the schedule and you are both notified.", moreToggle("tradeHow", "How"))), !isScheduler && openSettingsCards.tradeHow && React.createElement("p", {
+      "data-testid": "trade-how",
+      style: moreNote
+    }, "Before you propose and again when they accept, the day is checked against the rules (vacations, patterns, caps, consecutive days). A trade is two-way: pick the day and role you take in return. Give away hands the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back."), fromId && React.createElement("div", {
       "data-testid": "trade-kind",
       role: "group",
       "aria-label": "Trade or give away",
@@ -14127,9 +14202,9 @@ function CallSchedule() {
     }, React.createElement("div", {
       style: css.cardT,
       "data-testid": "trades-pending-title"
-    }, tradeListTitle("Pending", pending, tradeIsGiveProposal)), React.createElement("p", {
+    }, tradeListTitle("Pending", pending, tradeIsGiveProposal)), isScheduler && React.createElement("p", {
       style: sectionNote
-    }, isScheduler ? "Every open trade and give. The surgeon asked answers; you can answer or cancel any of them." : "Trades and gives waiting on you show Accept / Decline; ones you proposed show Cancel."), pending.length === 0 ? React.createElement("p", {
+    }, "Every open trade and give. The surgeon asked answers; you can answer or cancel any of them."), pending.length === 0 ? React.createElement("p", {
       style: _objectSpread(_objectSpread({}, muted), {}, {
         fontStyle: "italic"
       })
@@ -14458,7 +14533,7 @@ function CallSchedule() {
       margin: "0 0 8px",
       lineHeight: 1.5
     }
-  }, "E-mails go to your sign-in address: pick which events send one and when the daily reminder arrives (Central time)."), mySurgeon && React.createElement("div", {
+  }, "E-mails go to your sign-in address: pick which events send one and when the day-before reminder arrives (5:00 PM Central by default)."), mySurgeon && React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -14588,7 +14663,7 @@ function CallSchedule() {
         flexDirection: "column",
         gap: 6
       }
-    }, [["schedule_updates_email", "Schedule published / changes affecting me"], ["trade_updates_email", "Trade proposed / accepted / declined"], ["shift_reminders_email", "Shift reminders"]].map(([key, text]) => React.createElement("label", {
+    }, [["schedule_updates_email", "Schedule published / changes affecting me"], ["trade_updates_email", "Trade proposed / accepted / declined"], ["shift_reminders_email", "Reminder the day before my call"]].map(([key, text]) => React.createElement("label", {
       key: key,
       "data-testid": "notif-pref",
       style: {
@@ -16136,7 +16211,9 @@ function OfferPainterSheet({
   };
   const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
   const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
-  const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
+  const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules, {
+    eastDetails: !!eastDetails
+  }), [rules, groupRules, eastDetails]);
   const capRead = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid) : null;
   const cap = capRead ? capRead.primary : null;
   const capSoft = capRead && (cap === null || cap === undefined) ? capRead.preferred : null;
@@ -17234,7 +17311,7 @@ function OfferPainterSheet({
       marginTop: 4,
       lineHeight: 1.45
     }
-  }, shownMode === "exhaustive" ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)." : "Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. This applies in each month where you painted at least one day of this period. Your listed weeks, or the days you listed for a month, still apply - painting only adds days. My schedule marks each day you did not paint 'not offered' - trade if needed. (The default.)", periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""), periodStatus !== "submitted" && React.createElement("div", {
+  }, shownMode === "exhaustive" ? eastDetails ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)." : "You are never placed on a day you did not list (your vacations, caps and other rules still apply on your days)." : "Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. This applies in each month where you painted at least one day of this period. Your listed weeks, or the days you listed for a month, still apply - painting only adds days. My schedule marks each day you did not paint 'not offered' - trade if needed. (The default.)", periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""), periodStatus !== "submitted" && React.createElement("div", {
     style: {
       marginTop: 6,
       display: "flex",
@@ -17766,6 +17843,12 @@ const confirmBadgeStyle = {
   color: "#ffffff",
   whiteSpace: "nowrap"
 };
+function dayNoteShown(note) {
+  let s = String(note == null ? "" : note).replace(/^\[override:[^\]]*\]\s*/, "");
+  const m = /^(awaiting confirmation - )?seed: \S+(?: - ([\s\S]*))?$/.exec(s);
+  if (m) s = (m[1] || "") + (m[2] || "");
+  return s.replace(/;\s*source \S+\s*$/, "").replace(/\s+-\s*$/, "").trim();
+}
 function Padlock({
   title,
   size,
@@ -19541,14 +19624,14 @@ function DayEditor(props) {
       width: "100%",
       opacity: draft.primary ? 0.6 : 1
     })
-  }))) : draft.note ? React.createElement("div", {
+  }))) : dayNoteShown(draft.note) ? React.createElement("div", {
     "data-testid": "editor-note-view",
     style: {
       fontSize: 12,
       color: sub,
       margin: "10px 0"
     }
-  }, "Note: ", draft.note) : null, info && React.createElement("div", {
+  }, "Note: ", dayNoteShown(draft.note)) : null, info && React.createElement("div", {
     role: "status",
     "data-testid": "editor-info",
     style: {
@@ -19764,6 +19847,7 @@ function TotalsCard({
     if (modeEff === "pay" && typeof onPayYear === "function" && year !== payYear) onPayYear(year);
   }, [modeEff, year, payYear]);
   const rangeMode = modeEff === "fairness" || modeEff === "pay" ? "month" : modeEff;
+  const tableMode = modeEff !== "pay" && modeEff !== "fairness";
   const range = ttRangeFor(rangeMode, year, month0, {
     floors: ytdFloors || {}
   });
@@ -19906,6 +19990,7 @@ function TotalsCard({
   const targetText = r => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
   const targetBText = r => r.targetB === null ? "-" : String(r.targetB) + (r.targetBKind === "implied" ? "*" : "");
   const anyImplied = rows.some(r => r.targetKind === "implied" || r.targetBKind === "implied");
+  const anyTarget = rows.some(r => r.target !== null || r.targetB !== null);
   const periodText = range.label + (modeEff === "fairness" ? "" : "");
   const exportCsv = () => {
     if (daysUnread) {
@@ -19998,7 +20083,7 @@ function TotalsCard({
       gap: 4,
       flexWrap: "wrap"
     }
-  }, modeBtn("month", "By month"), modeBtn("ytd", "Year to date"), modeBtn("rolling", "Rolling 12 months"), modeBtn("fairness", "Fairness"), payVisible && payTotalsRole && modeBtn("pay", "Pay")), React.createElement("select", {
+  }, modeBtn("month", "By month"), modeBtn("ytd", "Year to date"), modeBtn("rolling", "12 months"), modeBtn("fairness", "Fairness"), payVisible && payTotalsRole && modeBtn("pay", "Pay")), React.createElement("select", {
     "data-testid": "totals-month",
     value: month0,
     onChange: e => setMonth0(Number(e.target.value)),
@@ -20052,12 +20137,28 @@ function TotalsCard({
       color: dk ? "#c0c0d8" : "#3a4a58",
       marginBottom: 8
     }
-  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ". One 24-hour day = one shift; ", sw ? "Weighted = primary x " + sw.primary + " + backup x " + sw.backup + " (Silvis days only)." : "Weighted: unavailable until the rules engine loads.", " Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.", !loaded ? " Loading schedule..." : "", daysUnread ? React.createElement("strong", {
+  }, React.createElement("strong", null, periodText), " - ", range.from, " to ", range.to, ".", tableMode ? " " + (sw ? "Weighted = primary x " + sw.primary + " + backup x " + sw.backup + " (Silvis days only)." : "Weighted: unavailable until the rules engine loads.") : "", !loaded ? " Loading schedule..." : "", daysUnread ? React.createElement("strong", {
     "data-testid": "totals-days-unread",
     style: {
       color: T.open
     }
-  }, " Schedule not loaded - these counts are not the schedule's until it loads.") : null), !ctx && React.createElement("div", {
+  }, " Schedule not loaded - these counts are not the schedule's until it loads.") : null), tableMode && React.createElement("details", {
+    "data-testid": "totals-how",
+    style: {
+      fontSize: 11.5,
+      color: T.muted,
+      margin: "-4px 0 8px",
+      lineHeight: 1.5
+    }
+  }, React.createElement("summary", {
+    className: "cardtoggle",
+    style: {
+      cursor: "pointer",
+      color: T.accentText,
+      fontWeight: 600,
+      padding: "4px 0"
+    }
+  }, "How these are counted"), "One 24-hour day = one shift (holiday days included); in Holidays maj/min a unit counts once. Max consec. is the longest run touching the period, in real days (a holiday unit is one day only for a surgeon who opted in); the number in brackets is the limit - P: primary days against the hard limit, any: either role against the soft limit."), !ctx && React.createElement("div", {
     style: _objectSpread(_objectSpread({}, css.warnBox), {}, {
       marginBottom: 8
     })
@@ -20100,7 +20201,7 @@ function TotalsCard({
   }, "Total"), React.createElement("th", {
     style: th,
     "data-testid": "totals-th-weighted",
-    title: swText ? "Weighted load: " + swText + " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "Weighted load: unavailable until the rules engine loads"
+    title: swText ? "Weighted load: " + swText + (eastDetailsVisible ? " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "; Silvis days only") : "Weighted load: unavailable until the rules engine loads"
   }, "Weighted"), React.createElement("th", {
     style: th
   }, "Weekend days"), React.createElement("th", {
@@ -20120,7 +20221,7 @@ function TotalsCard({
   }, "East days"), React.createElement("th", {
     style: th,
     title: (eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"
-  }, "Cap (P)", nMonths > 1 ? " /mo" : ""), React.createElement("th", {
+  }, "Cap (P)", nMonths > 1 ? " /mo" : ""), anyTarget && React.createElement(React.Fragment, null, React.createElement("th", {
     style: th,
     title: "Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)"
   }, "Target"), React.createElement("th", {
@@ -20132,7 +20233,7 @@ function TotalsCard({
   }, "Target B"), React.createElement("th", {
     style: th,
     title: "Backup days minus the backup target"
-  }, "Deviation B"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
+  }, "Deviation B")))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
     key: r.id + r.src,
     "data-testid": "totals-row-" + r.id,
     "data-source": r.src,
@@ -20207,7 +20308,7 @@ function TotalsCard({
       color: T.accentText,
       fontWeight: 700
     }
-  }, " (" + r.overSoftText.text + ")")), React.createElement("td", {
+  }, " (" + r.overSoftText.text + ")")), anyTarget && React.createElement(React.Fragment, null, React.createElement("td", {
     "data-col": "target",
     style: td
   }, targetText(r)), React.createElement("td", {
@@ -20227,16 +20328,32 @@ function TotalsCard({
       color: devColorB(r),
       fontWeight: 600
     })
-  }, r.deviationB)))))) : React.createElement("div", {
+  }, r.deviationB))))))) : React.createElement("div", {
     "data-testid": "fairness-view"
   }, React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#5B6B82",
+      margin: "0 0 4px",
+      lineHeight: 1.5
+    }
+  }, "Weighted load in ", range.label, " (", swText ? swText : "the weights are unavailable until the rules engine loads - the bars show raw days", "; Silvis days only): solid = primary days, striped = backup days. The green mark is the weighted share (", sw ? "primary target x " + sw.primary + " + backup target x " + sw.backup : "primary target + backup target", "), the red mark the primary cap (read against the solid part)."), React.createElement("details", {
+    "data-testid": "fairness-how",
+    style: {
+      fontSize: 11.5,
+      color: T.muted,
       margin: "0 0 10px",
       lineHeight: 1.5
     }
-  }, "Weighted load in ", range.label, " (", swText ? swText : "the weights are unavailable until the rules engine loads - the bars show raw days", "; Silvis days only): the solid part of each bar is the primary days, the striped part the backup days. The green mark is the weighted share (", sw ? "primary target x " + sw.primary + " + backup target x " + sw.backup : "primary target + backup target", ") and the red mark the primary cap, read against the solid part. Fairness at Silvis (9/22, water-filled 9/23) is a water-filled share of the month's primary days and, separately, of its backup days for every pool member - ALL the pool's slots, open and already held, poured over the members up to each one's cap, so a locked or derived day counts against its holder's share - and the deviations read the weighted load against the weighted share, then primary days against the primary target and backup days against the backup target, convexly (a day further over target costs more); a surgeon without a target shows '-'."), (() => {
+  }, React.createElement("summary", {
+    className: "cardtoggle",
+    style: {
+      cursor: "pointer",
+      color: T.accentText,
+      fontWeight: 600,
+      padding: "4px 0"
+    }
+  }, "How the share is worked out"), "Each month's primary days and, separately, its backup days are shared out evenly over the pool (water-filled): every slot, open or already held, is poured over the members up to each one's cap, so a locked day counts against its holder's share. The deviations compare the weighted load with the weighted share, then primary days with the primary target and backup days with the backup target; a day further over target costs more. A surgeon without a target shows '-'."), (() => {
     const barW = sw || {
       primary: 1,
       backup: 1
@@ -20348,7 +20465,8 @@ function TotalsCard({
         fontFamily: mono,
         fontSize: 12,
         color: dk ? "#E6ECF5" : "#1F2A3A",
-        minWidth: 250
+        flex: "1 1 100%",
+        minWidth: 0
       }
     }, r.t.total, " total (", r.t.primary, " P + ", r.t.backup, " B)", showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : "", " - weighted ", r.weighted === null ? "-" : r.weighted, r.weightedShare !== null ? " / share " + r.weightedShare + (r.weightedImplied ? "*" : "") : "", r.weightedShare !== null && React.createElement("span", {
       "data-flag": devFlagW(r),
@@ -20801,7 +20919,7 @@ function PayCard({
     style: _objectSpread(_objectSpread({}, muted), {}, {
       marginBottom: 6
     })
-  }, "Primary call days only (backup is not paid). One call day runs 07:00 to 07:00 - a call-in after midnight belongs to the day before. Future days are projected (the stipend only)."), pm.days.length === 0 ? React.createElement("div", {
+  }, "Primary days only (backup is not paid); later days are projected (stipend only). A call-in after midnight goes on the day before."), pm.days.length === 0 ? React.createElement("div", {
     "data-testid": "pay-empty",
     style: muted
   }, "No primary call days in ", TOTALS_MON[month0], " ", year, ".") : React.createElement("div", {
