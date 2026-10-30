@@ -136,6 +136,18 @@ const srPre23 = clone(SA.seedToSurgeonRules(seed));
 srPre23[KHAN].primaryContribution = "weekends";
 ["standaloneFriday", "noLoneWeekendDay", "weekendCap", "hardNeverWeekdaysNoticeDays"].forEach(k => { delete srPre23[KHAN][k]; });
 const cleanPre23 = makeCtx({ schedule: {}, surgeonRules: srPre23 });
+// Faraz 10/29 (Prompt 33): Sarkar's rules BEFORE 10/29 - the clinic manager's Mon-Fri windows, daysPerWindowWeek.target 2,
+// preferAlternateDays true and maxConsecutiveAnyRole 2 (her 9/22 evening keys). The engine pins below keep testing those
+// mechanics (a window Friday as a standalone day, the target-2 bonus / penalty, consecutive-primary, the any-role long-run)
+// through this fixture - pins moved deliberately to it, not weakened; her 10/29 seed keys (windows end Thursday, target 3,
+// no alternate days, no any-role limit) are pinned on the seed in the "Sarkar seed keys" step and the 10/29 blocks below.
+const SR_SARKAR_922 = clone(SA.seedToSurgeonRules(seed));
+Object.assign(SR_SARKAR_922[SARKAR], {
+  availableWindows: [{ start: "2026-10-19", end: "2026-10-23" }, { start: "2026-11-16", end: "2026-11-20" }, { start: "2026-12-14", end: "2026-12-18" }, { start: "2027-01-11", end: "2027-01-15" }],
+  daysPerWindowWeek: { target: 2, countsBackup: false }, preferAlternateDays: true, maxConsecutiveAnyRole: 2
+});
+const makeCtx922 = (extras) => makeCtx(Object.assign({ surgeonRules: SR_SARKAR_922 }, extras || {}));
+const clean922 = makeCtx922({ schedule: {} });
 
 step("seed adapter");
 const rows = SA.seedToAvailabilityRows(seed);
@@ -211,16 +223,21 @@ ok(R.isHolidayDay(ctx, "2027-01-01") && R.isHolidayDay(ctx, "2027-01-01").year =
 // strong soft penalty (weekendBlockPenalty), weekendStyle "daily" makes a window
 // Friday an ordinary standalone day, and handoffPartnerRequired is a diagnostics
 // flag the generator reads (no soft in eligibility any more).
-step("Sarkar seed keys (9/22 evening)");
-eq(seed.surgeonRules[SARKAR].daysPerWindowWeek.target, 2, "seed: Sarkar daysPerWindowWeek.target = 2 (the clinic manager 9/22 evening)");
+step("Sarkar seed keys (9/22 evening; Faraz 10/29)");
+// pin moved deliberately 10/29 (Prompt 33, Faraz): target 3 (was 2 - the clinic manager 9/22 evening), the windows end on Thursday
+// (were Mon-Fri), preferAlternateDays and maxConsecutiveAnyRole removed (were true / 2); the 9/22 values live on in SR_SARKAR_922
+eq(seed.surgeonRules[SARKAR].daysPerWindowWeek.target, 3, "seed: Sarkar daysPerWindowWeek.target = 3 (Faraz 10/29; 2 from the clinic manager 9/22 evening)");
+eq(seed.surgeonRules[SARKAR].availableWindows, [{ start: "2026-10-19", end: "2026-10-23" }, { start: "2026-11-16", end: "2026-11-19" }, { start: "2026-12-14", end: "2026-12-17" }, { start: "2027-01-11", end: "2027-01-14" }], "seed: her windows [1..3] end on Thursday since Faraz 10/29 (no Friday call; Mon-Fri before) - October's past window unchanged");
 eq(seed.surgeonRules[SARKAR].daysPerWindowWeek.countsBackup, false, "seed: Sarkar's window-week count is primary only");
 ok(!("min" in seed.surgeonRules[SARKAR].daysPerWindowWeek) && !("max" in seed.surgeonRules[SARKAR].daysPerWindowWeek) && !("minIsSoft" in seed.surgeonRules[SARKAR].daysPerWindowWeek), "seed: no hard window-week min/max keys any more");
 eq(seed.surgeonRules[SARKAR].weekendStyle, "daily", "seed: Sarkar weekendStyle daily (a Friday is a standalone day)");
 ok(!("hardNeverWeekdays" in seed.surgeonRules[SARKAR]) && !("hardNeverWeekdaysRoles" in seed.surgeonRules[SARKAR]) && !("hardNeverWeekdaysReason" in seed.surgeonRules[SARKAR]) && !("hardNeverWeekdaysRolesNote" in seed.surgeonRules[SARKAR]), "seed: Sarkar carries no hardNeverWeekdays keys (her windows are the only hard rule)");
-eq(seed.surgeonRules[SARKAR].preferAlternateDays, true, "seed: preferAlternateDays (soft)");
+ok(!("preferAlternateDays" in seed.surgeonRules[SARKAR]) && !("preferAlternateDaysNote" in seed.surgeonRules[SARKAR]), "seed: preferAlternateDays (and its note) removed Faraz 10/29 - consecutive window days are her pattern (was true, 9/22 evening)");
 eq(seed.surgeonRules[SARKAR].weekendBlockPenalty, "strong", "seed: weekendBlockPenalty strong (soft)");
 eq(seed.surgeonRules[SARKAR].handoffPartnerRequired, true, "seed: handoffPartnerRequired stays as a diagnostics flag");
-eq([seed.surgeonRules[SARKAR].maxConsecutiveDays, seed.surgeonRules[SARKAR].maxConsecutiveAnyRole], [2, 2], "seed: max 2 consecutive primary (hard, real days) / 2 any role (soft) unchanged");
+eq([seed.surgeonRules[SARKAR].maxConsecutiveDays, "maxConsecutiveAnyRole" in seed.surgeonRules[SARKAR]], [2, false], "seed: max 2 consecutive primary (hard, real days) unchanged; the soft any-role limit removed Faraz 10/29 (was 2)");
+eq([clean.per[SARKAR].maxConsecAnyRole, clean.per[SARKAR].preferAlternate, clean.per[SARKAR].windowTarget], [null, false, 3], "rules.js reads the 10/29 seed: no any-role limit, alternate days off, window target 3");
+eq([clean922.per[SARKAR].maxConsecAnyRole, clean922.per[SARKAR].preferAlternate, clean922.per[SARKAR].windowTarget], [2, true, 2], "...and the 9/22 fixture: any-role 2, alternate days on, target 2");
 eq(seed.surgeonRules[SARKAR].monthlyTarget, null, "seed: monthlyTarget stays null (her target comes from the window target)");
 
 step("Sarkar windows (the only hard rule)");
@@ -240,52 +257,75 @@ blocked(R.eligibility(clean, "2026-11-15", P, SARKAR), "outside-window", "every 
 blocked(R.eligibility(clean, "2026-11-22", B, SARKAR), "outside-window", "Sunday backup outside the window");
 okElig(R.eligibility(clean, "2026-11-16", P, SARKAR), "Nov window");
 okElig(R.eligibility(clean, "2026-11-19", P, SARKAR), "Nov window Thursday");   // windows Mon-Fri since 9/22 evening (was Sat 11/21)
-okElig(R.eligibility(clean, "2026-11-20", P, SARKAR), "Nov window Friday primary (9/22 evening: eligible; was hard-never-weekday:Fri)");
+okElig(R.eligibility(clean922, "2026-11-20", P, SARKAR), "9/22 fixture: Nov window Friday primary (9/22 evening: eligible; was hard-never-weekday:Fri)");
 // a Saturday / Sunday is outside every window now - pinned for BOTH roles
 blocked(R.eligibility(clean, "2026-11-21", P, SARKAR), "outside-window", "Sat 11/21 primary is outside the Nov 16-20 window (9/22 evening)");
 blocked(R.eligibility(clean, "2026-11-21", B, SARKAR), "outside-window", "Sat 11/21 backup is outside the window too");
 blocked(R.eligibility(clean, "2026-11-22", P, SARKAR), "outside-window", "Sun 11/22 primary");
-okElig(R.eligibility(clean, "2026-12-18", P, SARKAR), "Dec window Friday primary (was hard-never-weekday:Fri)");
+okElig(R.eligibility(clean922, "2026-12-18", P, SARKAR), "9/22 fixture: Dec window Friday primary (was hard-never-weekday:Fri)");
 okElig(R.eligibility(clean, "2026-12-17", P, SARKAR));
 blocked(R.eligibility(clean, "2026-12-19", P, SARKAR), "outside-window");
-eq(R.eligibility(clean, "2026-11-20", P, SARKAR).hard, [], "the window Friday carries no hard reason at all");
-lacks(R.eligibility(clean, "2026-11-20", P, SARKAR).hard, "hard-never-weekday:Fri", "before 9/22 evening this was hard-never-weekday:Fri");
+eq(R.eligibility(clean922, "2026-11-20", P, SARKAR).hard, [], "9/22 fixture: the window Friday carries no hard reason at all");
+lacks(R.eligibility(clean922, "2026-11-20", P, SARKAR).hard, "hard-never-weekday:Fri", "before 9/22 evening this was hard-never-weekday:Fri");
+// Faraz 10/29 (Prompt 33): no Friday call - the seed's windows end on Thursday. Each Friday of her Nov / Dec / Jan windows is outside
+// every window in BOTH roles (the obligation: no dated row or offer reopens it), each Thursday inside; October's past window is
+// unchanged (Fri 10/23 stays inside it); the weekends stay outside
+["2026-11-20", "2026-12-18", "2027-01-15"].forEach(d => {
+  blocked(R.eligibility(clean, d, P, SARKAR), "outside-window", "10/29: Friday " + d + " primary is outside her window (no Friday call)");
+  blocked(R.eligibility(clean, d, B, SARKAR), "outside-window", "10/29: Friday " + d + " backup is outside her window too");
+});
+["2026-11-19", "2026-12-17", "2027-01-14"].forEach(d => { okElig(R.eligibility(clean, d, P, SARKAR), "10/29: Thursday " + d + " primary is inside"); okElig(R.eligibility(clean, d, B, SARKAR), "10/29: Thursday " + d + " backup is inside"); });
+["2026-11-16", "2026-12-14", "2027-01-11"].forEach(d => okElig(R.eligibility(clean, d, P, SARKAR), "10/29: Monday " + d + " starts the window"));
+okElig(R.eligibility(clean, "2026-10-23", P, SARKAR), "10/29: October's past window keeps its Friday (unchanged)");
+const friRow = makeCtx({ schedule: {}, availabilityRows: SA.seedToAvailabilityRows(seed).concat([{ person_id: SARKAR, kind: "available", role: "any", start_date: "2026-11-20", end_date: "2026-11-20", note: "test", source: "seed" }]) });
+blocked(R.eligibility(friRow, "2026-11-20", P, SARKAR), "outside-window", "10/29: a dated available row on Fri 11/20 does not reopen it (a window is an obligation, never lifted by a row - W)");
 
-step("Sarkar window-week SOFT target (2 primary days per window week)");
+step("Sarkar window-week SOFT target (the 9/22 fixture: 2 primary days per window week; the seed since 10/29: 3)");
 // count = her PRIMARY days in the Mon-Sun week (schedule + assume + the evaluated slot); target 2:
 //   a placement at or under the target (0 or 1 OTHER primaries held) -> 'window-week-below-target:2' at -weights.medium (-3),
 //   so every day up to the target is wanted (not only the first); over -> 'window-week-over-target:2' at medium x (count - 2)
+// pin moved deliberately 10/29: these target-2 mechanics run on SR_SARKAR_922 (the seed's target is 3 since Faraz 10/29 - pinned below)
 const softW = (r, prefix) => { const s = r.soft.find(x => x.reason.indexOf(prefix) === 0); return s ? s.weight : null; };
-const alone = R.eligibility(clean, "2026-11-18", P, SARKAR);   // count 1 (this slot only)
+const alone = R.eligibility(clean922, "2026-11-18", P, SARKAR);   // count 1 (this slot only)
 okElig(alone, "window Wednesday alone");
 eq(softW(alone, "window-week-below-target:2"), -3, "0 other primaries in the week: below-target bonus -3");
 lacksSoft(alone, "window-week-over-target", "and no over-target");
-const one = makeCtx({ schedule: { "2026-11-16": { primary: SARKAR } } });
+const one = makeCtx922({ schedule: { "2026-11-16": { primary: SARKAR } } });
 const atTarget = R.eligibility(one, "2026-11-18", P, SARKAR);    // count 2 = target
 eq(softW(atTarget, "window-week-below-target:2"), -3, "1 other primary: the slot that reaches the target still earns the bonus (-3 at 0 or 1 others)");
 lacksSoft(atTarget, "window-week-over-target", "...and no penalty");
-const two = makeCtx({ schedule: { "2026-11-16": { primary: SARKAR }, "2026-11-20": { primary: SARKAR } } });
+const two = makeCtx922({ schedule: { "2026-11-16": { primary: SARKAR }, "2026-11-20": { primary: SARKAR } } });
 const skOver3 = R.eligibility(two, "2026-11-18", P, SARKAR);     // count 3
 okElig(skOver3, "a third primary in the window week is still ELIGIBLE (soft, not hard)");
 eq(softW(skOver3, "window-week-over-target:2"), 3, "3 primaries: over-target +3 (medium x 1)");
-const three = makeCtx({ schedule: { "2026-11-16": { primary: SARKAR }, "2026-11-17": { primary: SARKAR }, "2026-11-20": { primary: SARKAR } } });
+const three = makeCtx922({ schedule: { "2026-11-16": { primary: SARKAR }, "2026-11-17": { primary: SARKAR }, "2026-11-20": { primary: SARKAR } } });
 const skOver4 = R.eligibility(three, "2026-11-19", P, SARKAR);   // count 4 (Mon, Tue, Thu, Fri) - Thu-Fri is a 2-run, under her hard 2
 okElig(skOver4, "a fourth primary is still eligible");
 eq(softW(skOver4, "window-week-over-target:2"), 6, "4 primaries: over-target +6 (medium x 2)");
 // countsBackup false: her backup days never count, and a backup placement carries no window-week soft at all
-const skBk = makeCtx({ schedule: { "2026-11-16": { primary: null, backup: SARKAR }, "2026-11-17": { primary: null, backup: SARKAR } } });
+const skBk = makeCtx922({ schedule: { "2026-11-16": { primary: null, backup: SARKAR }, "2026-11-17": { primary: null, backup: SARKAR } } });
 eq(softW(R.eligibility(skBk, "2026-11-18", P, SARKAR), "window-week-below-target:2"), -3, "two window backups do not count: the Wednesday primary is still 1 of 2");
 lacksSoft(R.eligibility(skBk, "2026-11-18", B, SARKAR), "window-week", "a backup placement carries no window-week soft");
 okElig(R.eligibility(skBk, "2026-11-18", B, SARKAR), "...and stays eligible (backup inside a window is allowed, not targeted)");
+// Faraz 10/29 on the seed: target 3 - the bonus holds up to the THIRD primary of the week (0, 1 or 2 others), the fourth pays +3;
+// her November shape (Mon P, Tue P, Wed B, Thu P) reads the bonus on each of its primaries, and its backup no window-week soft
+eq(softW(R.eligibility(clean, "2026-11-18", P, SARKAR), "window-week-below-target:3"), -3, "10/29 seed: a lone window primary earns window-week-below-target:3 (-3)");
+const nov3 = makeCtx({ schedule: { "2026-11-16": { primary: SARKAR }, "2026-11-17": { primary: SARKAR } } });
+eq(softW(R.eligibility(nov3, "2026-11-19", P, SARKAR), "window-week-below-target:3"), -3, "10/29 seed: Thu 11/19 as her third primary (Mon, Tue held) still earns the bonus - the target is 3");
+lacksSoft(R.eligibility(nov3, "2026-11-19", P, SARKAR), "window-week-over-target", "...and pays no over-target");
+const novShape = makeCtx({ schedule: { "2026-11-16": { primary: SARKAR }, "2026-11-17": { primary: SARKAR }, "2026-11-19": { primary: SARKAR } } });
+lacksSoft(R.eligibility(novShape, "2026-11-18", B, SARKAR), "window-week", "10/29 seed: the Wednesday backup of her November shape carries no window-week soft (countsBackup false)");
+const srSeed7 = clone(SA.seedToSurgeonRules(seed)); srSeed7[SARKAR].maxConsecutiveDays = 7;
+eq(softW(R.eligibility(makeCtx({ schedule: {}, surgeonRules: srSeed7 }), "2026-11-19", P, SARKAR, { assume: [{ date: "2026-11-16", role: P }, { date: "2026-11-17", role: P }, { date: "2026-11-18", role: P }] }), "window-week-over-target:3"), 3, "10/29 seed (hard limit raised in the clone): a fourth primary pays window-week-over-target:3 +3 (medium x 1)");
 // NO hard window-week maximum anywhere: with four primaries ASSUMED in the week a fifth is still eligible
 // (maxConsecutiveDays raised to 7 in this clone so the hard consecutive limit stays out of the picture)
-const srLongRun = clone(SA.seedToSurgeonRules(seed)); srLongRun[SARKAR].maxConsecutiveDays = 7; srLongRun[SARKAR].maxConsecutiveAnyRole = 7;
+const srLongRun = clone(SR_SARKAR_922); srLongRun[SARKAR].maxConsecutiveDays = 7; srLongRun[SARKAR].maxConsecutiveAnyRole = 7;
 const fifth = R.eligibility(makeCtx({ schedule: {}, surgeonRules: srLongRun }), "2026-11-18", P, SARKAR, { assume: [{ date: "2026-11-16", role: P }, { date: "2026-11-17", role: P }, { date: "2026-11-19", role: P }, { date: "2026-11-20", role: P }] });
 okElig(fifth, "9/22 evening: a fifth primary in the window week is eligible (was window-week-max:4)");
 lacks(fifth.hard, "window-week-max", "no hard window-week-max exists any more");
 eq(softW(fifth, "window-week-over-target:2"), 9, "5 primaries: over-target +9 (medium x 3)");
 // legacy min/max keys in an older blob: ignored with ONE ctx warning, never a hard reason
-const srLegacy = clone(SA.seedToSurgeonRules(seed)); srLegacy[SARKAR].daysPerWindowWeek = { min: 3, max: 4, minIsSoft: true, countsBackup: true }; srLegacy[SARKAR].maxConsecutiveDays = 7; srLegacy[SARKAR].maxConsecutiveAnyRole = 7;
+const srLegacy = clone(SR_SARKAR_922); srLegacy[SARKAR].daysPerWindowWeek = { min: 3, max: 4, minIsSoft: true, countsBackup: true }; srLegacy[SARKAR].maxConsecutiveDays = 7; srLegacy[SARKAR].maxConsecutiveAnyRole = 7;
 const legacy = makeCtx({ schedule: {}, surgeonRules: srLegacy });
 eq(legacy.warnings.filter(w => /daysPerWindowWeek/.test(w)).length, 1, "legacy daysPerWindowWeek.min/max: exactly one ctx warning: " + JSON.stringify(legacy.warnings));
 ok(/surgeonRules\.s6\.daysPerWindowWeek/.test(legacy.warnings.join(" ")) && /ignored/.test(legacy.warnings.join(" ")), "the warning names the path and says ignored");
@@ -299,16 +339,33 @@ step("Sarkar alternate days (soft) and consecutive (hard)");
 const sk2 = makeCtx({ schedule: { "2026-10-20": { primary: SARKAR }, "2026-10-21": { primary: SARKAR } } });
 blocked(R.eligibility(sk2, "2026-10-22", P, SARKAR), "max-consecutive:2", "the group-wide hard limit on real primary days still applies (Prompt 12 A)");
 // preferAlternateDays: 'consecutive-primary' (medium) when the day before OR after is her primary; replaces the old handoff-partner soft
-const cp = R.eligibility(makeCtx({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-19", P, SARKAR);
+// pin moved deliberately 10/29: these run on SR_SARKAR_922 (preferAlternateDays true) - the seed has no preferAlternateDays since Faraz 10/29
+const cp = R.eligibility(makeCtx922({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-19", P, SARKAR);
 okElig(cp, "Thursday after her Wednesday: eligible");
 eq(softW(cp, "consecutive-primary"), 3, "11/18 hers -> 11/19 primary carries consecutive-primary +3 (medium)");
 lacksSoft(cp, "handoff-partner", "the handoff-partner soft is gone (handoffPartnerRequired is a diagnostics flag now)");
-eq(softW(R.eligibility(makeCtx({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-17", P, SARKAR), "consecutive-primary"), 3, "the day BEFORE her primary too");
-lacksSoft(R.eligibility(makeCtx({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-20", P, SARKAR), "consecutive-primary", "two days apart: no penalty");
-lacksSoft(R.eligibility(makeCtx({ schedule: { "2026-11-18": { primary: null, backup: SARKAR } } }), "2026-11-19", P, SARKAR), "consecutive-primary", "her BACKUP the day before is not a consecutive primary");
-lacksSoft(R.eligibility(makeCtx({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-19", B, SARKAR), "consecutive-primary", "a backup placement after her primary carries no consecutive-primary (backup-after-primary is the generic soft)");
-const srNoAlt = clone(SA.seedToSurgeonRules(seed)); srNoAlt[SARKAR].preferAlternateDays = false;
+eq(softW(R.eligibility(makeCtx922({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-17", P, SARKAR), "consecutive-primary"), 3, "the day BEFORE her primary too");
+lacksSoft(R.eligibility(makeCtx922({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-20", P, SARKAR), "consecutive-primary", "two days apart: no penalty");
+lacksSoft(R.eligibility(makeCtx922({ schedule: { "2026-11-18": { primary: null, backup: SARKAR } } }), "2026-11-19", P, SARKAR), "consecutive-primary", "her BACKUP the day before is not a consecutive primary");
+lacksSoft(R.eligibility(makeCtx922({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-19", B, SARKAR), "consecutive-primary", "a backup placement after her primary carries no consecutive-primary (backup-after-primary is the generic soft)");
+const srNoAlt = clone(SR_SARKAR_922); srNoAlt[SARKAR].preferAlternateDays = false;
 lacksSoft(R.eligibility(makeCtx({ schedule: { "2026-11-18": { primary: SARKAR } }, surgeonRules: srNoAlt }), "2026-11-19", P, SARKAR), "consecutive-primary", "preferAlternateDays false: no penalty (data, not a name branch)");
+// the any-role long-run on the 9/22 fixture (maxConsecutiveAnyRole 2): her November shape is a run of 4 -> long-run:4 at 3 x (4 - 2)
+const novShape922 = makeCtx922({ schedule: { "2026-11-16": { primary: SARKAR }, "2026-11-17": { primary: SARKAR }, "2026-11-19": { primary: SARKAR } } });
+eq(softW(R.eligibility(novShape922, "2026-11-18", B, SARKAR), "long-run:4"), 6, "9/22 fixture: Wed backup inside Mon P / Tue P / Thu P reads long-run:4 (+6)");
+// Faraz 10/29 on the seed: no alternate-days soft and no any-role limit - consecutive window days are her pattern
+lacksSoft(R.eligibility(makeCtx({ schedule: { "2026-11-18": { primary: SARKAR } } }), "2026-11-19", P, SARKAR), "consecutive-primary", "10/29 seed: no consecutive-primary (preferAlternateDays removed)");
+lacksSoft(R.eligibility(novShape, "2026-11-18", B, SARKAR), "long-run", "10/29 seed: her November shape's Wednesday backup reads no long-run (maxConsecutiveAnyRole removed)");
+okElig(R.eligibility(novShape, "2026-11-18", B, SARKAR), "10/29 seed: ...and is eligible");
+hasSoft(R.eligibility(novShape, "2026-11-18", B, SARKAR), "backup-after-primary", "10/29 seed: the generic backup-after-primary soft stays (group weight)");
+const decShape = makeCtx({ schedule: { "2026-12-14": { primary: null, backup: SARKAR }, "2026-12-15": { primary: SARKAR }, "2026-12-17": { primary: null, backup: SARKAR } } });
+const dec16 = R.eligibility(decShape, "2026-12-16", P, SARKAR);
+okElig(dec16, "10/29 seed: her December shape (Mon B, Tue P, Wed P, Thu B) - Wed 12/16 primary is eligible (2 primaries in a row = her hard limit)");
+lacksSoft(dec16, "consecutive-primary", "10/29 seed: ...with no consecutive-primary");
+lacksSoft(dec16, "long-run", "10/29 seed: ...and no long-run over the four days");
+eq(softW(dec16, "window-week-below-target:3"), -3, "10/29 seed: ...and the target-3 bonus (2 primaries in the week)");
+const dec3 = makeCtx({ schedule: { "2026-12-15": { primary: SARKAR }, "2026-12-17": { primary: SARKAR } } });
+blocked(R.eligibility(dec3, "2026-12-16", P, SARKAR), "max-consecutive:2", "10/29 seed: Wed 12/16 between her Tue and Thu primaries is three in a row - the hard limit 2 (why Thu 12/17 went to Acton)");
 okElig(R.eligibility(sk2, "2026-10-22", B, SARKAR), "backup after two primaries is legal (primary-only counting)");
 // the seed schedule itself: her locked days evaluate as eligible for herself
 okElig(R.eligibility(ctx, "2026-10-20", P, SARKAR), "locked self");
@@ -724,7 +781,9 @@ step("Prompt 12 A seed: per-surgeon consecutive keys");
 ok(!("unitExemptFromMaxConsecutive" in seed.groupRules.holidays), "groupRules.holidays.unitExemptFromMaxConsecutive must be gone from the seed");
 eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => seed.surgeonRules[id].holidayUnitCountsAsOneDay), [true, false, false, false, false, false], "only Khan opted in to the unit collapse");
 eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => seed.surgeonRules[id].maxConsecutiveDays), [3, 2, 3, 4, 7, 2], "hard primary-only limits");
-eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => seed.surgeonRules[id].maxConsecutiveAnyRole), [4, 3, 4, 4, 7, 2], "soft any-role limits");
+// pin moved deliberately 10/29 (Prompt 33, Faraz): Sarkar's soft any-role limit was removed (was 2) - she is on call Mon-Thu of a window week
+eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map(id => seed.surgeonRules[id].maxConsecutiveAnyRole), [4, 3, 4, 4, 7, undefined], "soft any-role limits (Sarkar none since Faraz 10/29; 2 from 9/22)");
+eq(SR_SARKAR_922[SARKAR].maxConsecutiveAnyRole, 2, "...and the 9/22 fixture keeps her 2 for the long-run pins");
 eq(seed.groupRules.weights.longRunPerDay, 3, "longRunPerDay = the medium weight");
 eq(R.defaultWeights().longRunPerDay, 3, "engine default for longRunPerDay (older blobs without the key)");
 const srNoCollapse = clone(SA.seedToSurgeonRules(seed)); srNoCollapse[KHAN].holidayUnitCountsAsOneDay = false;
@@ -992,16 +1051,20 @@ ok(!dailies.some(p => p.members.fri === p.members.sat && p.members.sat === p.mem
 // ordinary standalone day for her (memberPen 0 in a daily pattern); a multi-day block or a split membership
 // is still offered but carries + resolveWeight(weekendBlockPenalty) = +10 per surgeon. Windows are Mon-Fri, so
 // with the real seed she appears on Fri 11/20 only (Sat 11/21 and Sun 11/22 are outside the window).
-const wpS = R.weekendUnitPatterns(clean, "2026-11-20", "primary");
-ok(!wpS.some(p => p.members.sat === SARKAR || p.members.sun === SARKAR), "real seed: Sarkar on no Sat/Sun of the 11/20 weekend (outside her Mon-Fri window)");
+// pin moved deliberately 10/29 (Prompt 33): the seed's windows end on Thursday since Faraz 10/29, so these window-Friday mechanics
+// run on SR_SARKAR_922 (Mon-Fri windows); on the 10/29 seed she is on no day of that weekend at all (pinned right below)
+const wpS = R.weekendUnitPatterns(clean922, "2026-11-20", "primary");
+ok(!wpS.some(p => p.members.sat === SARKAR || p.members.sun === SARKAR), "9/22 fixture: Sarkar on no Sat/Sun of the 11/20 weekend (outside her Mon-Fri window)");
+ok(R.weekendUnitPatterns(clean, "2026-11-20", "primary").every(p => p.members.fri !== SARKAR && p.members.sat !== SARKAR && p.members.sun !== SARKAR), "10/29 seed: Sarkar on no day of the 11/20 weekend - Fri 11/20 is outside her window (no Friday call)");
+ok(R.weekendUnitPatterns(clean, "2026-12-18", "primary").every(p => p.members.fri !== SARKAR), "10/29 seed: ...nor of the 12/18 weekend");
 // Prompt 23 B2 (9/30): on this weekend the only Sat/Sun primary holder left is Khan, and only as the Sat+Sun pair
 // (noLoneWeekendDay); his pair beside her standalone Friday is the 'friday' kind now (it was a daily pattern - the daily
 // enumeration skips the shapes the 'friday' kind covers). Her Friday reads the same either way: memberPen 0.
 const dailyFriS = wpS.filter(p => (p.kind === "daily" || p.kind === "friday") && p.members.fri === SARKAR);
 ok(dailyFriS.length > 0, "9/22 evening: a daily (since Prompt 23: or 'friday') pattern with Sarkar on the window Friday exists (before: no pattern contained her on a Friday)");
-ok(!wpS.some(p => p.kind === "block" && p.members.fri === SARKAR), "real seed: no block with her (she cannot take Sat/Sun)");
+ok(!wpS.some(p => p.kind === "block" && p.members.fri === SARKAR), "9/22 fixture: no block with her (she cannot take Sat/Sun)");
 // her Friday memberPen is 0: the same daily pattern costs exactly weights.patternMismatch (3) more when her style is "block"
-const srBlockS = clone(SA.seedToSurgeonRules(seed)); srBlockS[SARKAR].weekendStyle = "block";
+const srBlockS = clone(SR_SARKAR_922); srBlockS[SARKAR].weekendStyle = "block";
 const wpSB = R.weekendUnitPatterns(makeCtx({ schedule: {}, surgeonRules: srBlockS }), "2026-11-20", "primary");
 const sameShape = (a, b) => a.members.fri === b.members.fri && a.members.sat === b.members.sat && a.members.sun === b.members.sun;
 const cheapS = dailyFriS.slice().sort((a, b) => a.penalty - b.penalty)[0];
@@ -1009,7 +1072,7 @@ const cheapSB = wpSB.find(p => p.kind === cheapS.kind && sameShape(p, cheapS));
 ok(cheapSB && cheapSB.penalty - cheapS.penalty === 3, "daily style: her Friday memberPen is 0 (block style on the same shape costs +3): " + JSON.stringify([cheapS, cheapSB]));
 // a multi-day block with her carries the +10 weekendBlockPenalty: synthetic Nov 16-21 window (Saturday inside),
 // reduced unit Fri+Sat (present.length 2; a 3-day block is hard-blocked by her max 2 consecutive anyway)
-const srSatNov = clone(SA.seedToSurgeonRules(seed)); srSatNov[SARKAR].availableWindows = srSatNov[SARKAR].availableWindows.map(w => w.start === "2026-11-16" ? { start: w.start, end: "2026-11-21" } : w);
+const srSatNov = clone(SR_SARKAR_922); srSatNov[SARKAR].availableWindows = srSatNov[SARKAR].availableWindows.map(w => w.start === "2026-11-16" ? { start: w.start, end: "2026-11-21" } : w);
 // Prompt 23 B2 (9/30): the synthetic unit below is Fri+Sat with Sunday 11/22 left out WITHOUT a holiday, so Khan - the only
 // other Saturday candidate that weekend - would be a lone Saturday (noLoneWeekendDay, hard). These pins are about Sarkar's
 // shapes: his key is dropped in the synthetic rules so the Saturday partner stays (the pair rule has its own block below).
@@ -1251,14 +1314,18 @@ okElig(R.eligibility(clean, "2026-11-02", B, FIERCE), "Monday backup unchanged")
 // Sarkar: backup inside her windows only; since 9/22 evening she has no Fri/Sun rule at all (windows are Mon-Fri)
 okElig(R.eligibility(clean, "2026-11-17", B, SARKAR), "Sarkar backup 11/17 inside the Nov 16-20 window");
 blocked(R.eligibility(clean, "2026-11-25", B, SARKAR), "outside-window", "Sarkar backup 11/25 outside her window");
-okElig(R.eligibility(clean, "2026-11-20", P, SARKAR), "a window Friday primary is open (9/22 evening)");
-okElig(R.eligibility(clean, "2026-11-20", B, SARKAR), "a window Friday backup is open");
+// pin moved deliberately 10/29 (Prompt 33): a window Friday exists only in the 9/22 fixture now (the seed's windows end on Thursday)
+okElig(R.eligibility(clean922, "2026-11-20", P, SARKAR), "9/22 fixture: a window Friday primary is open (9/22 evening)");
+okElig(R.eligibility(clean922, "2026-11-20", B, SARKAR), "9/22 fixture: a window Friday backup is open");
+blocked(R.eligibility(clean, "2026-11-20", B, SARKAR), "outside-window", "10/29 seed: Fri 11/20 backup is outside her window (no Friday call - backup open to everyone, not outside a window)");
+okElig(R.eligibility(clean, "2026-11-19", B, SARKAR), "10/29 seed: Thu 11/19 backup inside the Nov 16-19 window");
 // hardNeverWeekdaysRoles: explicit in the seed (Khan), engine default [primary] when absent, listing both roles still closes backup.
 // Sarkar's hardNeverWeekdays keys are gone since 9/22 evening (item N) - the synthetic hardNever below keeps the
 // absent-roles-key behaviour pinned on her too.
 eq(seed.surgeonRules[KHAN].hardNeverWeekdaysRoles, ["primary"], "seed: Khan's roles list is explicit");
 ok(!("hardNeverWeekdaysRoles" in seed.surgeonRules[SARKAR]), "seed: Sarkar carries no hardNeverWeekdaysRoles (no hardNeverWeekdays either)");
-const srNoRoles = clone(seed.surgeonRules); delete srNoRoles[KHAN].hardNeverWeekdaysRoles; srNoRoles[SARKAR].hardNeverWeekdays = ["Fri"];
+// pin moved deliberately 10/29: her Mon-Fri windows come from SR_SARKAR_922 so the synthetic rule still meets a window Friday
+const srNoRoles = clone(seed.surgeonRules); delete srNoRoles[KHAN].hardNeverWeekdaysRoles; srNoRoles[SARKAR].hardNeverWeekdays = ["Fri"]; srNoRoles[SARKAR].availableWindows = clone(SR_SARKAR_922[SARKAR].availableWindows);
 const noRoles = makeCtx({ schedule: {}, surgeonRules: srNoRoles });
 blocked(R.eligibility(noRoles, "2026-11-05", P, KHAN), "hard-never-weekday:Thu", "absent roles key: primary still blocked");
 okElig(R.eligibility(noRoles, "2026-11-05", B, KHAN), "absent roles key: the engine default is [primary]");
@@ -1339,10 +1406,13 @@ blocked(R.eligibility(makeCtx({ schedule: {}, groupRules: grClosed, surgeonRules
 // Sarkar (rules doc section 3, 9/22 evening; Prompt 12 item N): backup inside a window is
 // allowed but never targeted - the window-week target bonus is a PRIMARY soft, so
 // opening her window Fridays for backup (item I) must not reward a Friday backup.
+// pin moved deliberately 10/29 (Prompt 33): the window-Friday pins run on SR_SARKAR_922 (the seed has no window Friday since Faraz 10/29)
 hasSoft(R.eligibility(clean, "2026-11-16", P, SARKAR), "window-week-below-target", "window Monday primary: below-target bonus");
-lacksSoft(R.eligibility(clean, "2026-11-20", B, SARKAR), "window-week-below-target", "window Friday BACKUP carries no below-target bonus");
+lacksSoft(R.eligibility(clean922, "2026-11-20", B, SARKAR), "window-week-below-target", "9/22 fixture: window Friday BACKUP carries no below-target bonus");
 lacksSoft(R.eligibility(clean, "2026-11-17", B, SARKAR), "window-week-below-target", "window Tuesday BACKUP carries no below-target bonus");
-okElig(R.eligibility(clean, "2026-11-20", B, SARKAR), "...and stays eligible (allowed, not targeted)");
+okElig(R.eligibility(clean922, "2026-11-20", B, SARKAR), "9/22 fixture: ...and stays eligible (allowed, not targeted)");
+lacksSoft(R.eligibility(clean, "2026-11-19", B, SARKAR), "window-week-below-target", "10/29 seed: window Thursday BACKUP carries no below-target bonus either");
+okElig(R.eligibility(clean, "2026-11-19", B, SARKAR), "10/29 seed: ...and stays eligible (allowed, not targeted)");
 
 step("tests-08: soft penalties that feed the score");
 // Prompt 23: the block-style example reads Khan's pre-9/30 rules (srPre23 - see the context builders); his 9/30 shapes

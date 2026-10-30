@@ -5033,7 +5033,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const a = words("s3"); assert.ok(a.some(s => s === "Never primary on Tue.")); assert.ok(a.some(s => s === "Unavailable on the 2/4 Mon until 12/31/2026, the 2 Mon from 1/1/2027, the 2/4 Wed, the 3 Wed from 1/1/2027."), JSON.stringify(a)); /* Prompt 23 A (9/30): was "Unavailable on the 2/4 Mon, the 2/4 Wed." - his 2027 outreach days are dated entries and the words carry the bounds */ assert.ok(a.some(s => s === "Prefer not: Sun before the 2/4 Monday until 12/31/2026, Sun before the 2 Monday from 1/1/2027."), JSON.stringify(a)); assert.ok(a.some(s => s === "Never on Thanksgiving.")); assert.ok(a.some(s => s === "Soft limit: 7 primary days a month (the group's)."), "Prompt 32: Acton's null = the group default, the soft 7 (pin moved deliberately 10/11: was 'No monthly cap of your own.'): " + JSON.stringify(a));
     const p = words("s4"); assert.ok(p.some(s => /^Listed weeks \(Mondays\): 11\/9, 11\/23, 12\/7, 12\/21, 12\/28, 1\/11 and 13 more\.$/.test(s)), JSON.stringify(p)); assert.ok(p.some(s => /^Aledo days: the 1\/3 Wed, Fri of week 3; never on call the day before\.$/.test(s))); assert.ok(p.some(s => s === "Backup cap: 7 days and 1 weekend a month."));
     const f = words("s5"); assert.ok(f.some(s => s === "Outside your East weeks: primary on Wed, Fri/Sat/Sun as one block; backup any day."), JSON.stringify(f)); assert.ok(f.some(s => /East weeks derive your Silvis week/.test(s))); assert.ok(f.some(s => s === "Cap: 14 primary days a month, East primary-week days included."));
-    const s6 = words("s6"); assert.ok(s6.some(s => s === "Windows: 10/19-10/23, 11/16-11/20, 12/14-12/18, 1/11-1/15 (about 2 primary days per window week)."), JSON.stringify(s6)); assert.ok(s6.some(s => s === "Weekends: one day at a time."));
+    // pin moved deliberately 10/29 (Prompt 33, Faraz): her windows end on Thursday and her target is 3 (was "11/16-11/20, 12/14-12/18,
+    // 1/11-1/15 (about 2 primary days per window week)"); preferAlternateDays and maxConsecutiveAnyRole came off, so no line names them
+    const s6 = words("s6"); assert.ok(s6.some(s => s === "Windows: 10/19-10/23, 11/16-11/19, 12/14-12/17, 1/11-1/14 (about 3 primary days per window week)."), JSON.stringify(s6)); assert.ok(s6.some(s => s === "Weekends: one day at a time."));
+    assert.ok(!s6.some(s => /alternate|any role/i.test(s)), "10/29: no alternate-days or any-role words for her: " + JSON.stringify(s6));
     assert.deepStrictEqual(H.offerRulesWords(null, seed.groupRules), ["No rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({}, {}), ["No recurring rules of yours are on file - the scheduler places you by the group defaults."]);
     assert.deepStrictEqual(H.offerRulesWords({ name: "X" }, { defaultMonthlyCap: { primary: 8 } }), ["Cap: the group default of 8 primary days a month."]);
@@ -11102,12 +11105,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "East / Davenport: East call days block no role; Silvis weeks follow East from 11/2/2026: East primary week = Silvis backup, East backup week = Silvis primary; stated weeks: East primary 11/9; East backup 10/12, 12/7.",
       ],
       s6: [
-        "Availability: Only inside 4 date windows, both roles: 10/19-10/23, 11/16-11/20, 12/14-12/18, 1/11-1/15.",
+        // pin moved deliberately 10/29 (Prompt 33, Faraz): the windows end on Thursday (was "11/16-11/20, 12/14-12/18, 1/11-1/15")
+        "Availability: Only inside 4 date windows, both roles: 10/19-10/23, 11/16-11/19, 12/14-12/17, 1/11-1/14.",
         "Primary: Only inside the date windows.",
         "Backup: Only inside the date windows.",
         "Weekends: A lone weekend day is fine; blocks and splits discouraged (strong).",
         // pin moved deliberately 10/11: Prompt 32 the group default is the soft 7 (was "cap 8 primary days a month (group default)")
-        "Limits: At most 2 primary days in a row, 2 in any role (soft); soft limit 7 primary days a month (the group's); about 2 primary days per window week (soft); prefers alternate days (soft); flags a primary with no handoff the next day (report only).",
+        // pin moved deliberately 10/29 (Prompt 33, Faraz): no any-role limit, target 3, no alternate-days preference (was "At most 2 primary
+        // days in a row, 2 in any role (soft); ...; about 2 primary days per window week (soft); prefers alternate days (soft); ...")
+        "Limits: At most 2 primary days in a row; soft limit 7 primary days a month (the group's); about 3 primary days per window week (soft); flags a primary with no handoff the next day (report only).",
       ],
     };
     const expectFor = (id) => SEED_LINES[id];
@@ -11525,7 +11531,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         s3: ["availabilityMode", "hardNeverWeekdays", "recurringUnavailable", "recurringAvoid", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "restBetweenStretches", "monthlyCap", "holidaysOff"],
         s4: ["availabilityMode", "availableWeeks", "aledo", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "maxMajorHolidays", "backupCap"],
         s5: ["availabilityMode", "outsideDerivedWeeks", "weekendStyle", "maxConsecutiveDays", "maxConsecutiveAnyRole", "monthlyCap", "eastFeed"],
-        s6: ["availabilityMode", "availableWindows", "daysPerWindowWeek", "weekendStyle", "weekendBlockPenalty", "maxConsecutiveDays", "maxConsecutiveAnyRole", "preferAlternateDays", "handoffPartnerRequired"],
+        // pin moved deliberately 10/29 (Prompt 33, Faraz): maxConsecutiveAnyRole and preferAlternateDays came off her rules (they were listed here)
+        s6: ["availabilityMode", "availableWindows", "daysPerWindowWeek", "weekendStyle", "weekendBlockPenalty", "maxConsecutiveDays", "handoffPartnerRequired"],
       };
       // the merged seed (review fixes 10/1): Khan with Prompt 23's keys and Prompt 25's Christmas opt-out; backup fields last
       want.s1 = ["availabilityMode", "weekdays", "hardNeverWeekdays", "weekendStyle", "primaryContribution", "standaloneFriday", "noLoneWeekendDay", "weekendCap", "maxConsecutiveDays", "maxConsecutiveAnyRole", "holidayUnitCountsAsOneDay", "monthlyCap", "eastFeed", "holidaysOff"];

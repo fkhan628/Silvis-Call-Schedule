@@ -202,7 +202,8 @@ eq(seed.groupRules.countBackupInConsecutive, false, "seed: consecutive counts pr
 ok(!("unitExemptFromMaxConsecutive" in seed.groupRules.holidays), "seed: groupRules.holidays.unitExemptFromMaxConsecutive must be gone (Prompt 12 A)");
 eq(IDS.filter((id) => SR[id].holidayUnitCountsAsOneDay === true), [KHAN], "seed: only Khan opted in to the holiday-unit collapse");
 IDS.forEach((id) => ok(typeof SR[id].maxConsecutiveDays === "number", "seed: " + CODE[id] + " has a numeric maxConsecutiveDays"));
-eq(IDS.map((id) => SR[id].maxConsecutiveAnyRole), [4, 3, 4, 4, 7, 2], "seed: soft any-role limits Khan 4, Burchett 3, Acton 4, Philip 4, Fierce 7, Sarkar 2");
+// pin moved deliberately 10/29 (Prompt 33, Faraz): Sarkar's soft any-role limit came off (was 2) - she is on call Mon-Thu of a window week
+eq(IDS.map((id) => SR[id].maxConsecutiveAnyRole), [4, 3, 4, 4, 7, undefined], "seed: soft any-role limits Khan 4, Burchett 3, Acton 4, Philip 4, Fierce 7, Sarkar none (Faraz 10/29; 2 from 9/22)");
 const NAME = {}; seed.roster.forEach((r) => { NAME[r.id] = r.name; });
 const COLLAPSE = new Set(IDS.filter((id) => SR[id].holidayUnitCountsAsOneDay === true));
 // 9/22 (rules doc section 1 "Roles per day"; Prompt 12 item I): backup is open to
@@ -219,9 +220,11 @@ eq(SR[KHAN].hardNeverWeekdaysRoles, [P], "seed: Khan's OR days block primary onl
 // window-week count is a SOFT target (daysPerWindowWeek.target 2, primary only) checked through
 // diagnostics; alternate days and no Fri-Sun block are soft; handoffPartnerRequired is a diagnostics flag.
 ok(!("hardNeverWeekdays" in SR[SARKAR]) && !("hardNeverWeekdaysRoles" in SR[SARKAR]) && !("hardNeverWeekdaysReason" in SR[SARKAR]) && !("hardNeverWeekdaysRolesNote" in SR[SARKAR]), "seed: Sarkar carries no hardNeverWeekdays keys (9/22 evening: her windows are the only hard rule)");
-eq([SR[SARKAR].daysPerWindowWeek.target, SR[SARKAR].daysPerWindowWeek.countsBackup], [2, false], "seed: Sarkar daysPerWindowWeek = SOFT target 2 primary days per window week");
+// pin moved deliberately 10/29 (Prompt 33, Faraz): target 3 (was 2), preferAlternateDays removed (was true); the restated window
+// checks below read her windows from the seed, so they follow the Thursday ends on their own
+eq([SR[SARKAR].daysPerWindowWeek.target, SR[SARKAR].daysPerWindowWeek.countsBackup], [3, false], "seed: Sarkar daysPerWindowWeek = SOFT target 3 primary days per window week (Faraz 10/29; 2 from 9/22)");
 ok(!("min" in SR[SARKAR].daysPerWindowWeek) && !("max" in SR[SARKAR].daysPerWindowWeek) && !("minIsSoft" in SR[SARKAR].daysPerWindowWeek), "seed: no hard window-week min/max keys");
-eq([SR[SARKAR].weekendStyle, SR[SARKAR].preferAlternateDays, SR[SARKAR].weekendBlockPenalty, SR[SARKAR].handoffPartnerRequired], ["daily", true, "strong", true], "seed: Sarkar weekendStyle daily, preferAlternateDays, weekendBlockPenalty strong, handoffPartnerRequired (diagnostic)");
+eq([SR[SARKAR].weekendStyle, "preferAlternateDays" in SR[SARKAR], SR[SARKAR].weekendBlockPenalty, SR[SARKAR].handoffPartnerRequired], ["daily", false, "strong", true], "seed: Sarkar weekendStyle daily, no preferAlternateDays (removed Faraz 10/29), weekendBlockPenalty strong, handoffPartnerRequired (diagnostic)");
 const SARKAR_TARGET = SR[SARKAR].daysPerWindowWeek.target;
 const HANDOFF_IDS = IDS.filter((id) => SR[id].handoffPartnerRequired === true);
 eq(HANDOFF_IDS, [SARKAR], "seed: Sarkar is the one surgeon with the handoff diagnostic");
@@ -326,6 +329,9 @@ const PHILIP_NO_BACKUP = explicitDates(SR[PHILIP].explicitBackupUnavailable);
 const SARKAR_WINDOW = new Set();
 SR[SARKAR].availableWindows.forEach((w) => daysList(w.start, w.end).forEach((d) => SARKAR_WINDOW.add(d)));
 ok([...SARKAR_WINDOW].every((d) => !isWeekend(d) || weekday(d) === "Fri"), "seed: no Sarkar window carries a Saturday or Sunday (9/22 evening)");
+// Faraz 10/29 (Prompt 33): no Friday call - from November on no window of hers holds a Friday (October's past window keeps 10/23)
+ok([...SARKAR_WINDOW].filter((d) => d >= "2026-11-01").every((d) => weekday(d) !== "Fri" && !isWeekend(d)), "seed: from November her windows run Monday to Thursday - no Friday, Saturday or Sunday (Faraz 10/29)");
+ok(["2026-11-19", "2026-12-17", "2027-01-14"].every((d) => SARKAR_WINDOW.has(d)) && !["2026-11-20", "2026-12-18", "2027-01-15"].some((d) => SARKAR_WINDOW.has(d)), "seed: her windows end on Thursday 11/19, 12/17, 1/14 (Faraz 10/29)");
 const SARKAR_WEEKS = {};
 [...SARKAR_WINDOW].sort().forEach((d) => { (SARKAR_WEEKS[mondayOf(d)] = SARKAR_WEEKS[mondayOf(d)] || []).push(d); });
 eq(Object.keys(SARKAR_WEEKS).sort(), ["2026-10-19", "2026-11-16", "2026-12-14", "2027-01-11"], "seed: four window weeks");

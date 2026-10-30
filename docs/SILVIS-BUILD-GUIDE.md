@@ -93,7 +93,7 @@ ids.** Davenport's ids are a different namespace (FAK is `s6` there, `s1` here) 
 | s3 | Acton | BDA | yes |
 | s4 | Philip | AFP | yes |
 | s5 | Fierce | NF | derived weeks (locks) + weekday pattern outside them; cap 14/month |
-| s6 | Sarkar | SRK | monthly windows only (Mon–Fri, 9/22 evening); soft target 2 primary days per window week, alternate days preferred; a window Friday may stand alone, never a Fri–Sun block; backup inside her windows allowed, not targeted |
+| s6 | Sarkar | SRK | monthly windows only (Mon–Thu since Faraz 10/29 - no Friday call; Mon–Fri 9/22 evening); soft target 3 primary days per window week (2 until 10/29), no alternate-days preference and no any-role limit since 10/29 (on call Mon–Thu of a window week); never a Fri–Sun block; backup inside her windows allowed, not targeted |
 
 ### 3.1 Contact data policy (Faraz 9/21 — established by the Prompt 0A redaction)
 
@@ -616,7 +616,7 @@ so the unit choice now pays it like the other two (pinned together in `test/rule
 shapes the kind covers. **Effect on the other surgeons' weekend units:** only weekends where the key holder (Khan) holds the
 Friday alone or the Sat+Sun pair change — then the rest of the weekend goes to someone else as a two-day block (Philip, block
 style, +3 — his style's mismatch; Acton / Burchett, split style, +3; or a daily Sat / Sun pair with `patternDaily`; Fierce
-never — his Fri–Sun is block-only) or as a lone Friday beside Khan's pair (Sarkar's window Fridays pair naturally at 0; a
+never — his Fri–Sun is block-only) or as a lone Friday beside Khan's pair (Sarkar's window Fridays pair naturally at 0 - none since her windows end on Thursday, 10/29; a
 block- or split-style Friday costs its +3). With no key on the roster the enumeration — and the whole generate — is byte-identical to the pre-23
 engine (checked on Nov–Dec and Jan–Mar, three seeds each, 10/1). The generator writes the kind like any pattern
 (`diagnostics.weekendUnits[].kind`), counts its daily sub-pattern in `pattern-daily`, reads the key holder's legal primary
@@ -935,7 +935,7 @@ even seeds), the fill-open-only October backfill runs (Prompt 12 T) and the fixt
 7. Burchett: primary only on whitelist days (recurring or explicit `available`; a governed month's explicit list is not waived on a holiday-unit day); backup only on listed days in a month whose entry governs backup too (November, and December since 9/23); ≤ 2 consecutive primary days (real days); ~~≤ 8~~ ≤ 7 **PRIMARY** days per month (backup never counts — K; ⟶ 10/11, Prompt 32: his own hard 7, no soft limit). ~~Acton and Khan have no cap (a `monthlyCap: null` must not fall back to the group default).~~ ⟶ 10/11 (Prompt 32): `monthlyCap: null` and an absent key both read the group default — Khan, Acton, Philip and Sarkar carry the soft 7 and no hard cap (the caps are restated from the seed, `capOf`, and must equal `rules.monthlyCapFor`); a month may pass 7 (no hard reason names a surgeon without a hard cap), and every in-range primary day past its holder's soft limit is restated independently and must equal `diagnostics.overSoftLimit` in every checked run (the restatement must list at least one day across the runs, or it is vacuous).
 8. Philip: never **primary** the day before an Aledo day (H); never **primary** outside his listed weeks from 11/2026 (holiday-unit days included — small items 9/22); never 2026-10-15; backup ≤ 7 days and ≤ 1 weekend per month; ≤ 1 major holiday; ≤ 4 consecutive primary days.
 9. Fierce: his derived weeks appear whole, with the correct role, as locks; outside them never **primary** on Tue/Thu or Mon (backup any day since 9/22), a Friday primary only as the start of a Fri+Sat+Sun block; Silvis primary days + East primary-week days ≤ 14 per month (K).
-10. Sarkar: only inside her windows (Mon–Fri since 9/22 evening), either role; no Fri–Sun block; ≤ 2 consecutive primary days (hard); the 2 primaries per window week are a **soft** target (diagnostics `windowWeeks`, never a violation — N revised).
+10. Sarkar: only inside her windows (Mon–Fri since 9/22 evening; ⟶ Mon–Thu since Faraz 10/29 — no Friday call), either role; no Fri–Sun block; ≤ 2 consecutive primary days (hard); the primaries per window week (2; ⟶ 3 since 10/29) are a **soft** target (diagnostics `windowWeeks`, never a violation — N revised).
 11. Weekend units: block-style surgeons never hold a lone Fri/Sat/Sun unless the unit is flagged `fallback:true` in diagnostics.
 12. Best-of-N returns the candidate with the minimum score; determinism: same seed → same output.
 13. Holiday units: every unit in range has one primary and one backup for all its days (same surgeon throughout), the unit pre-empts the overlapping weekend unit, `neverThanksgiving` and `maxMajorHolidays` hold.
@@ -1028,6 +1028,9 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
 - **Sarkar**: soft target 2 primary days per window week (9/22 evening; the daytime statement said 3–4; primary counts only),
   alternating days when possible (soft), windows Mon–Fri (a window Friday is an ordinary standalone day; the Saturdays came
   off with the Mon–Fri windows), never a Fri–Sun block, max 2 consecutive (hard), backup optional inside windows.
+  ⟶ **Faraz 10/29 (Prompt 33):** windows Mon–Thu (no Friday call), soft target **3** primary days per window week, no
+  alternate-days preference and no any-role limit (on call Monday to Thursday of a window week); max 2 consecutive primary
+  days stays hard (rules doc §3 Sarkar, §8 item 28).
 - **Day-before rules stay primary-only** under the open-backup rule.
 - **Theme**: University of Illinois blue and orange, softened — navy #13294B as the structural color, orange #FF5F05 as
   an accent only (darkened #C2410C for text on white), red reserved for OPEN; dark mode on deep navy. See Prompt 12 O.
