@@ -2293,7 +2293,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(lists.includes('<div style={css.cardT} data-testid="trades-pending-title">{tradeListTitle("Pending", pending, tradeIsGiveProposal)}</div>'), "the pending title counts gives separately");
     assert.ok(lists.includes('<div style={css.cardT} data-testid="trades-completed-title">{tradeListTitle("Completed", done, tradeIsGiveProposal)}</div>'), "the completed title counts gives separately");
     assert.ok(lists.includes('{tradeListEmpty("Pending")}') && lists.includes('{tradeListEmpty("Completed")}'), "the empty lines say trades or gives");
-    assert.ok(lists.includes("Every open trade and give.") && lists.includes("Trades and gives waiting on you show Accept / Decline"), "the section note names gives");
+    // pin moved deliberately 10/30: the surgeon's Pending note repeated the row buttons and is gone; the scheduler's names gives
+    assert.ok(lists.includes("{isScheduler && <p style={sectionNote}>Every open trade and give.") && !lists.includes("Trades and gives waiting on you show Accept / Decline"), "the section note names gives");
     assert.ok(!lists.includes("Pending trades (") && !lists.includes("Completed trades (") && !lists.includes("No pending trades.") && !lists.includes("No completed trades."), "no hard-coded trade-only title left");
     assert.ok(src.includes("const auditGiveIds = useMemo(() => auditGiveTradeIds(auditEntries, tradeRequests, tradeIsGiveProposal), [auditEntries, tradeRequests]);"), "the give trade ids of the Activity log");
     assert.ok(src.indexOf("const auditGiveIds = useMemo(") > src.indexOf("const tradeIsGiveProposal = (r) =>"), "computed after the predicate it calls");
@@ -2486,9 +2487,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(!/East-derived|East forecast/.test(grid), "the grid cell still carries 'East-derived' / 'East forecast' text (badge title or the 'East-derived: ...' hover bit)");
     // (2) the legend: no E / F line; the East-vacation line and the ordinary lines stay
     assert.ok(!/East-derived|East forecast/.test(legend), "the grid legend still carries an 'East-derived week' / 'East forecast' line");
-    assert.ok(legend.includes("locked slot") && legend.includes("Fri-Sun tinted = weekend unit"), "the legend's ordinary lines are gone too - the slice is wrong");
+    // pin moved deliberately 10/30 (Faraz: less in the legend): the weekend-tint line is gone - OPEN is the always-shown anchor
+    assert.ok(legend.includes("locked slot") && legend.includes("= nobody assigned (today onward)"), "the legend's ordinary lines are gone too - the slice is wrong");
+    assert.ok(!legend.includes("Fri-Sun tinted = weekend unit") && !legend.includes("orange outline = today") && !legend.includes("compare-and-swap") && !legend.includes("Atwell"), "10/30: no weekend-tint, today-outline, editing-note or fixed external-cover line");
     // pin moved deliberately 10/21: the legend's East line explains the vacation bar's "name?" (no diamonds any more)
-    assert.ok(legend.includes("<strong>name?</strong> in the vacation bar = an East vacation not reviewed yet"), "the legend's East-vacation line (out of scope, Faraz 9/25) must stay");
+    // pin moved deliberately 10/30 (Faraz: less in the legend): the same line in fewer words (its hover keeps the rest)
+    assert.ok(legend.includes("<strong>name?</strong> = an East vacation not reviewed yet"), "the legend's East-vacation line (out of scope, Faraz 9/25) must stay");
     // (3) whole file: the removed flag / map / lookups are declared and read nowhere in code
     assert.strictEqual(count("const eastBadgesVisible"), 0, "the eastBadgesVisible flag is still declared");
     assert.strictEqual(count("eastBadgesVisible &&") + count("eastBadgesVisible ?"), 0, "something still reads eastBadgesVisible");
@@ -2544,7 +2548,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // (2) grid: the diamonds' map is empty for non-schedulers; the legend line is gated
     const ms = src.indexOf("const eastVacByDay = useMemo(() => {");
     assert.ok(src.slice(ms, ms + 200).includes("if (!eastDetailsVisible || !gridDays.length) return map;"), "eastVacByDay returns an empty map unless eastDetailsVisible");
-    assert.ok(src.includes('{eastDetailsVisible && eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation'), "the legend's East-vacation line is gated");
+    // pin moved deliberately 10/30: the line shows only in a month whose vacation bar has a "name?" (one source line still)
+    assert.ok(src.includes('{eastDetailsVisible && eastVacPeople.length > 0 && gridDays.some(gd => calVac(gd).some(v => v.east === "unreviewed")) && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation'), "the legend's East-vacation line is gated");
     const gridAt = src.indexOf('<div className="cal-grid" data-testid="cal-grid"'), weekRowsAt = src.indexOf('<Collapsible css={css} ck="cal_weekrows"');
     const gridAndLegend = noComments(src.slice(gridAt, weekRowsAt));
     assert.ok(!/East|Davenport/.test(gridAndLegend.replace(/eastVacByDay\[d\][^\n]*/g, "").replace(/\{eastDetailsVisible && eastVacPeople\.length > 0 && [^\n]*/g, "")), "grid / legend East text outside the gated eastVacByDay bits and the gated legend line");
@@ -3520,7 +3525,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(b0 > 0 && b1 > b0, "the banner block");
     const banner = src.slice(b0, b1);
     for (const w of ['data-shift-day={onCall.shiftDay}', "On call now (until 07:00 {onCall.handoffDow}):", '<HolderTag a={onCall.current} role="primary" small/>', '<HolderTag a={onCall.current} role="backup" small/>',
-      "<span data-testid=\"today-banner-msg\" style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>", "{onCall.beforeHandoff && (", 'data-testid="today-banner-next"', "<span>From 07:00:</span>", '<HolderTag a={onCall.next} role="primary" small/>', '<HolderTag a={onCall.next} role="backup" small/>', "{copied ? \"Copied\" : \"Share today\"}"]) assert.ok(banner.includes(w), "banner: " + w);
+      // pin moved deliberately 10/30: the share text is hidden while signed in (shown when copying fails; kept on ?public=1)
+      "<span data-testid=\"today-banner-msg\" hidden={!isPublicMode && !shareMsgShown} style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>", "{onCall.beforeHandoff && (", 'data-testid="today-banner-next"', "<span>From 07:00:</span>", '<HolderTag a={onCall.next} role="primary" small/>', '<HolderTag a={onCall.next} role="backup" small/>', "{copied ? \"Copied\" : \"Share today\"}"]) assert.ok(banner.includes(w), "banner: " + w);
     assert.ok(!banner.includes("slotIsOpen") && !banner.includes("todayStr"), "the banner never asks slotIsOpen or the calendar day");
     assert.strictEqual(count("On call today"), 0, "the old 'On call today' wording remains");
     assert.strictEqual(count("Silvis call today"), 0, "the old share wording remains");
@@ -3886,7 +3892,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(count("css.tab(view===k, T.accent)") + count("css.tab(showNotifs, T.accent)"), 2, "both nav call sites pass T.accent");
     assert.ok(src.includes('border: isToday ? "2px solid " + T.accent'), "today ring is the accent");
     assert.ok(src.includes('className="cal-pill cal-open" style={{color:T.open'), "OPEN pill uses T.open");
-    assert.ok(src.includes("<span>orange outline = today</span>"), "legend names the orange outline");
+    // pin moved deliberately 10/30 (Faraz: less in the legend): the ring is the accent and plain to see - no legend line for it
+    assert.strictEqual(count("orange outline = today"), 0, "no legend line for today's outline");
     assert.strictEqual(count("blue outline = today"), 0);
   });
   // Review fixes (wave 9 review of TH).
@@ -4667,7 +4674,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(!/>\s*NOTE\s*</.test(gridJsx) && !gridJsx.includes('"NOTE"'), "no NOTE tag in the grid, whatever its class");
     assert.ok(!gridJsx.includes("eastVacMarkStyle(") && !gridJsx.includes("cal-dots"), "no diamond and no dots row in the grid");
     assert.ok(!/weekend unit/.test(gridJsx.slice(0, gridJsx.indexOf("{gridDays.map("))), "no 'weekend unit' label in the header");
-    assert.ok(src.includes('if (a && a.note) titleBits.push("note: " + a.note);'), "the note stays in the hover");
+    // pin moved deliberately 10/30: the note stays in the hover - the scheduler's in full, everyone else's without the importer's
+    // provenance (dayNoteShown, as the day summary)
+    assert.ok(src.includes('const noteT = a && a.note ? (isScheduler ? a.note : dayNoteShown(a.note)) : ""; if (noteT) titleBits.push("note: " + noteT);'), "the note stays in the hover");
     // the padlock: the scheduler's; anyone signed in sees it on a locked slot that is still OPEN (the board will not let them take it)
     assert.ok(src.includes('{locked && !isPublicMode && (isScheduler || (!holder && slotIsOpen(day, holder, todayStr))) ? <Padlock className="cal-lock"'), "the grid's padlock: the scheduler's, and a locked OPEN slot's for everyone signed in");
     assert.ok(src.includes('<span data-testid="legend-lock" style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot{isScheduler ? "" : " (ask the scheduler)"}</span>}') && src.includes('{!isPublicMode && (isScheduler || gridDays.some(gd => { const g = schedule[gd]; return !!g && slotIsOpen(gd, null, todayStr) &&'), "its legend line when the grid can show one (today onward for a non-scheduler)");
@@ -5060,9 +5069,44 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const all = ["s1", "s2", "s3", "s4", "s5", "s6"].flatMap(words).join(" ");
     assert.strictEqual(/@|\b\d{3}[-.]\d{3}[-.]\d{4}\b/.test(all), false, "rules words must never carry an address or phone");
   });
+  check("10/30 (decision 11): offerRulesWords with { eastDetails: false } names no East / Davenport / DSG for any seed surgeon - the same facts in neutral words; without opts the words are unchanged", () => {
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const masked = (id) => H.offerRulesWords(seed.surgeonRules[id], seed.groupRules, { eastDetails: false });
+    for (const id of ["s1", "s2", "s3", "s4", "s5", "s6"]) assert.ok(!masked(id).some(s => /\b(East|Davenport|DSG)\b/.test(s)), id + ": " + JSON.stringify(masked(id)));
+    const f = masked("s5");
+    assert.ok(f.some(s => s === "Outside the weeks set in advance: primary on Wed, Fri/Sat/Sun as one block; backup any day."), JSON.stringify(f));
+    // review 10/30: "included", never "plus" - the other days count toward the same cap
+    assert.ok(f.some(s => s === "Cap: 14 primary days a month, your other counted call days included."), JSON.stringify(f));
+    assert.strictEqual(f.filter(s => /^Some of your (weeks|days) are (set|blocked) in advance/.test(s)).length, 1, "the derive / block pair becomes one line: " + JSON.stringify(f));
+    assert.ok(masked("s1").some(s => /^Weekdays: Mon, Wed \(offered automatically when you are free\)\.$/.test(s)), JSON.stringify(masked("s1")));
+    assert.deepStrictEqual(H.offerRulesWords(seed.surgeonRules.s5, seed.groupRules, { eastDetails: true }), H.offerRulesWords(seed.surgeonRules.s5, seed.groupRules), "eastDetails true = no opts (the scheduler's words)");
+    assert.ok(H.offerRulesWords(seed.surgeonRules.s5, seed.groupRules).some(s => /East weeks derive your Silvis week/.test(s)), "the scheduler still reads the East words");
+  });
   {
     const src = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8");
     const styles = require(path.join(ROOT, "app-styles.js"));
+    check("10/30: the painter passes its eastDetails to offerRulesWords; its 'Only these days' sentence names East only for the scheduler", () => {
+      assert.ok(src.includes("const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules, { eastDetails: !!eastDetails }), [rules, groupRules, eastDetails]);"));
+      assert.ok(src.includes('(eastDetails ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)." : "You are never placed on a day you did not list (your vacations, caps and other rules still apply on your days).")'));
+    });
+    check("10/30: dayNoteShown - the read-only day summary drops the importer's provenance and an old override tag, keeps the operational words", () => {
+      const at = src.indexOf("function dayNoteShown(note) {");
+      const body = src.slice(at, src.indexOf("\n}\n", at) + 2);
+      assert.ok(at > 0 && body.length < 700, "dayNoteShown could not be sliced out");
+      const dn = new Function(body + "\nreturn dayNoteShown;")();
+      assert.strictEqual(dn("seed: office-er-call-panels-2026-09-16"), "", "a bare provenance: no Note line");
+      assert.strictEqual(dn("seed: fierce-2026-09-22-backup-week - Fierce backup week"), "Fierce backup week");
+      assert.strictEqual(dn("awaiting confirmation - seed: x"), "awaiting confirmation");
+      // review 10/30: the marker-only note (impDayNote's flag with no source or note) and a trailing "; source <slug>" read clean too
+      assert.strictEqual(dn("awaiting confirmation - "), "awaiting confirmation");
+      assert.strictEqual(dn("seed: office-er-call-panels-2026-09-22 - Fierce backup week 11/9-11/15; source fierce-2026-09-22-backup-week"), "Fierce backup week 11/9-11/15");
+      assert.strictEqual(dn("awaiting confirmation - check with the office"), "awaiting confirmation - check with the office");
+      assert.strictEqual(dn("[override: hard-never-weekday:Thu] covered by Acton"), "covered by Acton");
+      assert.strictEqual(dn(null), ""); assert.strictEqual(dn("plain note"), "plain note");
+      assert.ok(src.includes(") : dayNoteShown(draft.note) ? (") && src.includes("Note: {dayNoteShown(draft.note)}</div>"), "the summary renders the shown note");
+      const sl = src.slice(src.indexOf("const AWAITING_CONFIRMATION_MARKER = "), src.indexOf("// --- Client versions"));
+      assert.ok(sl.includes("function dayNoteShown(note) {"), "inside the slice the DayEditor runners lift");
+    });
     check("U3a pins: OfferPainterSheet is a MODULE-SCOPE component mounted outside the view conditionals, the app never defines it inside CallSchedule", () => {
       const def = src.indexOf("\nfunction OfferPainterSheet(");
       const app = src.indexOf("\nfunction CallSchedule() {");
@@ -5547,7 +5591,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(close.includes("Standing now - ${words}.") && close.includes("logAudit(\"period.close\", `Offers for ${p.label} closed now by the scheduler (${words})`, { period_id: p.id, label: p.label, offers_close_at: p.offers_close_at, by: \"scheduler\", rollcall: roll });"), "the confirm and the audit carry the words; the audit's roll call carries ids / status / days / vacation dates only");
       assert.strictEqual(/"nothing"|not started|never answered/.test(close), false, "Close now never says 'nothing' / 'not started' / 'never answered'");
       // to the person / to the scheduler
-      assert.ok(src.includes('{st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : pid === mySurgeon ? "following your rules" : "following their rules"}'), "My schedule's offer status line: his own page 'following your rules', the scheduler viewing another 'following their rules'");
+      // pin moved deliberately 10/30: rules_only reads "going by your rules" / "going by their rules", as the painter says it
+      assert.ok(src.includes('{st === "submitted" ? "submitted" : st === "rules_only" ? (pid === mySurgeon ? "going by your rules" : "going by their rules") : pid === mySurgeon ? "following your rules" : "following their rules"}'), "My schedule's offer status line: his own page 'following your rules', the scheduler viewing another 'following their rules'");
       assert.ok(src.includes('periodStatus === "rules_only" ? "by your rules" : asScheduler ? "following their rules" : "following your rules"}') && src.includes('periodStatus === "rules_only" ? "You go by your rules for it" : asScheduler ? "Following their rules for it" : "Following your rules for it"}'), "the painter's period line and its closed note: 'following your rules' to the person, 'following their rules' when the scheduler / office paints for him");
       assert.strictEqual(/"nothing yet"|"You entered nothing for it"|"nothing entered yet"|rules \(nothing entered\)/.test(src), false, "the old not-started words are gone everywhere a person reads them");
     });
@@ -6571,8 +6616,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(la.includes('if (rows === null) showToast("Couldn\'t load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");\n      else setAuditEntries(rows);'), "null = not read -> toast, the current entries kept; an array is adopted");
     });
     check("A7 review: the Time off copy speaks to the office (not 'your own vacations'), and the painter's tap hint / rules toggle name the relayed surgeon instead of 'yourself' / 'My rules' when relaying", () => {
-      assert.ok(src.includes("<p style={sectionNote}>{isCoordinator ? \"Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct).\" : <>Enter your own vacations - no approval, the group is notified."), "the coordinator's Time off note");
-      assert.ok(src.includes("A vacation that has started stays on record{isScheduler ? \" (as the scheduler you can enter or remove anyone's)\" : \"\"}.</>} Notes are operational and visible to the whole group.</p>"), "the surgeon / scheduler note is unchanged");
+      assert.ok(src.includes("<p style={sectionNote}>{isCoordinator ? \"Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct). Notes are operational and visible to the whole group.\" : <>Your vacations need no approval - the group is notified."), "the coordinator's Time off note");
+      // pin moved deliberately 10/30: the surgeon / scheduler note is shorter - and still says notes are visible to the group
+      assert.ok(src.includes("If you are on call on any of their days (or primary the day before), trade those shifts first. Notes are visible to the whole group.{isScheduler ? \" As the scheduler you can enter or remove anyone's vacation.\" : \"\"}</>}</p>"), "the surgeon / scheduler note");
       assert.ok(src.includes('const rangeHint = !rangeMode ? `Tap a day to offer ${brushWord(armed) === "clear" ? "nothing (clear)" : (asScheduler && person ? person.name : "yourself") + " as " + brushWord(armed)}; tap again with the same brush to clear it.`'), "the tap hint names the relayed surgeon");
       assert.ok(src.includes('{rulesOpen ? "Hide rules" : asScheduler ? "Rules" : "My rules"}'), "the rules toggle reads Rules when relaying");
     });
@@ -7675,7 +7721,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const emptyRow = board.slice(board.indexOf("{rows.length === 0 && <tr>"), board.indexOf("{rows.map(s => {"));
       assert.ok(emptyRow.length > 0 && emptyRow.length < 600, "the empty-row line moved");
       assert.ok(!/<td[^>]*color:T\.success/.test(emptyRow), "the empty row's <td> must not carry color:T.success (the td rule overrides it in dark mode)");
-      assert.ok(/<td colSpan=\{canAct \? 7 : 6\} style=\{\{fontWeight:600,padding:"12px 8px"\}\}><span data-testid="openshifts-empty" style=\{\{color:T\.success\}\}>\{!loaded \? "Loading schedule"/.test(emptyRow), "the empty row's text sits in <span data-testid=\"openshifts-empty\" style={{color:T.success}}> (the sheet leaves a span's inline colour alone; T.success resolves to #40C060 in dark)");
+      // pin moved deliberately 10/30: Why and Last announced are the scheduler's columns - the empty row spans nCols
+      assert.ok(/<td colSpan=\{nCols\} style=\{\{fontWeight:600,padding:"12px 8px"\}\}><span data-testid="openshifts-empty" style=\{\{color:T\.success\}\}>\{!loaded \? "Loading schedule"/.test(emptyRow), "the empty row's text sits in <span data-testid=\"openshifts-empty\" style={{color:T.success}}> (the sheet leaves a span's inline colour alone; T.success resolves to #40C060 in dark)");
       const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
       assert.ok(smoke.includes("`b2-settings-${theme}-390.png`), fullPage: true })"), "the smoke's b2-settings-<theme>-390.png must be a fullPage screenshot so the PNG shows the two cards the probe measured");
       assert.ok(smoke.includes("`b2-openshifts-${theme}-390.png`), fullPage: true })"), "the smoke's b2-openshifts-<theme>-390.png must be a fullPage screenshot (the board's rows run past one 844 px viewport)");
@@ -10946,13 +10993,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/isCoordinator/.test(body), "no office exemption: the coordinator is refused like a surgeon");
       const run = (isScheduler, guard, answer) => {
         const log = { toasts: [], confirms: [] };
-        const fn = new Function("vacGuardFor", "isScheduler", "confirm", "showToast", "vacationGuardOverride", body + "\nreturn vacGuardGate;")(() => guard, isScheduler, (t) => { log.confirms.push(t); return answer; }, (m, k) => log.toasts.push([m, k]), H.vacationGuardOverride);
+        // pin moved deliberately 10/30: the gate's toast and confirm read helpers.vacationGuardWords (the words without the token)
+        const fn = new Function("vacGuardFor", "isScheduler", "confirm", "showToast", "vacationGuardOverride", "vacationGuardWords", body + "\nreturn vacGuardGate;")(() => guard, isScheduler, (t) => { log.confirms.push(t); return answer; }, (m, k) => log.toasts.push([m, k]), H.vacationGuardOverride, H.vacationGuardWords);
         return { r: fn("s2", "2027-03-17", "2027-03-17", null), log };
       };
       const okG = { ok: true }, noG = { ok: false, message: VGM("3/17"), confirmText: "Q - enter it anyway?", overDays: [{ day: "2027-03-17", around: 1 }], active: 6, minAround: 2 };
       assert.deepStrictEqual(run(false, okG).r, { ok: true, guard: okG });
       const s = run(false, noG);
-      assert.deepStrictEqual([s.r.ok, s.r.message, s.log.toasts, s.log.confirms], [false, VGM("3/17"), [[VGM("3/17"), "error"]], []], "a surgeon / the office: refused, toast, no dialog");
+      // the toast reads the words without VACATION_TOO_FEW_AROUND (10/30); the returned message keeps the database's words
+      assert.deepStrictEqual([s.r.ok, s.r.message, s.log.toasts, s.log.confirms], [false, VGM("3/17"), [[H.vacationGuardWords(VGM("3/17")), "error"]], []], "a surgeon / the office: refused, toast, no dialog");
+      assert.ok(/^On 3\/17 only 1 of /.test(H.vacationGuardWords(VGM("3/17"))) && !/VACATION_/.test(H.vacationGuardWords(VGM("3/17"))) && H.vacationGuardWords("Q - x") === "Q - x" && H.vacationGuardWords(null) === "", "vacationGuardWords: the token goes, a capital first letter; any other text unchanged");
       const yes = run(true, noG, true);
       assert.deepStrictEqual([yes.r.ok, yes.r.overridden, yes.r.override, yes.log.confirms, yes.log.toasts], [true, true, { days: "3/17", around: 1, active: 6, minimum: 2 }, ["Q - enter it anyway?"], []], "the scheduler: confirm, yes -> proceed, the override returned for the audit row");
       const no = run(true, noG, false);
@@ -11008,7 +11058,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(rg.includes('<div data-testid={prefix + "-also-off"} data-ok={preview.ok ? "1" : "0"} data-fewest={preview.fewest} data-active={preview.active} data-min={preview.minAround} data-east-pending={preview.eastPending ? "1" : "0"} role="status"'), "<prefix>-also-off and its data attributes");
       assert.ok(rg.includes('<span data-testid={prefix + "-also-off-text"}>{vacationGuardLine(preview, nameOf, { mine: !!mySurgeon && preview.personId === mySurgeon, personName: nameOf(preview.personId), showEast: eastDetailsVisible })}</span>'), "the pure line; the East gloss follows eastDetailsVisible (the scheduler's only, Item E3)");
       assert.ok(rg.includes('{!preview.ok && !preview.tooLong && <span data-testid={prefix + "-also-off-under"}>{isScheduler ? " - as the scheduler you can still enter it (you will be asked to confirm)." : " - it would be refused: at least " + preview.minAround + " surgeons must stay around."}</span>}'), "the under-the-minimum words per role");
-      assert.ok(rg.includes("{refusalMsg && (") && rg.includes('<div data-testid={prefix + "-guard-refusal"} role="alert"') && rg.includes('<span data-testid={prefix + "-guard-message"}>{refusalMsg}</span>'), "the refusal box: <prefix>-guard-refusal / -message");
+      // pin moved deliberately 10/30: the box shows the words without the database token (helpers.vacationGuardWords)
+      assert.ok(rg.includes("{refusalMsg && (") && rg.includes('<div data-testid={prefix + "-guard-refusal"} role="alert"') && rg.includes('<span data-testid={prefix + "-guard-message"}>{vacationGuardWords(refusalMsg)}</span>'), "the refusal box: <prefix>-guard-refusal / -message");
       const vf = src.slice(src.indexOf("const renderVacationForm = (personChoices) => ("), src.indexOf("const authBox = "));
       assert.ok(vf.includes('{renderVacGuard("vac", vacGuardPreview, vacRefusalShown(vacGuardRefusal, vacSurgeon, vacStart, vacEnd, vacGuardPreview), () => setVacGuardRefusal(null))}'), "the Add form: prefix vac, the refusal for the current person and dates, judged live");
       assert.ok(vf.indexOf('renderVacGuard("vac",') > vf.indexOf('data-testid="vac-add"') && vf.indexOf('renderVacGuard("vac",') < vf.indexOf('data-testid="vac-conflict"'), "under the Add button, before the on-call refusal");
@@ -12468,7 +12519,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(edSrc.includes("  ) : (!canEdit && !isPublicMode && (appState === \"failed\" || appState === \"skipped\")) ? (") && edSrc.includes('<div data-testid="editor-app-summary-failed" data-state={appState}') && edSrc.includes('{appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"}</span>'), "the day summary's failed / not-loaded line");
       // ship review 10/2: a first read with no fresh token ("skipped") is said in the legend too - never the look of "no APP days"
       assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP days not loaded yet - the A lines may be missing</span>}'), 1, "the legend's not-loaded line");
-      assert.ok(SRC.includes('{!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = the APP on call that day (third line)</span>}'));
+      // pin moved deliberately 10/30 (Faraz: less in the legend): shorter words, the same gate
+      assert.ok(SRC.includes('{!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = APP on call</span>}'));
       assert.ok(SRC.includes('<span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>'), "the phone legend line is unchanged");
       for (const css of [".cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }", ".cal-app-tag { font-style: normal; font-weight: 800; margin-right: 3px; flex-shrink: 0; }", ".cal-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }", ".cal-app { font-size: 9px; }"]) assert.strictEqual(cnt(SRC, css), 1, css);
       const T = require(path.join(ROOT, "app-styles.js")).THEME;
@@ -14424,7 +14476,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const bf = src.slice(src.indexOf("const badgesFor = (d, who) => {"), src.indexOf("const countdown = (d) =>"));
       const hAt = bf.indexOf('out.push({ k: "H"'), gate = bf.indexOf("if (!eastDetailsVisible) return out;");
       assert.ok(hAt > 0 && gate > hAt && bf.indexOf('k: "E"') > gate && bf.indexOf('k: "O"') > gate && bf.indexOf('k: "F"') > gate && bf.indexOf('k: "V"') > gate, "the holiday badge for everyone, the East badges after the gate");
-      assert.ok(src.includes('<span style={muted}>H holiday unit{eastDetailsVisible ? " - E East-derived week - F East forecast busy - EV East (Davenport) vacation" : ""}</span>'), "the legend");
+      // pin moved deliberately 10/30: the legend names only the letters the list shows; the East letters stay under eastDetailsVisible
+      assert.ok(src.includes('const east = eastDetailsVisible ? [["E", "E East-derived week"], ["O", "O East override (no East call)"], ["F", "F East forecast busy"], ["V", "EV East (Davenport) vacation"]].filter(([k]) => seen.has(k)).map(([, w]) => w) : [];') && src.includes('<span className="mine-hol-letter">H holiday{east.length ? " - " : ""}</span>') && !src.includes('<span style={muted}>H holiday unit{eastDetailsVisible'), "the legend");
       assert.ok(src.includes("{eastDetailsVisible && eastVacById[pid] && ("), "Mine's East card");
       assert.ok(src.includes("{eastDetailsVisible && eastVacPeople.length > 0 && (\n            <div style={css.card} data-testid=\"eastvac-timeoff\">"), "Time off's East card");
       assert.ok(!src.includes("My East (Davenport) vacations\" : \"") && !src.includes('isScheduler ? "East (Davenport) vacations" : "My East (Davenport) vacations"'), "no non-scheduler East title left");

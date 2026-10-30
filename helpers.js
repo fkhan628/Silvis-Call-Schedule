@@ -4723,6 +4723,17 @@ function vacationGuardMessage(overDays, activeCount, minAround) {
   list.forEach((x) => { let g = groups.find((gg) => gg.around === x.around); if (!g) { g = { around: x.around, days: [] }; groups.push(g); } g.days.push(x.day); });
   return VG_CODE + ": on " + groups.map((g) => vgDaysLabel(g.days) + " only " + g.around).join("; on ") + " of " + activeCount + " surgeons would be around (minimum " + minAround + ")" + VG_TAIL;
 }
+// vacationGuardWords(msg) -> the words a person reads (10/30): a message starting "VACATION_TOO_FEW_AROUND: " (the database's
+// refusal and vacationGuardMessage's) loses the token and gets a capital first letter ("VACATION_TOO_FEW_AROUND: on 6/11 only 1 of 6
+// ..." -> "On 6/11 only 1 of 6 ..."), as noPrimaryErrorWords does for the painter; any other message comes back unchanged. Display
+// only - the stored refusal, its matching and the audit rows keep the token.
+function vacationGuardWords(msg) {
+  const s = msg === undefined || msg === null ? "" : String(msg);
+  const p = VG_CODE + ":";
+  if (s.indexOf(p) !== 0) return s;
+  const rest = s.slice(p.length).replace(/^\s+/, "");
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : s;
+}
 // vgMerge(ranges, same?) -> the ranges sorted, overlapping and adjacent ones merged (the first range's other keys kept);
 // with same(a, b) only ranges it accepts are merged (the East ranges of one state - an away range never takes an unreviewed
 // neighbour's gloss, or the other way round).
@@ -5102,10 +5113,13 @@ function suMonthlyCapReading(rules, groupRules) {
   }
   return Object.assign(group, { invalid: true });
 }
-// offerRulesWords(rules, groupRules) -> plain sentences describing one surgeon's rules, built from the DATA in
+// offerRulesWords(rules, groupRules, opts) -> plain sentences describing one surgeon's rules, built from the DATA in
 // call_schedule_data.data.surgeonRules (no surgeon-specific branch; a key that is absent says nothing). Shown by
 // the painter next to "Go by my rules" so the person knows what that means for them. Never carries a note field.
-function offerRulesWords(rules, groupRules) {
+// opts.eastDetails false (10/30, decision 11 of 10/14 - no East / Davenport word for anyone but the scheduler): the East
+// features read in neutral words, as the painter's greyed days already do; a call without opts keeps the full words.
+function offerRulesWords(rules, groupRules, opts) {
+  const east = !(opts && opts.eastDetails === false);
   const R = rules && typeof rules === "object" ? rules : null;
   const G = groupRules && typeof groupRules === "object" ? groupRules : {};
   const out = [];
@@ -5126,7 +5140,7 @@ function offerRulesWords(rules, groupRules) {
   // Prompt 23 B1 (9/30): the contribution key, said plainly (weekends: Prompt 12 L; weekdays: Prompt 23)
   if (R.primaryContribution === "weekdays") out.push("Preferred: weekday primary (Mon-Thu, or a Friday on its own).");
   else if (R.primaryContribution === "weekends") out.push("Preferred: weekend primary (a full Fri-Sun block).");
-  if (R.weekdays && Array.isArray(R.weekdays.allowed) && R.weekdays.allowed.length) out.push("Weekdays: " + R.weekdays.allowed.join(", ") + (R.weekdays.autoOffer ? " (offered automatically when East is clear)" : "") + ".");
+  if (R.weekdays && Array.isArray(R.weekdays.allowed) && R.weekdays.allowed.length) out.push("Weekdays: " + R.weekdays.allowed.join(", ") + (R.weekdays.autoOffer ? (east ? " (offered automatically when East is clear)" : " (offered automatically when you are free)") : "") + ".");
   // Prompt 23 B4: with hardNeverWeekdaysNoticeDays the rule is hard only that many days ahead (a soft penalty beyond it).
   // Review 2 (10/1): not "only as a last resort" - beyond the notice the soft +hardNeverBeyondNotice cancels the weekday
   // bonus (net 0 at the default weights): a far Tue/Thu competes with a colleague on equal terms, behind his own Mon/Wed;
@@ -5152,7 +5166,7 @@ function offerRulesWords(rules, groupRules) {
   if (sfOn) out.push("Primary weekends: a Friday on its own, Saturday + Sunday, or Fri-Sun" + (nlOn ? " - never a Saturday or Sunday alone" : "") + ".");
   else if (nlOn) out.push("Saturday and Sunday come as a pair (never one alone as primary).");
   const wcap = R.weekendCap;
-  if (wcap && typeof wcap === "object" && typeof wcap.perMonth === "number") out.push("At most " + wcap.perMonth + " weekend" + (wcap.perMonth === 1 ? "" : "s") + " a month" + (wcap.countsEast ? ", East weekends included" : "") + " (preferred, not a hard limit).");
+  if (wcap && typeof wcap === "object" && typeof wcap.perMonth === "number") out.push("At most " + wcap.perMonth + " weekend" + (wcap.perMonth === 1 ? "" : "s") + " a month" + (wcap.countsEast ? (east ? ", East weekends included" : ", your other call weekends included") : "") + " (preferred, not a hard limit).");
   if (Array.isArray(R.recurringAvailable) && R.recurringAvailable.length) out.push("Available on " + listOf(R.recurringAvailable) + ".");
   if (Array.isArray(R.recurringUnavailable) && R.recurringUnavailable.length) out.push("Unavailable on " + listOf(R.recurringUnavailable) + ".");
   if (Array.isArray(R.recurringAvoid) && R.recurringAvoid.length) out.push("Prefer not: " + listOf(R.recurringAvoid) + ".");
@@ -5166,12 +5180,16 @@ function offerRulesWords(rules, groupRules) {
     const prim = Object.keys(wp).filter(d => wp[d] && wp[d].primary === true);
     const block = Object.keys(wp).filter(d => wp[d] && wp[d].primary === "weekend-block-only");
     const noBackup = Object.keys(wp).filter(d => wp[d] && wp[d].backup === false);
-    out.push("Outside your East weeks: primary on " + (prim.length ? prim.join(", ") : "no weekday") + (block.length ? ", " + block.join("/") + " as one block" : "") + "; backup " + (noBackup.length ? "except " + noBackup.join(", ") : "any day") + ".");
+    out.push((east ? "Outside your East weeks" : "Outside the weeks set in advance") + ": primary on " + (prim.length ? prim.join(", ") : "no weekday") + (block.length ? ", " + block.join("/") + " as one block" : "") + "; backup " + (noBackup.length ? "except " + noBackup.join(", ") : "any day") + ".");
   }
   const ef = R.eastFeed;
-  if (ef && ef.enabled) {
+  if (ef && ef.enabled && east) {
     if (ef.eastBlocksPrimary || ef.eastBlocksBackup) out.push("Your East (Davenport) call days block " + [ef.eastBlocksPrimary ? "primary" : null, ef.eastBlocksBackup ? "backup" : null].filter(Boolean).join(" and ") + (ef.forecast ? "; the forecast stands in while Davenport is unpublished" : "") + ".");
     if (ef.deriveFrom || ef.statedWeeks) out.push("Your East weeks derive your Silvis week: East primary week = Silvis backup all week, East backup week = Silvis primary all week.");
+  } else if (ef && ef.enabled) {
+    // the same facts without an East word ("not available" is the painter's own word for those days)
+    if (ef.deriveFrom || ef.statedWeeks) out.push("Some of your weeks are set in advance (backup all week, or primary all week); the painter greys their days 'not available'.");
+    else if (ef.eastBlocksPrimary || ef.eastBlocksBackup) out.push("Some of your days are blocked in advance; the painter greys them 'not available'.");
   }
   if (R.aledo && Array.isArray(R.aledo.weekdays) && R.aledo.weekdays.length) out.push("Aledo days: " + listOf(R.aledo.weekdays) + (R.aledo.hardAvoidDayBefore ? "; never on call the day before" : "") + ".");
   if (R.weekendStyle) out.push((sfOn ? "Backup weekends: " : "Weekends: ") + (R.weekendStyle === "block" ? "Fri-Sun as one block" : R.weekendStyle === "split" ? "split with a partner" : R.weekendStyle === "daily" ? "one day at a time" : String(R.weekendStyle)) + (R.weekendsAvailable && R.weekendsAvailable.primary === false ? " (backup only)" : "") + ".");
@@ -5179,8 +5197,8 @@ function offerRulesWords(rules, groupRules) {
   // group default (the seed's soft 7), "none" is no limit; an unreadable value reads as the group default too
   const cap = suMonthlyCapReading(R, G);
   if (cap.none) out.push("No monthly limit.");
-  else if (cap.hard !== null) out.push("Cap: " + (cap.hardGroup ? "the group default of " : "") + cap.hard + " primary days a month" + (cap.soft !== null ? " (soft limit " + cap.soft + (cap.softGroup ? ", the group's" : "") + ")" : "") + (cap.east ? ", East primary-week days included" : "") + ".");
-  else if (cap.soft !== null) out.push("Soft limit: " + cap.soft + " primary days a month" + (cap.softGroup ? " (the group's)" : "") + (cap.east ? ", East primary-week days included" : "") + ".");
+  else if (cap.hard !== null) out.push("Cap: " + (cap.hardGroup ? "the group default of " : "") + cap.hard + " primary days a month" + (cap.soft !== null ? " (soft limit " + cap.soft + (cap.softGroup ? ", the group's" : "") + ")" : "") + (cap.east ? (east ? ", East primary-week days included" : ", your other counted call days included") : "") + ".");
+  else if (cap.soft !== null) out.push("Soft limit: " + cap.soft + " primary days a month" + (cap.softGroup ? " (the group's)" : "") + (cap.east ? (east ? ", East primary-week days included" : ", your other counted call days included") : "") + ".");
   if (R.backupCap && typeof R.backupCap === "object") out.push("Backup cap: " + [typeof R.backupCap.perMonthDays === "number" ? R.backupCap.perMonthDays + " days" : null, typeof R.backupCap.weekendsPerMonth === "number" ? R.backupCap.weekendsPerMonth + " weekend" + (R.backupCap.weekendsPerMonth === 1 ? "" : "s") : null].filter(Boolean).join(" and ") + " a month.");
   if (typeof R.maxConsecutiveDays === "number") out.push("At most " + R.maxConsecutiveDays + " consecutive primary days" + (typeof R.maxConsecutiveAnyRole === "number" ? " (" + R.maxConsecutiveAnyRole + " in any role)" : "") + ".");
   // Faraz 10/18 (the rest preference): restBetweenStretches - said only when rules.js applies it (well formed, 2 days or more, a weight
@@ -7201,7 +7219,7 @@ if (typeof module !== "undefined" && module.exports) {
     OP_NOTICE_DEFAULTS, offerDeadlineNotices, offerPeriodLeadWarnings,
     offerFreezeRollcall, offerFreezeWords, offerFreezeDay, offerHeadsUpWords,
     offerPeriodJump, vacationLeadNote, tradesWaitingOn, tradeWaitingUnitLine, countPendingProposals, tradeProposalKey,
-    VACATION_GUARD_DEFAULTS, VG_CODE, VG_TAIL, VG_MAX_DAYS, vacationRules, vgDaysLabel, vacationGuardMessage, vacationGuard, vacationGuardLine,
+    VACATION_GUARD_DEFAULTS, VG_CODE, VG_TAIL, VG_MAX_DAYS, vacationRules, vgDaysLabel, vacationGuardMessage, vacationGuardWords, vacationGuard, vacationGuardLine,
     vacationGuardOverride, vacationGuardOverrideText,
     derivedVacationMap, derivedVacationSignature, vacationMapWithExtra, eastVacationOwnWarnings, eastVacationWarnDays, eastVacationWarnText,
     eastVacationWarnLine, eastRefreshStatus, OFFER_EAST_BLOCK_CODES, OFFER_EAST_HIDDEN_WORDS, EAST_FEED_STALE_DAYS,

@@ -687,12 +687,32 @@ buttons, the notification center, the refresh/version banner, and Settings → D
   week row (`calVacKey`), Davenport's look; the theme's `vacBar` / `vacText` (7.93:1 light, 8.16 dark - `test/ui/contrast.mjs`).
   Gone from the grid: the vacation dots, the scheduler's East diamonds (the day editor's East line, the coverage strip and
   Setup > East feed keep the review state), the NOTE tag (the note stays in the hover and the day editor) and the Fri header's
-  "weekend unit" label (the tint stays; the legend names it); the padlock and its legend line are the scheduler's - and, for everyone signed in, a
+  "weekend unit" label (the tint stays; -> 10/30 no legend line names it either); the padlock and its legend line are the scheduler's - and, for everyone signed in, a
   locked slot that is still OPEN (today onward) shows the padlock too, with the legend line "locked slot (ask the scheduler)", since the
   board will not let them take it. The grid keeps its 3 px gaps and rounded cells, so a joined run reads as joined tabs, not one
   strip (Davenport's grid has 1 px gaps - not copied). The bar wraps between people ("Acton, Fierce" - the comma ends a name, the
   icon is glued to the first); on a phone the icon gives way (the grey bar and the codes say it).
   `data-vac` marks a `time_off` / derived entry in the bar, `data-eastvac` (+ `-state`) the scheduler's East entry.
+- **The legend and the phone clutter (Faraz 10/30: "make the calendar less cluttered with less written in the legend ... change
+  what you think would be useful for the group"):** the legend always shows the colour swatches, the phone's "top line = primary"
+  line and OPEN; every other line shows only while the visible month draws its mark, read from the rows the cells read - the external
+  cover by its own name (`legend-ext`), the padlock (same gate as before), the holiday's name on a phone only (`legend-hol`; a wide
+  cell prints it), the vacation bar (`legend-vac`), "over N" (`legend-over-soft`, "= past the primary's monthly soft limit"), the APP
+  line ("A name = APP on call") and the scheduler's "name? = an East vacation not reviewed yet" (only in a month with one). Gone:
+  "Fri-Sun tinted = weekend unit", "orange outline = today", the fixed "Atwell = external cover" and the scheduler's
+  "compare-and-swap" sentence. Around it: the on-call banner's monospace share text shows only when copying fails (signed in;
+  ?public=1 keeps it; it is hidden, not unmounted) and rides in Share today's hover; P and B never wrap away from their names;
+  "Week rows" opens closed except on ?public=1 (a stored choice wins); on a phone the scheduler's East all-clear strip items (a count
+  of 0: forecast-busy, East vacation warnings / unreviewed) give way (`.cov-zero` - "0 open primary / backup" stay, the all-clear)
+  and the nav tabs take 8 px side padding (`.navtab`), so a surgeon's eight tabs fit two rows at 390 px (measured with the fallback
+  font). The same night: the Open shifts board opens on All, Take sits right after the role (Why and Last announced are the
+  scheduler's), the claim sheet shows no generator weights to a surgeon; the day summary and the cell hover drop the importer's
+  "seed: <source>" provenance (and a trailing "; source <slug>") for everyone but the scheduler (`dayNoteShown`); shorter Time off,
+  trade, Totals, Fairness and My pay notes (the method behind closed `<details>`, 36 px toggles on a phone); Totals draws its four
+  target columns only when a row has a target; a refused vacation reads without the database token on every path, Paint month
+  included (`helpers.vacationGuardWords`); the offer painter's My rules box and its "Only these days" sentence carry no East word
+  for a non-scheduler (`helpers.offerRulesWords(rules, groupRules, { eastDetails })`, decision 11 - "Outside the weeks set in
+  advance", "your other counted call days included").
 - **Week rows list:** the same rows as the ER-panel author's Word document (MON/SUN DATES | TRAUMA | TRAUMA BACKUP — the primary column is headed TRAUMA since 9/22, Prompt 12 P) with ranges collapsed (`9/15–9/18 Philip`) — this is also the export format (§9).
 - **Day editor** (click a cell): set primary/backup from a dropdown that shows eligibility — eligible names first, ineligible greyed with the reason; lock toggle; note. Backup lists everyone (9/22: backup is open unless `backupOptOut`). Outside surgeons (M) sit under their own "Outside surgeons" heading for both roles; picking one locks the role and saves `source: "manual-external"`. A Fri/Sat/Sun candidate who already holds the other two block days is judged as a block member (small items 9/22 — Fierce can complete a Fri–Sun block by hand); the same holds for a block-style receiver of a whole Fri–Sun block in the trade path. The editor **fails closed**: a thrown eligibility check makes the option ineligible with the error as its reason and disables Save until the rules evaluate again. **Overrides (Item E3, Faraz 9/25):** an override assigns anyway and its reasons go to the audit log only - `schedule.day_edit` (`detail.overrides`) and `schedule.override` ("Override on M/D: <Name> <role> despite <reasons>"); `saveDayEdit` no longer puts an `[override: ...]` tag in front of the day's note (`schedule_days` is anon-readable). The audit rows being the only copy of the reasons now, `logAudit` answers true / false (every other caller still ignores it) and when BOTH rows of an override are refused / fail the scheduler gets an error toast with the reasons - also while the session has expired, since audit rows are never re-sent after the sign-in (one written row still keeps them; a console line names it); as before E3, the audit rows go out before the autosave's CAS sync, so a sync conflict leaves them standing for an override that did not land (accepted). An old tag is still stripped on the day's next save (and `awaitingConfirmation` still skips one); the one live tag (10/15, written by the app 9/25 15:24 CDT) waits for Faraz's go: a snapshot-first compare-and-swap that removes only the tag.
 - **Open shifts** (board, self-claim, weekly reminders): §16.
@@ -3128,7 +3148,9 @@ window is Part B's (section 24.5); the Davenport side is never written.
 
 - **The words non-schedulers no longer see** (decision 11 - reverses the 9/24 "unchanged on purpose" of section 18.3): the Mine /
   Following E / O / F / EV badges and their legend, both East vacation cards (Mine, Time off) and the offer painter's East block words
-  (`helpers.offerDayWhy(hard, { eastDetails: false })` -> "not available"; the day stays greyed) are under `eastDetailsVisible`.
+  (`helpers.offerDayWhy(hard, { eastDetails: false })` -> "not available"; the day stays greyed) are under `eastDetailsVisible`
+  (-> 10/30 also the painter's My rules lines - `offerRulesWords(..., { eastDetails })` - its "Only these days" sentence and a
+  surgeon's trade note, which still said "East").
   Nothing a non-scheduler sees says "East", "Davenport" or "DSG"; *home* ranges show to nobody but the scheduler.
 - **A failed read is said in place:** under the Time off list, "Some vacations set by the scheduler could not be loaded - the list may
   be incomplete until they load." (`vac-derived-failed`) - never the look of "no vacations".

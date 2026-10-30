@@ -2508,7 +2508,7 @@ try {
       const problems = [];
       if (got.join() !== want.join()) problems.push(`header ${got.join(" ")}`);
       if (wkCols.join() !== wantWk.join()) problems.push(`weekend tint on columns ${wkCols.join(",") || "none"} (want ${wantWk.join(",")})`);
-      if (labelOn.length) problems.push(`'weekend unit' label on ${labelOn.join(",")} (none since 10/21 - the tint and the legend say it)`);
+      if (labelOn.length) problems.push(`'weekend unit' label on ${labelOn.join(",")} (none since 10/21 - the tint says it; no legend line since 10/30)`);
       if (cells.length % 7 !== 0 || firstDow !== (mode === "mon" ? 1 : 0)) problems.push(`${cells.length} cells from ${cells[0].day} (getDay ${firstDow})`);
       if ((await modeOf()) !== mode) problems.push(`data-week-start ${await modeOf()}`);
       if ((await storedMode()) !== mode) problems.push(`localStorage silvis-week-start ${await storedMode()}`);
@@ -5854,7 +5854,10 @@ try {
         await page.click('button[data-tab="totals"]');
         await page.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
         const stillTarget = await page.$eval("[data-testid=totals-row-s3] td[data-col=target]", el => el.textContent.trim()).catch(() => null);
-        if (stillTarget !== "-") fail("Totals: clearing Acton's harness target did not take (Target cell reads '" + stillTarget + "')"); else ok("Totals: Acton's harness target cleared again through the Rules card (Target '-')");
+        // 10/30: with no target in any row the four target columns are not drawn at all - an absent column is "cleared" too
+        const targetCols = await page.$$eval("[data-testid=totals-table] td[data-col=target]", els => els.length).catch(() => -1);
+        if (stillTarget === null && targetCols === 0) ok("Totals: Acton's harness target cleared again through the Rules card (no row has a target - the target columns are not drawn)");
+        else if (stillTarget !== "-") fail("Totals: clearing Acton's harness target did not take (Target cell reads '" + stillTarget + "')"); else ok("Totals: Acton's harness target cleared again through the Rules card (Target '-')");
       } catch (e) { fail("Totals: could not clear Acton's harness target: " + errLine(e)); }
     }
   }
@@ -6262,7 +6265,8 @@ try {
       const expNo = "Also off: " + early.map(r => vgName(r) + " " + vgMd(VG_D1) + "-" + vgMd(VG_D3)).concat([vgName(last) + " " + vgMd(VG_D2) + "-" + vgMd(VG_D3)]).join(", ") +
         " - after yours, " + (vgMin - 1) + " of " + vgN + " " + isAre(vgMin - 1) + " around " + vgMd(VG_D2) + " - under the minimum of " + vgMin;
       const expUnder = " - it would be refused: at least " + vgMin + " surgeons must stay around.";
-      const expMsg = "VACATION_TOO_FEW_AROUND: on " + vgMd(VG_D2) + " only " + (vgMin - 1) + " of " + vgN + " surgeons would be around (minimum " + vgMin + ") - pick other dates or ask the scheduler";
+      // 10/30: the refusal under the form reads the words without the database token (helpers.vacationGuardWords)
+      const expMsg = "On " + vgMd(VG_D2) + " only " + (vgMin - 1) + " of " + vgN + " surgeons would be around (minimum " + vgMin + ") - pick other dates or ask the scheduler";
       console.log(`     (vacation guard: ${vgN} active, minimum ${vgMin} (${vgRule === undefined ? "the code default" : "the served blob"}); mocked: ${early.map(r => r.id).join(", ")} off ${VG_D1}..${VG_D3}, ${last.id} off ${VG_D2}..${VG_D3})`);
       const vgRoute = async ({ route, req, url, json }) => {
         if (url.pathname.startsWith("/rest/v1/time_off") && req.method() === "GET") {
@@ -6302,7 +6306,8 @@ try {
         const card = vp.locator("[data-testid=timeoff-card]");
         const picked = await card.locator("select").first().inputValue();
         const note = await vp.$eval("[data-testid=vac-guard-note]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
-        const expNote = "At least " + vgMin + " surgeons must stay around on every day: an entry that would leave fewer is refused. The form shows who else is off before you save.";
+        // 10/30: the last sentence went (the also-off line shows as soon as dates are typed)
+        const expNote = "At least " + vgMin + " surgeons must stay around on every day: an entry that would leave fewer is refused.";
         if (picked !== "s2") fail(`Vacation guard (s2): the vacation form should have s2 picked, got '${picked}'`);
         if (note !== expNote) fail(`Vacation guard (s2): the Time off card's note should read '${expNote}', got '${note}'`);
         else ok(`Vacation guard (s2): the Time off card says '${note}'`);
@@ -6377,8 +6382,9 @@ try {
       if (await page.$("[data-testid=mine-person]")) await page.selectOption("[data-testid=mine-person]", "s1");
       await page.waitForTimeout(200);
       const offersCard = await page.$eval("[data-testid=mine-offers]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
-      if (!/My offers \(0 upcoming days\)/i.test(offersCard) || !offersCard.includes(offerPeriod.label) || !/going by my rules/.test(offersCard)) fail("Offer painter: the My offers card does not read '0 upcoming days' + the seed period + 'going by my rules' for s1: " + offersCard.slice(0, 200));
-      else ok("Offer painter: My schedule shows 'My offers (0 upcoming days)' and '" + offerPeriod.label + ": going by my rules' for s1 (the seed's rulesOnly)");
+      // 10/30: rules_only reads "going by your rules" on his own page, as the painter says it (it read "going by my rules")
+      if (!/My offers \(0 upcoming days\)/i.test(offersCard) || !offersCard.includes(offerPeriod.label) || !/going by your rules/.test(offersCard)) fail("Offer painter: the My offers card does not read '0 upcoming days' + the seed period + 'going by your rules' for s1: " + offersCard.slice(0, 200));
+      else ok("Offer painter: My schedule shows 'My offers (0 upcoming days)' and '" + offerPeriod.label + ": going by your rules' for s1 (the seed's rulesOnly)");
       // 9/27: the offer deadline notice on the scheduler's own page (s1, linked, in the pool).
       // pin moved deliberately 9/30 (Prompt 26): the heads-up goes to every status - s1 is rules-only on the served period and
       // now gets its row while that period is inside the notice window (it got none before); the restatement says which

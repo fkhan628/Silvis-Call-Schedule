@@ -54,6 +54,8 @@
       .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
       /* the header's "N errors" the same way - its 36 px do not make the status line (and the header) taller */
       .hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }
+      /* 10/30: the nav tabs take 8 px side padding on a phone - a surgeon's eight buttons fit two rows at 390 px (three before; measured with the fallback font) */
+      .navtab { padding-left: 8px !important; padding-right: 8px !important; }
     }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
@@ -72,6 +74,8 @@
     .cal-badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; align-items: center; }
     /* Prompt 32 step 4: the over-soft-limit badge reads "over 7"; on a phone (below) ">7" */
     .cal-os-short { display: none; }
+    /* 10/30: the Open shifts board's role word - "Primary (TRAUMA)" on a wide screen, "Primary" on a phone (below) */
+    .ob-role-short { display: none; }
     /* 10/21 (Faraz: "put the people on vacation in the bottom of each day ... similar to how the Davenport calendar looks"):
        the vacation bar - one grey bar at the bottom of the day, the names inside (codes on a phone), joined to the next
        day's bar when the same people are off (cal-vac-l / cal-vac-r: it reaches into the cell's padding on that side). */
@@ -148,6 +152,10 @@
       .cal-badges { top: 2px; right: 2px; }
       .cal-os-long { display: none; }
       .cal-os-short { display: inline; }
+      .ob-role-long { display: none; }
+      .ob-role-short { display: inline; }
+      /* 10/30: on a phone the scheduler's all-clear strip items (a count of 0) give way - counts above 0 and the dates stay */
+      .cov-zero { display: none; }
       .cal-app { font-size: 9px; }
       /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
          tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
@@ -2150,7 +2158,7 @@ function CallSchedule() {
         // the database's VACATION_TOO_FEW_AROUND (the client's check was bypassed - another device's vacation landed first):
         // shown under the form like the client's own refusal, verbatim
         if (/VACATION_TOO_FEW_AROUND/.test(why)) setVacGuardRefusal({ personId, start, end, message: why, db: true });
-        showToast("Couldn't save the vacation: " + why, "error");
+        showToast("Couldn't save the vacation: " + vacationGuardWords(why), "error"); // 10/30: the words without the database token
         return { ok: false, error: why };
       }
       adoptTimeOffRows([...timeOffRows, data]);
@@ -2231,7 +2239,7 @@ function CallSchedule() {
         const why = describeDbError(text);
         // the database's VACATION_TOO_FEW_AROUND (the client's check was bypassed): shown under the Edit row too, verbatim
         if (/VACATION_TOO_FEW_AROUND/.test(why)) setVacEditGuardRefusal({ rowId, personId, start: newStart, end: newEnd, message: why, db: true });
-        showToast("Couldn't save that change: " + why, "error");
+        showToast("Couldn't save that change: " + vacationGuardWords(why), "error"); // 10/30: the words without the database token
         return { ok: false };
       }
       // A 2xx with ZERO rows is an RLS-filtered PATCH (the row is no longer the caller's, or the session was
@@ -5598,7 +5606,7 @@ function CallSchedule() {
         const tooLong = guardRefused.find(g => g.tooLong);
         if (tooLong) return { ok: false, error: tooLong.message };
         if (!isScheduler) return { ok: false, error: guardRefused[0].message };
-        const ask = guardRefused.length === 1 ? guardRefused[0].confirmText : guardRefused.map(g => g.message.slice(0, g.message.length - VG_TAIL.length)).join("\n") + "\n\nAs the scheduler you may still enter them - enter them anyway?";
+        const ask = guardRefused.length === 1 ? vacationGuardWords(guardRefused[0].confirmText) : guardRefused.map(g => vacationGuardWords(g.message.slice(0, g.message.length - VG_TAIL.length))).join("\n") + "\n\nAs the scheduler you may still enter them - enter them anyway?";
         if (!confirm(ask)) return { ok: false, error: "Not saved - fewer surgeons than the minimum would be around." };
         paintOverride = guardRefused.map(g => ({ person_id: g.personId, start: g.start, end: g.end, ...vacationGuardOverride(g) }));
       }
@@ -5607,8 +5615,8 @@ function CallSchedule() {
       if (!res.ok) {
         const t = await res.text().catch(() => "");
         console.warn("Paint vacations: time_off bulk insert failed", res.status, t.slice(0, 300));
-        showToast("Paint vacations: nothing was saved - " + describeDbError(t), "error");
-        return { ok: false, error: describeDbError(t) };
+        showToast("Paint vacations: nothing was saved - " + vacationGuardWords(describeDbError(t)), "error"); // 10/30: the words without the database token
+        return { ok: false, error: vacationGuardWords(describeDbError(t)) };
       }
       const overrideWords = paintOverride ? paintOverride.map(ov => nameOf(ov.person_id) + " " + vacationGuardOverrideText(ov)).join("; ") : "";
       logAudit("timeoff.paint", `Painted ${rows.length} vacation entr${rows.length === 1 ? "y" : "ies"} (bulk)` + (paintOverride ? " - scheduler override: " + overrideWords : ""), { entries: rows.map(r => ({ person_id: r.person_id, start: r.start_date, end: r.end_date })), ...(paintOverride ? { vacation_guard_override: paintOverride } : {}) });
@@ -6176,6 +6184,8 @@ function CallSchedule() {
     else showToast("Still couldn't load the schedule - check your connection and try again. Nothing was changed.", "error");
   };
   const [copied, setCopied] = useState(false);
+  // 10/30: the banner's share text shows only when copying it failed (signed in) - the pills already say who is on call
+  const [shareMsgShown, setShareMsgShown] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState("");
   const copyText = async (text, label) => {
     try {
@@ -6203,6 +6213,7 @@ function CallSchedule() {
     }
     try { await navigator.clipboard.writeText(msg); setCopied(true); setTimeout(()=>setCopied(false), 2000); } catch(e) {
       console.warn("Copy to clipboard failed:", e);
+      setShareMsgShown(true);
       showToast("Couldn't copy - long-press the message to copy it manually.", "error");
     }
   };
@@ -6376,8 +6387,8 @@ function CallSchedule() {
     const guard = vacGuardFor(personId, start, end, excludeId);
     if (guard.ok) return { ok: true, guard };
     if (guard.tooLong) { showToast(guard.message, "error"); return { ok: false, guard, message: guard.message }; }
-    if (isScheduler) return confirm(guard.confirmText) ? { ok: true, guard, overridden: true, override: vacationGuardOverride(guard) } : { ok: false, guard, cancelled: true, message: "Not saved - fewer surgeons than the minimum would be around." };
-    showToast(guard.message, "error");
+    if (isScheduler) return confirm(vacationGuardWords(guard.confirmText)) ? { ok: true, guard, overridden: true, override: vacationGuardOverride(guard) } : { ok: false, guard, cancelled: true, message: "Not saved - fewer surgeons than the minimum would be around." };
+    showToast(vacationGuardWords(guard.message), "error"); // 10/30: the words without the database token (the returned message keeps it)
     return { ok: false, guard, message: guard.message };
   };
   // the line under the vacation form while the dates are typed (before Save): "Also off: ... - after yours, N of M are around ..."
@@ -6522,7 +6533,8 @@ function CallSchedule() {
   // guards data integrity, writes the audit row and the feed row in one
   // transaction; the client writes NO duplicate on success.
   // ====================================================================
-  const [obHorizon, setObHorizon] = useState(30);      // 30 | 60 | "all"
+  // 10/30: opens on All - the tab badge, the strip's link, a day's "See it on Open shifts" and the e-mail link all count past 30 days
+  const [obHorizon, setObHorizon] = useState("all");   // 30 | 60 | "all"
   const [obRole, setObRole] = useState("all");         // all | primary | backup
   const [obWeekend, setObWeekend] = useState(false);
   const [claimSheet, setClaimSheet] = useState(null);  // { day, role, unit, soft: [{reason, weight}], mates: [slots] } while the confirm sheet is open
@@ -7058,7 +7070,7 @@ function CallSchedule() {
       )}
       {refusalMsg && (
         <div data-testid={prefix + "-guard-refusal"} role="alert" style={{...css.errBox,flex:"1 1 100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-          <span style={{flex:1}}><strong>Refused:</strong> <span data-testid={prefix + "-guard-message"}>{refusalMsg}</span></span>
+          <span style={{flex:1}}><strong>Refused:</strong> <span data-testid={prefix + "-guard-message"}>{vacationGuardWords(refusalMsg)}</span></span>
           <button onClick={onDismiss} aria-label="Dismiss" style={{background:"none",border:"none",color:"#8a3030",cursor:"pointer",fontSize:14}}>x</button>
         </div>
       )}
@@ -7608,7 +7620,7 @@ function CallSchedule() {
             // both ONE per proposal (Faraz 9/27: a weekend or holiday unit is one badge count).
             const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
             return tabs.map(([k,l]) =>
-              <button key={k} data-tab={k} style={{...css.tab(view===k, T.accent),position:"relative"}} onClick={()=>setView(k)}>
+              <button key={k} data-tab={k} className="navtab" style={{...css.tab(view===k, T.accent),position:"relative"}} onClick={()=>setView(k)}>
                 {l}
                 {k==="timeoff" && pendingTrades > 0 && (
                   <span data-testid="timeoff-badge" title={isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer"} style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
@@ -7619,7 +7631,7 @@ function CallSchedule() {
               </button>
             );
           })()}
-          <button onClick={()=>{setShowNotifs(p=>!p); if(!showNotifs) markNotifsSeen();}} aria-label="Notifications"
+          <button className="navtab" onClick={()=>{setShowNotifs(p=>!p); if(!showNotifs) markNotifsSeen();}} aria-label="Notifications"
             style={{...css.tab(showNotifs, T.accent),position:"relative",fontSize:12,padding:"5px 10px"}}>
             Alerts
             {myUnreadCount > 0 && (
@@ -7627,10 +7639,10 @@ function CallSchedule() {
             )}
           </button>
           {scheduleHistory.length > 0 && isScheduler && (
-            <button data-testid="undo-btn" onClick={undoLastChange} style={{...css.tab(false),fontSize:12,padding:"4px 10px",color:T.accent}} title={`Undo (${scheduleHistory.length} steps)`}>Undo</button>
+            <button data-testid="undo-btn" className="navtab" onClick={undoLastChange} style={{...css.tab(false),fontSize:12,padding:"4px 10px",color:T.accent}} title={`Undo (${scheduleHistory.length} steps)`}>Undo</button>
           )}
           {mySurgeon && (
-            <button data-testid="nav-paint-offers" onClick={()=>setOfferSheet({ personId: mySurgeon })} style={{...css.tab(false, T.accent),fontSize:12,padding:"5px 10px",position:"relative"}} title="Paint the dates you'll cover (primary / backup / either), any time ahead">Paint offers
+            <button data-testid="nav-paint-offers" className="navtab" onClick={()=>setOfferSheet({ personId: mySurgeon })} style={{...css.tab(false, T.accent),fontSize:12,padding:"5px 10px",position:"relative"}} title="Paint the dates you'll cover (primary / backup / either), any time ahead">Paint offers
               {/* Prompt 26 (Faraz 9/30): no count badge here any more - painting is optional; the heads-up lives on My schedule (and on the Calendar while urgent) */}
             </button>
           )}
@@ -7654,14 +7666,15 @@ function CallSchedule() {
 
         {/* --- Notification Panel --- */}
         {!isPublicMode && showNotifs && (
-          <div data-testid="notif-panel" style={{position:"absolute",top:0,right:14,width:340,maxHeight:400,overflowY:"auto",background:"#fff",border:"1px solid #dce2e8",borderRadius:10,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:100,padding:12}}>
+          <div data-testid="notif-panel" style={{position:"absolute",top:0,right:14,width:340,maxWidth:"calc(100vw - 28px)",maxHeight:400,overflowY:"auto",background:"#fff",border:"1px solid #dce2e8",borderRadius:10,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:100,padding:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <span style={{fontSize:14,fontWeight:700,color:"#1F2A3A"}}>Notifications</span>
+              {/* 10/30: the panel is named like the nav button that opens it */}
+              <span style={{fontSize:14,fontWeight:700,color:"#1F2A3A"}}>Alerts</span>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
                 {myNotifications.length > 0 && (
                   <button onClick={clearAllNotifications} style={{background:"none",border:"1px solid #e8c0c0",color:"#904040",borderRadius:5,padding:"2px 8px",fontSize:10,cursor:"pointer",fontFamily:font}}>Clear all</button>
                 )}
-                <button aria-label="Close notifications" onClick={()=>setShowNotifs(false)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#8a94a0"}}>x</button>
+                <button aria-label="Close notifications" onClick={()=>setShowNotifs(false)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#8a94a0",minWidth:36,minHeight:36,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>x</button>
               </div>
             </div>
             {myNotifications.length === 0 ? (
@@ -7856,6 +7869,13 @@ function CallSchedule() {
           // uses the lightened per-code text palette (vis-003), not the pill's tx.
           const entryStyle = (e) => e.kind === "open" ? { color:T.open, fontWeight:800 } : e.kind === "external" ? { color: dk ? "#a0a8b0" : "#6a7a88", fontStyle:"italic" } : { color: textColorOf(e.id), fontWeight:600 };
           const chipStyle = (on, c) => ({ background: on ? c.tg : "transparent", color: on ? c.tx : (dk ? "#9FB0C8" : "#6a7a88"), border: "1px solid " + (on ? c.bd : (dk ? "#24406B" : "#c8d0d8")), borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: mono, letterSpacing: 0.3 });
+          // 10/30 (Faraz: "less written in the legend"): a legend line shows only while this month's grid draws its mark - read
+          // from the rows the cells read (a generator preview overlays them)
+          const gridRow = (gd) => (previewGen && previewGen.schedule && previewGen.schedule[gd]) || schedule[gd] || null;
+          const legendExtH = gridDays.map(gd => dayHolder(gridRow(gd), "primary")).find(h => typeof h === "string" && h.indexOf("ext:") === 0);
+          const legendExt = legendExtH ? legendExtH.slice(4) : "";
+          const legendHol = rulesCtx ? gridDays.map(gd => isHolidayDay(rulesCtx, gd)).filter(Boolean).map(u => u.name).filter((n, i, all) => all.indexOf(n) === i) : [];
+          const legendVac = gridDays.some(gd => calVac(gd).length > 0);
           return <>
           <div style={css.card}>
             {/* Coverage at a glance (Prompt 11): every count links to its first day. */}
@@ -7867,7 +7887,7 @@ function CallSchedule() {
                 // claim is made), not to a read-only day; the scheduler (and ?public=1, which has no board) opens the day.
                 const toBoard = !isScheduler && !isPublicMode;
                 return (
-                  <button key={key} type="button" data-testid={key} data-count={daysShown ? n : ""} data-first={daysShown ? (first || "") : ""} disabled={!daysShown || !n} onClick={() => { if (!first) return; if (toBoard) openShiftsBoard(); else goToDay(first); }}
+                  <button key={key} type="button" className={isScheduler && daysShown && !n && key === "cov-forecast-primary" ? "cov-zero" : undefined} data-testid={key} data-count={daysShown ? n : ""} data-first={daysShown ? (first || "") : ""} disabled={!daysShown || !n} onClick={() => { if (!first) return; if (toBoard) openShiftsBoard(); else goToDay(first); }}
                     title={!daysShown ? (loaded ? "Schedule not loaded" : "Loading schedule") : n ? (toBoard ? "See the open shifts (first " + fmtMD(first) + ") on the Open shifts board" : "Open " + fmtMD(first) + " in the day editor") : "none in the next 60 days"}
                     style={{...css.mini(false),color: !daysShown ? dkSubtext : n ? color : "#1a8040",borderColor: !daysShown ? "#c8d0d8" : n ? color : "#a0d8b0",fontFamily:font,cursor: daysShown && n ? "pointer" : "default"}}>
                     <span style={{fontFamily:mono,fontWeight:800}}>{daysShown ? n : "..."}</span> {text}{daysShown && n ? " - first " + fmtMD(first) : ""}
@@ -7887,7 +7907,7 @@ function CallSchedule() {
                       Item E3 (9/25): the scheduler's only - it was the scheduler's and Khan's (another surgeon's or the viewer's Time off
                       view has no East card, a dead end); Faraz is both, so nothing is lost. */}
                   {eastDetailsVisible && eastVacPeople.length > 0 && (
-                    <button type="button" data-testid="cov-eastvac-unreviewed" data-count={eastVacUnreviewed} onClick={openEastVacPanel}
+                    <button type="button" data-testid="cov-eastvac-unreviewed" data-count={eastVacUnreviewed} onClick={openEastVacPanel} className={eastVacUnreviewed ? undefined : "cov-zero"}
                       title={(eastVacUnreviewed ? "Undecided Davenport vacation range(s) - treated as away (a Silvis vacation) until reviewed. " : "Every upcoming East vacation is reviewed. ") + "Opens Setup > East feed."}
                       style={{...css.mini(false),color: eastVacUnreviewed ? "#8a5a10" : "#1a8040",borderColor: eastVacUnreviewed ? "#8a5a10" : "#a0d8b0",fontFamily:font,cursor:"pointer"}}>
                       unreviewed East vacations: <span style={{fontFamily:mono,fontWeight:800}}>{eastVacUnreviewed}</span>{eastVacPeople.length === 1 ? " (" + nameOf(eastVacPeople[0].id) + ")" : ""}
@@ -7897,7 +7917,7 @@ function CallSchedule() {
                       around or overlap a published day he holds - a count of ranges (eastVacWarnings), the scheduler's only; it opens
                       Setup > East feed, where the box lists the dates */}
                   {eastDetailsVisible && eastVacPeople.length > 0 && (
-                    <button type="button" data-testid="cov-eastvac-warn" data-count={eastVacWarnings.length} onClick={openEastVacPanel}
+                    <button type="button" data-testid="cov-eastvac-warn" data-count={eastVacWarnings.length} onClick={openEastVacPanel} className={eastVacWarnings.length ? undefined : "cov-zero"}
                       title={(eastVacWarnings.length ? eastVacWarnings.map(w => eastVacationWarnText(w, nameOf)).join(" | ") + " - " : "No upcoming East vacation breaks the vacation minimum or overlaps a published day. ") + "Opens Setup > East feed."}
                       style={{...css.mini(false),color: eastVacWarnings.length ? "#c04040" : "#1a8040",borderColor: eastVacWarnings.length ? "#c04040" : "#a0d8b0",fontFamily:font,cursor:"pointer"}}>
                       East vacation warnings: <span style={{fontFamily:mono,fontWeight:800}}>{eastVacWarnings.length}</span>
@@ -7942,10 +7962,13 @@ function CallSchedule() {
             {/* On call now - the 07:00 -> 07:00 shift covering this moment (onCall = helpers.onCallNow); before 07:00 a second line names the pair from 07:00 */}
             <div data-testid="today-banner" data-shift-day={onCall.shiftDay} data-before-handoff={onCall.beforeHandoff ? "1" : "0"} style={{fontSize:12.5,color:dkText,background:dk?"#13294B":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
               <strong title={"The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"}>On call now (until 07:00 {onCall.handoffDow}):</strong>
-              <span>P</span> <HolderTag a={onCall.current} role="primary" small/>
-              <span>B</span> <HolderTag a={onCall.current} role="backup" small/>
-              <span data-testid="today-banner-msg" style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
-              {!isPublicMode && <button data-testid="share-today" onClick={shareTonightMsg} disabled={!daysShown} title={daysShown ? undefined : "The schedule has not loaded - nothing to share yet"} style={{...css.btn(false),padding:"4px 10px",fontSize:11,marginLeft:"auto",opacity:daysShown?1:0.5,cursor:daysShown?"pointer":"default"}}>{copied ? "Copied" : "Share today"}</button>}
+              {/* 10/30: a role letter never wraps away from its name on a phone */}
+              <span style={{whiteSpace:"nowrap"}}>P <HolderTag a={onCall.current} role="primary" small/></span>
+              <span style={{whiteSpace:"nowrap"}}>B <HolderTag a={onCall.current} role="backup" small/></span>
+              {/* 10/30: the share text repeated the pills; signed in it shows only when copying fails (the toast says long-press it) and
+                  rides in Share today's hover; ?public=1 (no Share button) keeps it. Hidden, not unmounted: its text stays readable */}
+              <span data-testid="today-banner-msg" hidden={!isPublicMode && !shareMsgShown} style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
+              {!isPublicMode && <button data-testid="share-today" onClick={shareTonightMsg} disabled={!daysShown} title={daysShown ? "Shares: " + buildTonightMsg() : "The schedule has not loaded - nothing to share yet"} style={{...css.btn(false),padding:"4px 10px",fontSize:11,marginLeft:"auto",opacity:daysShown?1:0.5,cursor:daysShown?"pointer":"default"}}>{copied ? "Copied" : "Share today"}</button>}
               {onCall.beforeHandoff && (
                 <div data-testid="today-banner-next" style={{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",color:dkSubtext}}>
                   <span>From 07:00:</span> <HolderTag a={onCall.next} role="primary" small/> <span>/</span> <HolderTag a={onCall.next} role="backup" small/>
@@ -8011,7 +8034,7 @@ function CallSchedule() {
                 const bracket = isWk ? { borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted), borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
-                if (hol) titleBits.push(hol.name + " (holiday unit)"); if (a && a.note) titleBits.push("note: " + a.note);
+                if (hol) titleBits.push(hol.name + " (holiday unit)"); const noteT = a && a.note ? (isScheduler ? a.note : dayNoteShown(a.note)) : ""; if (noteT) titleBits.push("note: " + noteT); // 10/30: the importer's provenance is the scheduler's (dayNoteShown)
                 // Prompt 29: the APP on call that day (signed-in sessions only - appByDay is {} on ?public=1)
                 const appE = !isPublicMode ? appByDay[d] || null : null;
                 if (appE) titleBits.push("APP " + appE.name);
@@ -8071,30 +8094,32 @@ function CallSchedule() {
               ); })}
               <span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>
               <span><span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
-              <span><span style={{fontStyle:"italic"}}>Atwell</span> = external cover</span>
+              {/* 10/30: the lines below show only while this month's grid draws their mark (the external cover by its own name); the
+                  weekend tint, today's outline and the scheduler's editing note have no line - the grid shows them plainly */}
+              {legendExt && <span data-testid="legend-ext"><span style={{fontStyle:"italic"}}>{legendExt}</span> = external cover</span>}
               {!isPublicMode && (isScheduler || gridDays.some(gd => { const g = schedule[gd]; return !!g && slotIsOpen(gd, null, todayStr) && ((g.primaryLocked && !dayHolder(g, "primary")) || (g.backupLocked && !g.backup)); })) && <span data-testid="legend-lock" style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot{isScheduler ? "" : " (ask the scheduler)"}</span>}
               {/* Item E2 (9/25): no "E East-derived week" / "F East forecast" line - the grid draws neither badge any more */}
-              <span>Fri-Sun tinted = weekend unit</span>
-              <span>gold = holiday unit</span>
-              <span data-testid="legend-vac"><span style={{background:T.vacBar,color:T.vacText,borderRadius:4,padding:"0 5px",fontWeight:600}}><span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>name</span> = on vacation</span>
+              {/* 10/30: the holiday's name, on a phone only - a wide cell prints it in the cell */}
+              {legendHol.length > 0 && <span className="cal-mobile-note" data-testid="legend-hol"><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:T.holiday,border:"1px solid " + dkCardBorder,marginRight:4,verticalAlign:"-1px"}}/>{legendHol.join(", ")}</span>}
+              {legendVac && <span data-testid="legend-vac"><span style={{background:T.vacBar,color:T.vacText,borderRadius:4,padding:"0 5px",fontWeight:600}}><span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>name</span> = on vacation</span>}
               {/* Prompt 32 step 4: the over-soft-limit badge's legend - only when a day of this grid carries one (signed-in; never ?public=1);
                   its words name the limits the grid's badges carry (overSoftLimitLegend: "over 7", "over 7 / over 9") - never a hard-coded 7 */}
-              {gridDays.some(gd => overSoftByDay[gd]) && <span data-testid="legend-over-soft"><span style={{color:T.accentText,fontWeight:800}}>{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))}</span> = the primary is past his soft limit of primary days this month (the group's, or his own)</span>}
+              {gridDays.some(gd => overSoftByDay[gd]) && <span data-testid="legend-over-soft"><span style={{color:T.accentText,fontWeight:800}}><span className="cal-os-long">{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean))}</span><span className="cal-os-short">{overSoftLimitLegend(gridDays.map(gd => overSoftByDay[gd]).filter(Boolean)).replace(/over /g, ">")}</span></span> = past the primary's monthly soft limit</span>}
               {/* Prompt 29: the APP line's legend - only when a day of this grid has an APP (signed-in sessions; nothing on ?public=1) */}
               {/* the merge with main (10/2): a failed APP-day read is said in place while it lasts (the load's toast goes; the poll stays quiet) */}
               {!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn't be loaded - the A lines may be missing</span>}
               {/* ship review 10/2: a first read with no fresh token ("skipped") read nothing - said too, never the look of "no APP days" */}
               {!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP days not loaded yet - the A lines may be missing</span>}
-              {!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = the APP on call that day (third line)</span>}
-              {/* Item E3 (9/25): the East-vacation legend line follows the diamonds - the scheduler's only */}
-              {eastDetailsVisible && eastVacPeople.length > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, under his review decision (Setup > East feed / Time off)"><strong>name?</strong> in the vacation bar = an East vacation not reviewed yet (an away range shows as a plain name; home shows nothing - the hover keeps the state)</span>}
-              <span>orange outline = today</span>
-              {isScheduler && !isPublicMode && <span>Click a day to edit (eligibility-checked); saves per day with compare-and-swap.</span>}
+              {!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = APP on call</span>}
+              {/* Item E3 (9/25): the East-vacation legend line follows the vacation bar's "name?" - the scheduler's only; 10/30: only in a month that shows one */}
+              {eastDetailsVisible && eastVacPeople.length > 0 && gridDays.some(gd => calVac(gd).some(v => v.east === "unreviewed")) && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, not reviewed yet - decide it in Setup > East feed. An away range shows as a plain name, a home range not at all; the day's hover keeps the state."><strong>name?</strong> = an East vacation not reviewed yet</span>}
             </div>
           </div>
 
-          <Collapsible css={css} ck="cal_weekrows" defaultOpen={true} title="Week rows (ER Call Panels layout)">
-            <p style={sectionNote}>ER-panel layout: one row per Mon-Sun week, consecutive days with the same surgeon collapsed, open days in red. Partial weeks show the neighbouring month's days too.</p>
+          {/* 10/30: closed by default (a second copy of the month, wider than a phone) - open on ?public=1, the outside readers' view;
+              a stored open / closed choice still wins */}
+          <Collapsible css={css} ck="cal_weekrows" defaultOpen={isPublicMode} title="Week rows (ER Call Panels layout)">
+            <p style={sectionNote}>One row per Mon-Sun week; a run of days with the same surgeon is one line, open days in red.</p>
             <div className="table-wrap" style={{overflowX:"auto"}}>
               <table className="week-rows" data-testid="week-rows" style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead><tr><th style={thS}>MON/SUN DATES</th><th style={thS}>TRAUMA</th><th style={thS}>TRAUMA BACKUP</th></tr></thead>
@@ -8182,6 +8207,8 @@ function CallSchedule() {
         {view==="openshifts" && !isPublicMode && (() => {
           const rows = boardRows;
           const canAct = !!mySurgeon || isScheduler;
+          // 10/30: Take sits right after the role (on a phone it was the 7th column, past the edge); Why and Last announced are the scheduler's
+          const nCols = 4 + (canAct ? 1 : 0) + (isScheduler ? 2 : 0);
           const horizonBtn = (v, text) => <button key={String(v)} type="button" data-testid={"ob-horizon-" + v} onClick={() => setObHorizon(v)} style={{...css.mini(obHorizon === v),padding:"6px 10px"}}>{text}</button>;
           // Item E4 (Faraz 9/26): the chip hover and the Take title read their reasons through eastMaskedReasons - an East soft
           // note is dropped and an East hard reason reads "not available" for everyone but the scheduler (eastDetailsVisible)
@@ -8194,7 +8221,9 @@ function CallSchedule() {
                 <div style={css.cardT}>Open shifts</div>
                 <span style={{fontSize:11,color:T.muted}}>{!loaded ? "Loading schedule" : !daysReadOk ? "Schedule not loaded" : !boardEnd ? "No schedule days on file yet" : `${boardSlots.length} open slot(s) from ${fmtMD(todayStr)} to ${boardEndText}${boardRanges.length ? ", plus the assigned days " + boardRanges.map(r => r.start === r.end ? fmtMD(r.start) : fmtMD(r.start) + "-" + fmtMD(r.end)).join(", ") : ""}`}</span>
               </div>
-              <p style={sectionNote}>Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.{mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : ""}{isScheduler ? " As the scheduler you can assign anyone from the day editor or write in outside cover." : ""} The generator's reason for leaving a slot open appears after the next Generate.</p>
+              <p style={sectionNote}>{isScheduler
+                ? <>Every slot the published schedule leaves open, from today to the last published day (and on any day already assigned beyond it, such as a holiday unit) - each is one 24-hour shift, 07:00 to 07:00.{mySurgeon ? " Take any shift the rules allow you: it is written to the schedule at once (no approval) and the scheduler is told." : ""} As the scheduler you can assign anyone from the day editor or write in outside cover. The generator's reason for leaving a slot open appears after the next Generate.</>
+                : <>Open shifts in the published schedule from today on - each is one 24-hour shift, 07:00 to 07:00.{mySurgeon ? " Take one the rules allow you: it is yours at once (no approval) and the scheduler is told." : ""}</>}</p>
               <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",marginBottom:10}}>
                 <span style={{fontSize:10,color:T.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}}>Show</span>
                 {horizonBtn(30, "Next 30 days")}{horizonBtn(60, "Next 60 days")}{horizonBtn("all", "All")}
@@ -8209,9 +8238,9 @@ function CallSchedule() {
               {!rulesCtx && <div data-testid="ob-rules-unavailable" style={{...css.warnBox,marginBottom:10}}>Rules unavailable - the setup has not loaded, so nobody's eligibility can be checked and no shift can be taken until it does.</div>}
               <div className="table-wrap" data-testid="openshifts-wrap" style={css.tableWrap}>
                 <table className="setup-table" data-testid="openshifts-table" data-from={todayStr} data-to={boardEnd || ""} data-total={boardSlots.length} data-ranges={boardRanges.map(r => r.start + ".." + r.end).join(",")}>
-                  <thead><tr><th>Date</th><th>Role</th><th>Unit</th><th>Why</th><th>Eligible now</th><th>Last announced</th>{canAct && <th>Action</th>}</tr></thead>
+                  <thead><tr><th>Date</th><th>Role</th>{canAct && <th>Action</th>}<th>Unit</th><th>Eligible now</th>{isScheduler && <th>Why</th>}{isScheduler && <th>Last announced</th>}</tr></thead>
                   <tbody>
-                    {rows.length === 0 && <tr><td colSpan={canAct ? 7 : 6} style={{fontWeight:600,padding:"12px 8px"}}><span data-testid="openshifts-empty" style={{color:T.success}}>{!loaded ? "Loading schedule" : !daysReadOk ? <span data-testid="openshifts-unread" style={{color:T.open}}>Schedule not loaded - the open shifts are not known until it loads.</span> : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."}</span></td></tr>}
+                    {rows.length === 0 && <tr><td colSpan={nCols} style={{fontWeight:600,padding:"12px 8px"}}><span data-testid="openshifts-empty" style={{color:T.success}}>{!loaded ? "Loading schedule" : !daysReadOk ? <span data-testid="openshifts-unread" style={{color:T.open}}>Schedule not loaded - the open shifts are not known until it loads.</span> : !boardEnd ? "No schedule days on file yet - nothing is published, so there is nothing to take." : boardSlots.length ? "No open shift matches the filters." : "No open shifts - every published day is covered."}</span></td></tr>}
                     {rows.map(s => {
                       const key = openSlotKey(s.day, s.role);
                       const elig = boardElig[key] || null;
@@ -8223,13 +8252,10 @@ function CallSchedule() {
                       return (
                         <tr key={key} data-slot={key} data-day={s.day} data-role={s.role}>
                           <td style={{whiteSpace:"nowrap",fontWeight:700}}>{DAY_HDR[parse(s.day).getDay()]} {fmtMD(s.day)}{s.day === todayStr ? <span style={{fontSize:10,color:T.muted,marginLeft:4,fontWeight:400}}>today</span> : null}</td>
-                          <td style={{whiteSpace:"nowrap"}}><span style={{color:T.open,fontWeight:800,fontSize:10,letterSpacing:0.5}}>OPEN</span> {s.role === "primary" ? "Primary (TRAUMA)" : "Backup"}</td>
-                          <td style={{whiteSpace:"nowrap",fontSize:12}}>{boardUnitText(s.unit, s.role)}</td>
-                          <td style={{fontSize:12,minWidth:110}}>{s.reason || "-"}</td>
-                          <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length ? eligible.map(chip) : <span style={{color:T.open,fontStyle:"italic"}}>nobody under the current rules</span>}</td>
-                          <td data-testid="ob-announced" style={{whiteSpace:"nowrap",fontSize:12}}>{announced ? fmtAuditTime(announced) : "never"}</td>
+                          <td style={{whiteSpace:"nowrap"}}><span style={{color:T.open,fontWeight:800,fontSize:10,letterSpacing:0.5}}>OPEN</span> {s.role === "primary" ? <><span className="ob-role-long">Primary (TRAUMA)</span><span className="ob-role-short">Primary</span></> : "Backup"}</td>
                           {canAct && <td style={{whiteSpace:"nowrap"}}>
-                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                            {/* a surgeon's disabled Take keeps its reason under the button, so the column stays narrow on a phone */}
+                            <div style={isScheduler ? {display:"flex",gap:4,alignItems:"center"} : {display:"flex",flexDirection:"column",gap:3,alignItems:"flex-start"}}>
                               {mySurgeon ? (me && me.ok && !locked
                                 ? <button type="button" data-testid="ob-take" onClick={(e) => openClaimSheet(s, e.currentTarget)} style={{...css.btn(true),padding:"6px 10px",fontSize:11}}>Take this shift</button>
                                 : <button type="button" data-testid="ob-take" disabled title={locked ? "slot locked - ask the scheduler to assign it" : takeTitle(me)} style={{...css.btn(false),padding:"6px 10px",fontSize:11,opacity:0.55,cursor:"not-allowed"}}>Take this shift</button>) : null}
@@ -8239,6 +8265,10 @@ function CallSchedule() {
                               {isScheduler && s.role === "primary" && <button type="button" data-testid="ob-external" onClick={() => { setEditorFocus("external"); setEditorDay(s.day); }} title="Write in someone outside the roster as primary cover (saved from the day editor)" style={{...css.mini(false),padding:"6px 9px"}}>Outside cover</button>}
                             </div>
                           </td>}
+                          <td style={{whiteSpace:"nowrap",fontSize:12}}>{boardUnitText(s.unit, s.role)}</td>
+                          <td style={{fontSize:12,minWidth:150}}>{!rulesCtx ? "-" : eligible.length ? eligible.map(chip) : <span style={{color:T.open,fontStyle:"italic"}}>nobody under the current rules</span>}</td>
+                          {isScheduler && <td style={{fontSize:12,minWidth:110}}>{s.reason || "-"}</td>}
+                          {isScheduler && <td data-testid="ob-announced" style={{whiteSpace:"nowrap",fontSize:12}}>{announced ? fmtAuditTime(announced) : "never"}</td>}
                         </tr>
                       );
                     })}
@@ -8251,16 +8281,22 @@ function CallSchedule() {
               </div>
               ) : (
               <div data-testid="openshifts-tail" data-primary={boardTail.primary} data-backup={boardTail.backup} data-through={boardTail.through} style={{fontSize:11,color:T.muted,marginTop:8,lineHeight:1.5}}>
+                {/* 10/30: the scheduler keeps his bookkeeping sentences; everyone else reads the plain fact */}
                 {boardTail.primary + boardTail.backup > 0
-                  ? <>Not listed: {boardTail.primary} primary / {boardTail.backup} backup day(s) between {fmtMD(boardTail.from)} and {fmtMD(boardTail.through)} have no schedule row yet{boardEnd ? ` (after the last published day, ${boardEndText})` : ""}. The coverage strip counts them as open; Generate covers them.</>
-                  : <>The published schedule runs through {boardEndText} - this board and the coverage strip's next-60-days counts agree.</>}
+                  ? (isScheduler
+                    ? <>Not listed: {boardTail.primary} primary / {boardTail.backup} backup day(s) between {fmtMD(boardTail.from)} and {fmtMD(boardTail.through)} have no schedule row yet{boardEnd ? ` (after the last published day, ${boardEndText})` : ""}. The coverage strip counts them as open; Generate covers them.</>
+                    : <>Not listed: {boardTail.primary} primary / {boardTail.backup} backup day(s) from {fmtMD(boardTail.from)} to {fmtMD(boardTail.through)} - not published yet.</>)
+                  : (isScheduler
+                    ? <>The published schedule runs through {boardEndText} - this board and the coverage strip's next-60-days counts agree.</>
+                    : <>Published through {boardEndText}.</>)}
               </div>
               )}
-              <div data-testid="openshifts-lastgen" data-mode={lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : ""} data-fixed={lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : ""} style={{fontSize:11,color:T.muted,marginTop:4,lineHeight:1.5}}>
+              {/* 10/30: the Why column's provenance is the scheduler's (the column is his only) */}
+              {isScheduler && <div data-testid="openshifts-lastgen" data-mode={lastGenerate && typeof lastGenerate === "object" && lastGenerate.mode ? lastGenerate.mode : ""} data-fixed={lastGenerate && typeof lastGenerate === "object" && Number.isInteger(lastGenerate.fixedSlots) ? lastGenerate.fixedSlots : ""} style={{fontSize:11,color:T.muted,marginTop:4,lineHeight:1.5}}>
                 {lastGenerate && typeof lastGenerate === "object" && lastGenerate.at
                   ? <>Why column: from the last Accept &amp; Publish on {new Date(lastGenerate.at).toLocaleString()}{lastGenerate.range && lastGenerate.range.start ? " over " + fmtMD(lastGenerate.range.start) + " - " + fmtMD(lastGenerate.range.end || lastGenerate.range.start) : ""} ({lastGenerate.mode === "fill-open-only" ? "fill open slots only" : "generate"}{Number.isInteger(lastGenerate.fixedSlots) ? ", " + lastGenerate.fixedSlots + " slot(s) fixed: locks, outside surgeons, claims and trades" : ""}){lastGenerate.carriedFrom ? "; earlier reasons kept for days outside that range" : ""}.</>
                   : <>Why column: no generate recorded yet - it fills after the next Accept &amp; Publish.</>}
-              </div>
+              </div>}
               {claimSheet && (
                 <div data-testid="claim-sheet" onClick={() => { if (!claimBusy) closeClaimSheet(); }} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
                   <div role="dialog" aria-modal="true" aria-label="Take this shift" onClick={e => e.stopPropagation()} onKeyDown={claimSheetKeyDown} style={{background:dk?"#16213e":"#ffffff",color:dkText,borderRadius:12,padding:"16px 18px",maxWidth:460,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
@@ -8268,7 +8304,8 @@ function CallSchedule() {
                     <div style={{fontSize:13,lineHeight:1.7}}>
                       <div><strong>{DAY_HDR[parse(claimSheet.day).getDay()]} {fmtMD(claimSheet.day)}</strong> - {sheetDate(claimSheet.day)}</div>
                       <div>Role: <strong>{claimSheet.role === "primary" ? "Primary (TRAUMA, in Silvis)" : "Backup"}</strong> - one 24-hour shift, 07:00 to 07:00.</div>
-                      <div>Unit: {boardUnitText(claimSheet.unit, claimSheet.role)}</div>
+                      {/* 10/30: no "Unit: -" line on a plain weekday */}
+                      {claimSheet.unit && <div>Unit: {boardUnitText(claimSheet.unit, claimSheet.role)}</div>}
                     </div>
                     {claimSheet.mates.length > 0 && (
                       <div data-testid="claim-unit-mates" style={{...css.warnBox,marginTop:10}}>
@@ -8276,9 +8313,9 @@ function CallSchedule() {
                       </div>
                     )}
                     {claimSheet.soft.length
-                      ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)} <span style={{fontFamily:mono,fontSize:11}}>(weight {x.weight})</span></li>)}</ul></div>
+                      ? <div data-testid="claim-soft" style={{...css.warnBox,marginTop:10}}><strong>Allowed, shown so you know:</strong><ul style={{margin:"4px 0 0",paddingLeft:18}}>{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)}{isScheduler && <span style={{fontFamily:mono,fontSize:11}}> (weight {x.weight})</span>}</li>)}</ul></div>
                       : <div data-testid="claim-no-warnings" style={{...css.okBox,marginTop:10}}>No rule warnings for you on this day.</div>}
-                    <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm writes you into the published schedule immediately (no approval step), logs it, and tells the scheduler. To hand it back later, propose a trade or give it away.</p>
+                    <p style={{fontSize:12,color:T.muted,margin:"10px 0 0",lineHeight:1.5}}>Confirm puts you on the published schedule now (no approval step) and tells the scheduler. To hand it back later, propose a trade or give it away.</p>
                     <div data-testid="claim-actions" style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,flexWrap:"wrap"}}>
                       <button type="button" ref={claimCancelRef} data-testid="claim-cancel" onClick={closeClaimSheet} disabled={claimBusy} style={css.btn(false)}>Cancel</button>
                       <button type="button" data-testid="claim-confirm" onClick={runClaim} disabled={claimBusy} style={css.btn(true)}>{claimBusy ? "Taking..." : "Confirm - take this shift"}</button>
@@ -8380,7 +8417,14 @@ function CallSchedule() {
               </div>
               <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
                 <div style={css.subT}>Upcoming - next 90 days ({daysShown ? upcoming.length : "..."})</div>
-                <span style={muted}>H holiday unit{eastDetailsVisible ? " - E East-derived week - F East forecast busy - EV East (Davenport) vacation" : ""}</span>
+                {/* 10/30: the legend names only the letters this list shows - H on a phone only (a wide row prints the holiday's name);
+                    the East letters stay the scheduler's (eastDetailsVisible) */}
+                {(() => {
+                  const seen = new Set(); upcoming.forEach(x => badgesFor(x.day, who).forEach(b => seen.add(b.k)));
+                  const east = eastDetailsVisible ? [["E", "E East-derived week"], ["O", "O East override (no East call)"], ["F", "F East forecast busy"], ["V", "EV East (Davenport) vacation"]].filter(([k]) => seen.has(k)).map(([, w]) => w) : [];
+                  if (!seen.has("H") && !east.length) return null;
+                  return <span data-testid="mine-legend" style={muted}>{seen.has("H") && <span className="mine-hol-letter">H holiday{east.length ? " - " : ""}</span>}{east.join(" - ")}</span>;
+                })()}
               </div>
               {!daysShown ? <p style={{...muted,fontStyle:"italic"}}>{loaded ? "Schedule not loaded." : "Loading schedule"}</p> : upcoming.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>No call in the next 90 days.</p> : (
                 // Review 9/27 Do first 9 (10/1): the list is a 420 px scroller on a wide screen only - the class's phone rule
@@ -8475,9 +8519,10 @@ function CallSchedule() {
                   {pid === mySurgeon && offerNoticeBox(offerNotices, "mine")}
                   <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
                     <div style={{...css.cardT,margin:0}}>My offers ({mine.length} upcoming day{mine.length === 1 ? "" : "s"})</div>
-                    {nextPer && <span style={muted} data-testid="mine-offer-status">{nextPer.label}: {st === "submitted" ? "submitted" : st === "rules_only" ? "going by my rules" : pid === mySurgeon ? "following your rules" : "following their rules"}{nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : ""}</span>}
+                    {nextPer && <span style={muted} data-testid="mine-offer-status">{nextPer.label}: {st === "submitted" ? "submitted" : st === "rules_only" ? (pid === mySurgeon ? "going by your rules" : "going by their rules") : pid === mySurgeon ? "following your rules" : "following their rules"}{nextPer.offers_close_at ? (offerPeriodOpen(nextPer, todayStr) ? " - freezes " : " - closed ") + fmtMD(String(nextPer.offers_close_at).slice(0, 10)) : ""}</span>}
                   </div>
-                  {mine.length === 0 ? <p style={{...muted,fontStyle:"italic",margin:0}}>No future dates offered - use Paint my offers above.</p>
+                  {/* 10/30: no sentence when nothing is offered - the title's count says it (and the button's name differs for the scheduler) */}
+                  {mine.length === 0 ? null
                     : <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{mine.slice(0, 40).map(o => { const pr = placedRole(o); const offeredRole = o.role_pref === "either" ? pr : o.role_pref; return <span key={o.id || o.day} data-testid="mine-offer" data-day={String(o.day).slice(0, 10)} data-placed={placedRole(o) || ""} title={pr ? "Placed " + pr + " on this day" : "Offered, not placed yet"} style={{fontFamily:mono,fontSize:11,padding:"1px 6px",borderRadius:4,border:`1px solid ${pr ? "#1a6a3a" : dkCardBorder}`,color:dkText,background: pr ? (dk ? "rgba(26,106,58,0.25)" : "#e4f3e8") : "transparent"}}>{fmtMD(String(o.day).slice(0, 10))} {word(o.role_pref)}{pr ? (pr === offeredRole ? " (placed)" : " (placed " + (pr === "primary" ? "P" : "B") + ")") : ""}</span>; })}{mine.length > 40 && <span style={muted}>and {mine.length - 40} more</span>}</div>}
                 </>;
               })()}
@@ -8522,12 +8567,12 @@ function CallSchedule() {
             {isViewer ? (
               <p style={sectionNote} data-testid="viewer-timeoff-note">The surgeons enter their own vacations here (the office coordinator can enter one for them); this account reads them. An entry is refused over a day the surgeon is already published, so the list below never contradicts the calendar. Notes are operational and visible to the whole group.</p>
             ) : (
-              <p style={sectionNote}>{isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct)." : <>Enter your own vacations - no approval, the group is notified. The entry is refused if you are already published as primary or backup on any of those days (or primary the day before): trade those shifts first. A vacation that has started stays on record{isScheduler ? " (as the scheduler you can enter or remove anyone's)" : ""}.</>} Notes are operational and visible to the whole group.</p>
+              <p style={sectionNote}>{isCoordinator ? "Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct). Notes are operational and visible to the whole group." : <>Your vacations need no approval - the group is notified. If you are on call on any of their days (or primary the day before), trade those shifts first. Notes are visible to the whole group.{isScheduler ? " As the scheduler you can enter or remove anyone's vacation." : ""}</>}</p>
             )}
             {!mySurgeon && !canEnterForAnyone && !isViewer ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : (
               <>
                 {/* Prompt 27 (Faraz 9/30): the vacation guard in one sentence - the minimum is data (groupRules.vacations) */}
-                {!isViewer && <p style={sectionNote} data-testid="vac-guard-note">At least {vacationRules(groupRules).minSurgeonsAround} surgeons must stay around on every day: an entry that would leave fewer is refused{isScheduler ? " (as the scheduler you are asked to confirm and may enter it anyway)" : ""}. The form shows who else is off before you save.</p>}
+                {!isViewer && <p style={sectionNote} data-testid="vac-guard-note">At least {vacationRules(groupRules).minSurgeonsAround} surgeons must stay around on every day: an entry that would leave fewer is refused{isScheduler ? " (as the scheduler you are asked to confirm and may enter it anyway)" : ""}.</p>}
                 {!isViewer && renderVacationForm(canEnterForAnyone ? poolSurgeons : poolSurgeons.filter(s => s.id === mySurgeon))}
                 <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"#5B6B82",marginBottom:8,cursor:"pointer"}}>
                   <input type="checkbox" data-testid="vac-show-past" checked={showPastVacations} onChange={e=>setShowPastVacations(e.target.checked)}/> Show past
@@ -8597,7 +8642,11 @@ function CallSchedule() {
             return <>
               <div style={css.card} data-testid="trade-card" ref={tradeCardRef}>
                 <div style={css.cardT}>Propose a shift trade</div>
-                <p style={sectionNote}>By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. {isScheduler ? "As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor." : "A trade is two-way: pick the day and role you take in return."} <strong>Give away</strong> offers the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back; they accept or decline, and an accepted give is applied like a trade.</p>
+                {/* 10/30: a surgeon reads one line (the how behind a toggle, no East word - decision 11); the scheduler's paragraph is unchanged */}
+                <p style={sectionNote}>{isScheduler
+                  ? <>By day and role. The other surgeon is checked against the rules (vacations, patterns, East call, caps, consecutive days) before you propose and again when they accept; an accepted trade is applied to the schedule and both of you are notified. As the scheduler you can propose for anyone, accept or decline any trade, allow a one-way trade, and revert an applied trade in the day editor. <strong>Give away</strong> offers the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back; they accept or decline, and an accepted give is applied like a trade.</>
+                  : <>Your colleague accepts or declines; an accepted trade or give goes straight onto the schedule and you are both notified.{moreToggle("tradeHow", "How")}</>}</p>
+                {!isScheduler && openSettingsCards.tradeHow && <p data-testid="trade-how" style={moreNote}>Before you propose and again when they accept, the day is checked against the rules (vacations, patterns, caps, consecutive days). A trade is two-way: pick the day and role you take in return. Give away hands the day (a weekend or holiday unit as a whole) to one colleague with nothing coming back.</p>}
                 {fromId && (
                   <div data-testid="trade-kind" role="group" aria-label="Trade or give away" style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
                     <button type="button" data-testid="trade-kind-trade" aria-pressed={!give} onClick={()=>setTradeKind("trade")} style={{...css.mini(!give),fontSize:12,padding:"5px 12px"}}>Trade (day for day)</button>
@@ -8681,7 +8730,8 @@ function CallSchedule() {
 
               <div style={css.card} data-testid="trades-pending">
                 <div style={css.cardT} data-testid="trades-pending-title">{tradeListTitle("Pending", pending, tradeIsGiveProposal)}</div>
-                <p style={sectionNote}>{isScheduler ? "Every open trade and give. The surgeon asked answers; you can answer or cancel any of them." : "Trades and gives waiting on you show Accept / Decline; ones you proposed show Cancel."}</p>
+                {/* 10/30: the surgeon's note repeated the row buttons (Accept / Decline / Cancel) - the scheduler's stays */}
+                {isScheduler && <p style={sectionNote}>Every open trade and give. The surgeon asked answers; you can answer or cancel any of them.</p>}
                 {pending.length === 0 ? <p style={{...muted,fontStyle:"italic"}}>{tradeListEmpty("Pending")}</p> : <div style={{display:"flex",flexDirection:"column",gap:6}}>{pending.map(tradeRow)}</div>}
               </div>
               <div style={css.card} data-testid="trades-completed">
@@ -8787,7 +8837,7 @@ function CallSchedule() {
                 <div style={{fontSize:12,fontWeight:600,color:dkText,marginBottom:6}}>Email</div>
                 {/* Only a linked surgeon gets this line; a follower's intro says where his e-mails go, and an unlinked
                     coordinator / viewer reads the one 'Available once ...' line (9/27: the two used to contradict). */}
-                {mySurgeon && <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>E-mails go to your sign-in address: pick which events send one and when the daily reminder arrives (Central time).</p>}
+                {mySurgeon && <p style={{fontSize:11,color:dkSubtext,margin:"0 0 8px",lineHeight:1.5}}>E-mails go to your sign-in address: pick which events send one and when the day-before reminder arrives (5:00 PM Central by default).</p>}
                 {mySurgeon && <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>
                   <button data-testid="email-test" onClick={sendTestEmail} disabled={emailTestState === "Sending..."} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>Send a test e-mail</button>
                   {emailTestState && <span data-testid="email-test-state" role="status" style={{fontSize:11,color:/^Test e-mail sent/.test(emailTestState) ? T.success : dkSubtext,fontWeight:600}}>{emailTestState}</span>}
@@ -8819,7 +8869,7 @@ function CallSchedule() {
                   const myPref = notifPrefs[mySurgeon] || {};
                   return (
                     <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                      {[["schedule_updates_email","Schedule published / changes affecting me"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Shift reminders"]].map(([key, text]) => (
+                      {[["schedule_updates_email","Schedule published / changes affecting me"],["trade_updates_email","Trade proposed / accepted / declined"],["shift_reminders_email","Reminder the day before my call"]].map(([key, text]) => (
                         <label key={key} data-testid="notif-pref" style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:T.text}}>
                           <input type="checkbox" checked={myPref[key] !== false} onChange={e=>saveNotifPref(mySurgeon, {[key]:e.target.checked})}/> {text}
                         </label>
@@ -9426,7 +9476,8 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const exhDay = (ds) => { const per = periodFor(ds, periods || []); if (!per) return false; const m = period && per.id === period.id ? shownMode : ((per.offer_modes && typeof per.offer_modes === "object" ? per.offer_modes[pid] : null) || "preferred"); return m === "exhaustive"; };
   const dirtyCount = dirtyDays.length + (modeDirty ? 1 : 0);
   const rules = surgeonRules && surgeonRules[pid] ? surgeonRules[pid] : null;
-  const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules), [rules, groupRules]);
+  // 10/30 (decision 11): the My rules box speaks of East features in neutral words for everyone but the scheduler, as the greyed days do
+  const rulesWords = React.useMemo(() => offerRulesWords(rules, groupRules, { eastDetails: !!eastDetails }), [rules, groupRules, eastDetails]);
   const capRead = ctx && typeof monthlyCapFor === "function" && pid ? monthlyCapFor(ctx, pid) : null;
   const cap = capRead ? capRead.primary : null;
   // Prompt 32 (Faraz 10/11): with no hard cap, the soft limit (the group's 7) is what the count line names
@@ -9818,7 +9869,7 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
                 </div>
                 <div style={{ fontSize: 11, color: muted, marginTop: 4, lineHeight: 1.45 }}>
                   {shownMode === "exhaustive"
-                    ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)."
+                    ? (eastDetails ? "You are never placed on a day you did not list (vacations, East days, derived weeks, windows and caps still apply on your days)." : "You are never placed on a day you did not list (your vacations, caps and other rules still apply on your days).")
                     : "Your painted days are placed first. Until you reach your fair share for the month, your ordinary rules may also place you on days you did not paint; beyond your share you are kept to your painted days unless no colleague can reasonably take the slot. This applies in each month where you painted at least one day of this period. Your listed weeks, or the days you listed for a month, still apply - painting only adds days. My schedule marks each day you did not paint 'not offered' - trade if needed. (The default.)"}
                   {periodStatus === "rules_only" ? " Choosing a mode or painting a day inside this period takes you off the rules-only list." : ""}
                 </div>
@@ -10159,6 +10210,15 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
 const AWAITING_CONFIRMATION_MARKER = "awaiting confirmation - ";
 const awaitingConfirmation = (a) => !!(a && (a.primaryLocked || a.backupLocked) && typeof a.note === "string" && a.note.replace(/^\[override:[^\]]*\]\s*/, "").indexOf(AWAITING_CONFIRMATION_MARKER) === 0);
 const confirmBadgeStyle = { display:"inline-flex", alignItems:"center", height:13, padding:"0 4px", borderRadius:3, fontSize:8, fontWeight:800, lineHeight:1, letterSpacing:0.5, textTransform:"uppercase", background:"#c2410c", color:"#ffffff", whiteSpace:"nowrap" };
+// 10/30: the read-only day summary's note (everyone but the scheduler): the importer's provenance "seed: <source>" (importer.js
+// impDayNote joins it to the operational note with " - ") and an old "[override: ...]" tag are the scheduler's bookkeeping; the
+// operational words stay, the awaiting-confirmation marker included. "" = no Note line. The scheduler's Note input keeps the full text.
+function dayNoteShown(note) {
+  let s = String(note == null ? "" : note).replace(/^\[override:[^\]]*\]\s*/, "");
+  const m = /^(awaiting confirmation - )?seed: \S+(?: - ([\s\S]*))?$/.exec(s);
+  if (m) s = (m[1] || "") + (m[2] || "");
+  return s.replace(/;\s*source \S+\s*$/, "").replace(/\s+-\s*$/, "").trim();
+}
 
 // Small padlock glyph (inline SVG so no emoji / non-ASCII is needed).
 function Padlock({ title, size, className }) {
@@ -10877,8 +10937,8 @@ function DayEditor(props) {
               <input data-testid="editor-external" ref={externalRef} value={draft.externalCover || ""} disabled={!!draft.primary} onChange={e => setDraft(d => ({ ...d, externalCover: e.target.value }))} placeholder={draft.primary ? "clear primary to use" : "e.g. Atwell"} title="Someone outside the roster covering primary; counts toward nobody's tally" style={{...inp,width:"100%",opacity:draft.primary?0.6:1}}/>
             </div>
           </div>
-        ) : draft.note ? (
-          <div data-testid="editor-note-view" style={{fontSize:12,color:sub,margin:"10px 0"}}>Note: {draft.note}</div>
+        ) : dayNoteShown(draft.note) ? (
+          <div data-testid="editor-note-view" style={{fontSize:12,color:sub,margin:"10px 0"}}>Note: {dayNoteShown(draft.note)}</div>
         ) : null}
 
         {info && <div role="status" data-testid="editor-info" style={{fontSize:12,color:sub,fontWeight:600,marginBottom:8}}>{info}</div>}
@@ -10997,6 +11057,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const modeEff = mode === "pay" && !(payVisible && payTotalsRole) ? "month" : mode;
   useEffect(() => { if (modeEff === "pay" && typeof onPayYear === "function" && year !== payYear) onPayYear(year); }, [modeEff, year, payYear]); // eslint-disable-line
   const rangeMode = modeEff === "fairness" || modeEff === "pay" ? "month" : modeEff;
+  const tableMode = modeEff !== "pay" && modeEff !== "fairness"; // 10/30: the counting notes belong to the three table modes
   const range = ttRangeFor(rangeMode, year, month0, { floors: ytdFloors || {} });
   const opts = {
     holidayByDay: ctx ? ctx.holidayByDay : {},
@@ -11087,6 +11148,9 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   const targetText = (r) => r.target === null ? "-" : String(r.target) + (r.targetKind === "implied" ? "*" : "");
   const targetBText = (r) => r.targetB === null ? "-" : String(r.targetB) + (r.targetBKind === "implied" ? "*" : "");
   const anyImplied = rows.some(r => r.targetKind === "implied" || r.targetBKind === "implied");
+  // 10/30: the four target columns only when a row has a target to compare against (no seed target is set, so they read '-'
+  // in every row until a Generate preview or an explicit monthlyTarget gives one); the CSV keeps every column
+  const anyTarget = rows.some(r => r.target !== null || r.targetB !== null);
   const periodText = range.label + (modeEff === "fairness" ? "" : "") ;
   const exportCsv = () => {
     if (daysUnread) { showToast("The schedule has not loaded - nothing to export yet.", "error"); return; } // review 9/28: not the tally of an unread schedule
@@ -11143,15 +11207,17 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     <div style={css.card} data-testid="totals-card">
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ ...css.cardT, margin: 0 }}>Totals</div>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{modeBtn("month", "By month")}{modeBtn("ytd", "Year to date")}{modeBtn("rolling", "Rolling 12 months")}{modeBtn("fairness", "Fairness")}{payVisible && payTotalsRole && modeBtn("pay", "Pay")}</div>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{modeBtn("month", "By month")}{modeBtn("ytd", "Year to date")}{modeBtn("rolling", "12 months")}{modeBtn("fairness", "Fairness")}{payVisible && payTotalsRole && modeBtn("pay", "Pay")}</div>
         <select data-testid="totals-month" value={month0} onChange={e => setMonth0(Number(e.target.value))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12 }}>{TOTALS_MON.map((m, i) => <option key={m} value={i}>{m}</option>)}</select>
         <select data-testid="totals-year" value={year} onChange={e => setYear(Number(e.target.value))} style={{ ...css.inp, padding: "4px 8px", fontSize: 12 }}>{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
         {hasPreview && <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#7a4fbf", cursor: "pointer" }}><input type="checkbox" data-testid="totals-with-preview" checked={withPreview} onChange={e => setWithPreview(e.target.checked)}/> add rows with the Generate preview applied</label>}
         {modeEff !== "pay" && <button data-testid="totals-csv" onClick={exportCsv} disabled={!!daysUnread} title={daysUnread ? "The schedule has not loaded - nothing to export yet" : undefined} style={{ ...css.btn(false), padding: "5px 12px", fontSize: 11, marginLeft: "auto", opacity: daysUnread ? 0.5 : 1 }}>Export CSV</button>}
       </div>
       <div data-testid="totals-period" style={{ fontSize: 12.5, color: dk ? "#c0c0d8" : "#3a4a58", marginBottom: 8 }}>
-        <strong>{periodText}</strong> - {range.from} to {range.to}. One 24-hour day = one shift; {sw ? "Weighted = primary x " + sw.primary + " + backup x " + sw.backup + " (Silvis days only)." : "Weighted: unavailable until the rules engine loads."} Holiday units count once per unit. Max consecutive follows a run across the period edges, in real days (a holiday unit counts as one day only for a surgeon who opted in); P = primary days against the hard limit, any = either role against the soft limit.{!loaded ? " Loading schedule..." : ""}{daysUnread ? <strong data-testid="totals-days-unread" style={{color:T.open}}> Schedule not loaded - these counts are not the schedule's until it loads.</strong> : null}
+        <strong>{periodText}</strong> - {range.from} to {range.to}.{tableMode ? " " + (sw ? "Weighted = primary x " + sw.primary + " + backup x " + sw.backup + " (Silvis days only)." : "Weighted: unavailable until the rules engine loads.") : ""}{!loaded ? " Loading schedule..." : ""}{daysUnread ? <strong data-testid="totals-days-unread" style={{color:T.open}}> Schedule not loaded - these counts are not the schedule's until it loads.</strong> : null}
       </div>
+      {/* 10/30: the counting method behind a closed native disclosure (it was a 7-line paragraph on a phone, in every mode) */}
+      {tableMode && <details data-testid="totals-how" style={{ fontSize: 11.5, color: T.muted, margin: "-4px 0 8px", lineHeight: 1.5 }}><summary className="cardtoggle" style={{ cursor: "pointer", color: T.accentText, fontWeight: 600, padding: "4px 0" }}>How these are counted</summary>One 24-hour day = one shift (holiday days included); in Holidays maj/min a unit counts once. Max consec. is the longest run touching the period, in real days (a holiday unit is one day only for a surgeon who opted in); the number in brackets is the limit - P: primary days against the hard limit, any: either role against the soft limit.</details>}
       {!ctx && <div style={{ ...css.warnBox, marginBottom: 8 }}>Rules context unavailable - caps, targets{eastDetailsVisible ? ", holiday units and East days" : " and holiday units"} show as '-' until the setup loads.</div>}
       {modeEff === "pay" ? (
         <PayTotalsPanel css={css} dk={dk} roster={roster} schedule={schedule} holidays={holidays} settingsRow={payData && payData.settingsRow} logs={payData ? payData.logs : []} state={payData && payData.state} today={today} year={year} month0={month0} Badge={Badge} showToast={showToast} onRefresh={onPayRefresh} office={payTotalsRole === "office"}/>
@@ -11161,9 +11227,9 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
             <thead>
               <tr>
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
-                <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th} data-testid="totals-th-weighted" title={swText ? "Weighted load: " + swText + " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "Weighted load: unavailable until the rules engine loads"}>Weighted</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
+                <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th} data-testid="totals-th-weighted" title={swText ? "Weighted load: " + swText + (eastDetailsVisible ? " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "; Silvis days only") : "Weighted load: unavailable until the rules engine loads"}>Weighted</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
                 {showEast && <th style={th} title="Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)">East days</th>}
-                <th style={th} title={(eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th>
+                <th style={th} title={(eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th>{anyTarget && <><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th></>}
               </tr>
             </thead>
             <tbody>
@@ -11176,10 +11242,12 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                   <td data-col="maxconsecany" data-flag={overConsecAny(r) ? "over" : undefined} style={{ ...td, color: overConsecAny(r) ? "#c04040" : td.color }}>{r.t.maxConsecutiveAnyRole}{r.maxRuleAny !== null ? " (" + r.maxRuleAny + ")" : ""}</td>
                   {showEast && <td style={td}>{r.east || (countsEast(r.id) ? 0 : "-")}</td>}
                   <td data-col="cap" data-flag={overCap(r) ? "over" : undefined} style={{ ...td, color: overCap(r) ? "#c04040" : td.color }} title={r.cap === null ? undefined : (countsEast(r.id) ? (eastDetailsVisible ? "Counted against the cap: " + r.t.primary + " primary + " + r.eastP + " East primary-week day(s) = " + r.capUse : "Counted against the cap: " + r.capUse + " day(s) - the primary days plus the other days this cap counts; backup never counts") : "Counted against the cap: " + r.capUse + " primary day(s); backup never counts")}>{capText(r)}{r.overSoftText && <span data-testid="totals-over-soft" title={r.overSoftText.title} style={{ color: T.accentText, fontWeight: 700 }}>{" (" + r.overSoftText.text + ")"}</span>}</td>
+                  {anyTarget && <>
                   <td data-col="target" style={td}>{targetText(r)}</td>
                   <td data-col="deviation" data-flag={devFlag(r)} style={{ ...td, color: devColor(r), fontWeight: 600 }}>{r.deviation}</td>
                   <td data-col="targetb" style={td}>{targetBText(r)}</td>
                   <td data-col="deviationb" data-flag={devFlagB(r)} style={{ ...td, color: devColorB(r), fontWeight: 600 }}>{r.deviationB}</td>
+                  </>}
                 </tr>
               ))}
             </tbody>
@@ -11187,7 +11255,9 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
         </div>
       ) : (
         <div data-testid="fairness-view">
-          <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 10px", lineHeight: 1.5 }}>Weighted load in {range.label} ({swText ? swText : "the weights are unavailable until the rules engine loads - the bars show raw days"}; Silvis days only): the solid part of each bar is the primary days, the striped part the backup days. The green mark is the weighted share ({sw ? "primary target x " + sw.primary + " + backup target x " + sw.backup : "primary target + backup target"}) and the red mark the primary cap, read against the solid part. Fairness at Silvis (9/22, water-filled 9/23) is a water-filled share of the month's primary days and, separately, of its backup days for every pool member - ALL the pool's slots, open and already held, poured over the members up to each one's cap, so a locked or derived day counts against its holder's share - and the deviations read the weighted load against the weighted share, then primary days against the primary target and backup days against the backup target, convexly (a day further over target costs more); a surgeon without a target shows '-'.</p>
+          {/* 10/30: the first line says how to read the bars; the method (it ended in developer history) sits behind a closed disclosure */}
+          <p style={{ fontSize: 12, color: "#5B6B82", margin: "0 0 4px", lineHeight: 1.5 }}>Weighted load in {range.label} ({swText ? swText : "the weights are unavailable until the rules engine loads - the bars show raw days"}; Silvis days only): solid = primary days, striped = backup days. The green mark is the weighted share ({sw ? "primary target x " + sw.primary + " + backup target x " + sw.backup : "primary target + backup target"}), the red mark the primary cap (read against the solid part).</p>
+          <details data-testid="fairness-how" style={{ fontSize: 11.5, color: T.muted, margin: "0 0 10px", lineHeight: 1.5 }}><summary className="cardtoggle" style={{ cursor: "pointer", color: T.accentText, fontWeight: 600, padding: "4px 0" }}>How the share is worked out</summary>Each month's primary days and, separately, its backup days are shared out evenly over the pool (water-filled): every slot, open or already held, is poured over the members up to each one's cap, so a locked day counts against its holder's share. The deviations compare the weighted load with the weighted share, then primary days with the primary target and backup days with the backup target; a day further over target costs more. A surgeon without a target shows '-'.</details>
           {(() => {
             // Prompt 32 step 1: the bar is the WEIGHTED load - the primary part (primary days x w.primary, solid) then the
             // backup part (backup days x w.backup, striped in the bar colour) - with the green mark at the weighted share and the
@@ -11207,7 +11277,8 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                   {barMark(r) !== null && <div data-testid="fairness-target-mark" title={(sw ? "weighted share" : "target") + " = primary target x " + barW.primary + " + backup target x " + barW.backup + " = " + (r.target === null ? "-" : r.target) + " x " + barW.primary + " + " + (r.targetB === null ? "-" : r.targetB) + " x " + barW.backup + " = " + barMark(r)} style={{ position: "absolute", left: pct(barMark(r)) + "%", top: 0, bottom: 0, width: 2, background: "#1a8040" }}/>}
                   {r.cap !== null && <div title={"cap (P) " + r.cap * nMonths + " primary days - read against the solid part"} style={{ position: "absolute", left: pct(r.cap * nMonths * barW.primary) + "%", top: 0, bottom: 0, width: 2, background: "#c04040" }}/>}
                 </div>
-                <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#E6ECF5" : "#1F2A3A", minWidth: 250 }}>
+                {/* 10/30: the figures take the line under the bar, so every track spans the same width and the bars compare */}
+                <div style={{ fontFamily: mono, fontSize: 12, color: dk ? "#E6ECF5" : "#1F2A3A", flex: "1 1 100%", minWidth: 0 }}>
                   {r.t.total} total ({r.t.primary} P + {r.t.backup} B){showEast && countsEast(r.id) ? " + " + r.eastP + " East P-week" : ""} - weighted {r.weighted === null ? "-" : r.weighted}{r.weightedShare !== null ? " / share " + r.weightedShare + (r.weightedImplied ? "*" : "") : ""}{r.weightedShare !== null && <span data-flag={devFlagW(r)} style={{ color: devColorW(r), fontWeight: 700 }}> ({r.deviationW})</span>} - target {r.target === null ? "-" : r.target}{r.targetKind === "implied" ? "*" : ""} - target B {r.targetB === null ? "-" : r.targetB}{r.targetBKind === "implied" ? "*" : ""} - cap (P) {r.cap === null ? "-" : r.capUse + "/" + r.cap * nMonths} - <span data-flag={devFlag(r)} style={{ color: devColor(r), fontWeight: 700 }}>{r.deviation === "-" && r.deviationB === "-" ? "no target" : r.deviation === "-" ? "no primary target" : "deviation " + r.deviation + " P"}</span>{r.targetB !== null && <span data-flag={devFlagB(r)} style={{ color: devColorB(r), fontWeight: 700 }}> / {r.deviationB} B</span>}{r.overSoftText && <span data-testid="fairness-over-soft" title={r.overSoftText.title} style={{ color: T.accentText, fontWeight: 700 }}>{" - " + r.overSoftText.text}</span>}
                 </div>
               </div>
@@ -11349,7 +11420,7 @@ function PayCard({ css, dk, personId, nameOf, isSelf, schedule, holidays, settin
         {sumLine(pm.month, TOTALS_MON[month0] + " " + year, "pay-total-month")}
         {sumLine(pm.ytd, "Year to date (through " + TOTALS_MON[month0] + ")", "pay-total-ytd")}
       </div>
-      <div style={{ ...muted, marginBottom: 6 }}>Primary call days only (backup is not paid). One call day runs 07:00 to 07:00 - a call-in after midnight belongs to the day before. Future days are projected (the stipend only).</div>
+      <div style={{ ...muted, marginBottom: 6 }}>Primary days only (backup is not paid); later days are projected (stipend only). A call-in after midnight goes on the day before.</div>
       {pm.days.length === 0 ? <div data-testid="pay-empty" style={muted}>No primary call days in {TOTALS_MON[month0]} {year}.</div> : (
         <div data-testid="pay-days">
           {pm.days.map(d => (
