@@ -1283,7 +1283,7 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     swap that would leave him one day off ranks him lower. (f) **A holiday unit whose days are not consecutive** (Setup takes
     any list; none in the seed): his call days of the unit are one stretch, and so is any call day of his between two of them; a day
     listed in two units is the last one's, as everywhere in the engine (review 10/18).
-28. **Sarkar's November and December weeks, and her rules (Faraz 10/29, Prompt 33) — DECIDED.** (a) **No Friday call** in either
+28. **Sarkar's November and December weeks, and her rules (Faraz 10/29, Prompt 33) — DECIDED; APPLIED 2026-10-30.** (a) **No Friday call** in either
     week; she is on call **Monday to Thursday**, primary on most of those days as her target (3) says and backup on the rest -
     three primaries in November; December holds two by Faraz's choice (c). (b) **November:** Mon 11/16
     primary (from Acton, a locked holder), Tue 11/17 primary, Wed 11/18 backup (from Burchett, a locked holder), Thu 11/19 primary
@@ -1305,8 +1305,21 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     `maxConsecutiveAnyRole` removed (her §3 entry; the seed carries the same values since 10/29; item 7 struck). (e) **How it
     lands:** one apply script Faraz runs (the rules, then the five November / December days - six roles: her five and Acton's
     12/17 primary - as two day-edit batches, 12/16 only after
-    12/17 has moved, because the tool gates a batch as editor saves in date order); nothing was written by Claude Code. Its
-    record (the snapshot ids, the audit rows, the read-back) is added here after the run. (f) **The January window** (the 11/23
+    12/17 has moved, because the tool gates a batch as editor saves in date order); nothing was written by Claude Code.
+    ⟶ **APPLIED 2026-10-30 (Faraz, `apply-sarkar-weeks.sh` from its worktree pinned at ed69b53; started 11:32:21Z, result
+    APPLIED AND VERIFIED):** her rules at 11:32:49Z (the blob's `updated_at` 2026-10-30 11:32:49.39044+00;
+    snapshot `e2d93aed-f180-4368-a944-349bb3003543`, `rules_edit`; one `rules.edit` audit row), batch 1 at 11:32:59Z (11/16, 11/18,
+    12/14, 12/17; snapshot `e2bbf16b-d002-4b1e-a97a-e6cc8839a047`, `day_edit`; six audit rows - four `schedule.day_edit` and
+    two `schedule.lock`, the 12/14 backup and both 12/17 roles), batch 2 at 11:33:04Z (12/16;
+    snapshot `0e66e68d-ee77-4981-97c4-374db1aa1de3`, `day_edit`; a `schedule.day_edit` and a `schedule.lock` row); verify-rls 657
+    passed, 0 failed. No notification row was queued and no e-mail was sent (the day editor writes none - telling the group is
+    Faraz's). Read back by Claude Code at 11:37Z (read-only queries): Mon 11/16 P (locked), Tue 11/17 P, Wed 11/18 B
+    (locked), Thu 11/19 P, Fri 11/20 not hers; Mon 12/14 B (locked), Tue 12/15 P, Wed 12/16 P (locked, `trade`), Thu 12/17 B
+    (locked, Acton's primary locked), Fri 12/18 not hers; 112 `schedule_days` rows; her rules: windows 11/16-11/19,
+    12/14-12/17 and 1/11-1/14 (October's 10/19-10/23 kept), `daysPerWindowWeek` target 3 (`countsBackup` false), no
+    `maxConsecutiveAnyRole`, no `preferAlternateDays`; the tallies (c) names read as it says (November: Sarkar 3 P / 1 B;
+    December: Khan 3 P, Acton 7 P / 6 B, Philip 7 B, Sarkar 2 P / 2 B). Her 11/17, 11/19 and 12/15 primaries were hers before
+    the run and stay unlocked. The rollback (Faraz's decision only) is in the run's log. (f) **The January window** (the 11/23
     Generate): with these rules no Friday can be placed (her window ends Thursday); the Generate gives her one or two primaries
     that week, because Burchett offered Mon 1/11 and wins it on his offered bonus. Her own offers for 1/11 primary, 1/12
     primary, 1/13 backup and 1/14 primary (Setup > Periods > Enter for Sarkar) repeat the November shape in most preview runs
