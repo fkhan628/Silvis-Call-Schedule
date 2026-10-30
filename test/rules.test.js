@@ -364,8 +364,8 @@ okElig(dec16, "10/29 seed: her December shape (Mon B, Tue P, Wed P, Thu B) - Wed
 lacksSoft(dec16, "consecutive-primary", "10/29 seed: ...with no consecutive-primary");
 lacksSoft(dec16, "long-run", "10/29 seed: ...and no long-run over the four days");
 eq(softW(dec16, "window-week-below-target:3"), -3, "10/29 seed: ...and the target-3 bonus (2 primaries in the week)");
-// review 10/30: every placement of both weeks is ELIGIBLE with the other three held (a soft weight alone cannot stand in for it -
-// rules.js keeps the soft list on a hard-blocked result)
+// PR review: every placement of both weeks is ELIGIBLE with the other three held (a soft weight alone cannot stand in for it -
+// rules.js keeps the soft list on a schedule-dependent block such as max-consecutive)
 const SK_SHAPES = { November: [["2026-11-16", P], ["2026-11-17", P], ["2026-11-18", B], ["2026-11-19", P]], December: [["2026-12-14", B], ["2026-12-15", P], ["2026-12-16", P], ["2026-12-17", B]] };
 for (const [wk, shape] of Object.entries(SK_SHAPES)) shape.forEach(([d, role]) => {
   const held = {};

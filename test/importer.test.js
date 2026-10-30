@@ -2131,12 +2131,13 @@ step("10/29 (Prompt 33, Faraz): Sarkar's rules reach the blob as rules only - wi
   eq([seed._meta.revisions.indexOf(rev1029[0]), plan.blob.settings.seedLastRevision, plan.blob.settings.seedRevisionCount], [seed._meta.revisions.length - 1, "2026-10-29", seed._meta.revisions.length], "10/29: it is the last entry; seedLastRevision reads 2026-10-29 and seedRevisionCount counts it");
   ok(/availableWindows \[1\.\.3\] end on Thursday/.test(rev1029[0]) && /maxConsecutiveAnyRole and preferAlternateDays/.test(rev1029[0]) && /daysPerWindowWeek\.target 2 -> 3/.test(rev1029[0]) && /no seed apply/.test(rev1029[0]) && /section 8 item 28/.test(rev1029[0]), "10/29: the entry names the windows, the two removed keys, the target, that nothing is applied from the seed and the rules doc item");
   ok(!/\$\s*\d|@|\d{3}[-.]\d{3}[-.]\d{4}/.test(rev1029[0]) && IMP.impFindContactValues(rev1029[0]).length === 0 && !DENY.test(rev1029[0]), "10/29: the entry carries no amount, no contact-like value and no denylist word");
-  // review 10/30: the convention of the 9/26, 9/27 and 10/11 decisions - the open question struck with its answer, plus an
+  // PR review: the convention of the 9/26, 9/27 and 10/11 decisions - the open question struck with its answer, plus an
   // answeredQuestions line (neither list is imported, so no core hash moves for them)
   ok(seed.openQuestions.some((t) => /^7\. ~~Sarkar's day count/.test(t) && /answered 10\/29/.test(t) && /target 3/.test(t)), "10/29: open question 7 is struck with the answer (target 3)");
   const aq1029 = seed.answeredQuestions.filter((t) => /Faraz 10\/29, Prompt 33/.test(t));
   ok(aq1029.length === 1 && /target 3/.test(aq1029[0]) && /end on Thursday/.test(aq1029[0]) && !DENY.test(aq1029[0]) && IMP.impFindContactValues(aq1029[0]).length === 0, "10/29: answeredQuestions records the decision (windows end on Thursday, target 3), no denylist word, no contact-like value");
-  ok(seed.answeredQuestions.filter((t) => /^Sarkar (windows|day count) \(the clinic manager/.test(t)).every((t) => /Superseded 10\/29/.test(t)), "10/29: the two 9/22 Sarkar answers point at the 10/29 entry");
+  const aq922 = seed.answeredQuestions.filter((t) => /^Sarkar (windows|day count) \(the clinic manager/.test(t));
+  ok(aq922.length === 2 && aq922.every((t) => /Superseded 10\/29/.test(t)), "10/29: the two 9/22 Sarkar answers (both found) point at the 10/29 entry");
   const seedPre1029 = clone(seed);
   Object.assign(seedPre1029.surgeonRules.s6, { availableWindows: [{ start: "2026-10-19", end: "2026-10-23" }, { start: "2026-11-16", end: "2026-11-20" }, { start: "2026-12-14", end: "2026-12-18" }, { start: "2027-01-11", end: "2027-01-15" }], preferAlternateDays: true, maxConsecutiveAnyRole: 2 });
   seedPre1029.surgeonRules.s6.daysPerWindowWeek = Object.assign({}, seedPre1029.surgeonRules.s6.daysPerWindowWeek, { target: 2 });
