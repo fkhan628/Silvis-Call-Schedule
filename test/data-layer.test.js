@@ -5157,6 +5157,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.deepStrictEqual(fixed.codes, { block: ["derived-lock-held:s5"], confirm: why.codes.confirm }, "the codes follow");
     assert.strictEqual(H.offerWhyIfOffered(H.offerDayWhy(plain, { eastDetails: false }), asIf, { eastDetails: false }).block, "not available", "a non-scheduler reads 'not available' (decision 11)");
     assert.ok(R.eligibility(ctx, tue, "backup", "s1", { claim: true }).ok, "his backup that day stays paintable - a one-role block, not a grey");
+    // review of db84135: a day that already carries a dated record - here his saved BACKUP offer - must still read as if offered for
+    // primary (assumeOffer sets rowAvail AFTER the dated-record block, which would overwrite it); and his own derived backup week
+    const inpB = { ...inp, offers: [{ person_id: "s1", day: tue, role_pref: "backup" }] }, ctxB = R.buildContext(inpB);
+    assert.deepStrictEqual(R.eligibility(ctxB, tue, "primary", "s1", { claim: true }).hard.map(core), ["hard-never-weekday"], "with a saved backup offer the plain primary ask still stops at the pattern");
+    assert.deepStrictEqual(R.eligibility(ctxB, tue, "primary", "s1", { claim: true, assumeOffer: true }).hard, ["derived-lock-held:s5"], "with a dated record that day, as if offered still reaches the colleague's week (rowAvail set after the record)");
+    assert.deepStrictEqual(R.eligibility(ctxB, tue, "primary", "s1", { claim: true, assumeOffer: true }).hard, R.eligibility(R.buildContext({ ...inp, offers: [{ person_id: "s1", day: tue, role_pref: "either" }] }), tue, "primary", "s1", { claim: true }).hard, "= the ctx where that offer is 'either'");
+    const ctxOwn = R.buildContext({ ...inp, eastDerived: [{ surgeonId: "s1", weekMonday: "2026-11-02", silvisRole: "backup" }] });
+    const ownAsIf = R.eligibility(ctxOwn, "2026-11-03", "primary", "s1", { claim: true, assumeOffer: true }).hard;
+    assert.deepStrictEqual(ownAsIf, ["derived-lock:backup"], "his own derived backup week shows behind his Tuesday rule too");
+    assert.strictEqual(H.offerWhyIfOffered(H.offerDayWhy(R.eligibility(ctxOwn, "2026-11-03", "primary", "s1", { claim: true }).hard), ownAsIf).block, "your East/Silvis week", "worded as his own week");
     // (3) every other picture is left alone
     const confirmOnly = H.offerDayWhy(["hard-never-weekday:Tue"]);
     assert.strictEqual(H.offerWhyIfOffered(confirmOnly, []), confirmOnly, "nothing behind the pattern -> unchanged");
