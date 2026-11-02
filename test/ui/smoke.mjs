@@ -716,6 +716,9 @@ const failures = [];
 const fail = (m) => { failures.push(m); console.log("FAIL " + m); };
 const ok = (m) => console.log("ok   " + m);
 const failedRequests = [];
+// 11/2 (review of the guard below): the page is read NOW, before any wait - files are cached on their first request (B9
+// above), and the guard can hold that request back ~35 min, long enough for a build or a `git restore index.html` here to swap it
+{ const f = path.join(ROOT, "index.html"); servedCache.set(f, fs.readFileSync(f)); }
 // 11/2 (review): a run takes ~16-17 min and keeps ONE date (below), so a run that crosses midnight Central (06:00Z under CST,
 // 05:00Z under CDT) fails whichever date checks run after it. A run that would start within SMOKE_MIDNIGHT_MARGIN_MIN (default
 // 35) minutes of midnight Central waits for it to pass first - SMOKE_MIDNIGHT_WAIT=0 runs at once; the end of the run says so
