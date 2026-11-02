@@ -2137,7 +2137,8 @@ const phoneNavModel = (pg) => pg.evaluate(() => {
   const alertsRow = rows.find(b => b.hasAttribute("data-alerts"));
   const badge = document.querySelector("[data-testid=more-badge]");
   return { bar: Array.from(bar.children).map(key), labels: Array.from(bar.children).map(label), more: rows.map(key), moreBadge: badge ? badge.textContent.trim() : "",
-    alertsCount: alertsRow ? ((alertsRow.querySelector("span") || { textContent: "" }).textContent || "").trim() : "", sheetMounted: !!sheet, sheetHidden: !!sheet && sheet.hidden,
+    // the Alerts row's unread count: its numeric span (with no unread alert the row's only span is its "Alerts" label)
+    alertsCount: alertsRow ? ((Array.from(alertsRow.querySelectorAll("span")).find(s => /^\d+$/.test((s.textContent || "").trim())) || { textContent: "" }).textContent || "").trim() : "", sheetMounted: !!sheet, sheetHidden: !!sheet && sheet.hidden,
     text: (bar.innerText + " " + (sheet ? sheet.textContent : "")).replace(/\s+/g, " ") };
 });
 // Nothing hides behind the bar: the page's last content (app-main's last child) ends above the bar's top once scrolled to the end.
@@ -3010,6 +3011,9 @@ try {
       await page.click("[data-testid=er-reset]");
       await page.waitForFunction(() => { const f = document.querySelector("[data-testid=er-from]"); return !!f && f.value !== "2026-11-02"; }, null, { timeout: 3000 }).catch(() => {});
       const pre6 = await page.$eval("[data-testid=er-from]", el => el.value);
+      // the reset is a checked precondition (fix check 11/1): Visible month puts From on the 1st of a month - never the typed 11/2
+      const resetOk = /^\d{4}-\d{2}-01$/.test(pre6);
+      if (!resetOk) fail(`ER panel: Visible month (er-reset) left From at ${pre6} - the Next 6 weeks click could not be shown to change it`);
       if (b6) await page.click("[data-testid=er-preset-6w]");
       const t6 = await page.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : ""));
       const ok6 = typeof t6 === "string" && t6.length === 10 && t6[4] === "-" && t6[7] === "-";
@@ -15371,7 +15375,7 @@ try {
         else if (sBody.split(NOT_LINKED).length - 1) fail(`viewer (${theme}): the 'not linked' sentence appears on Settings`);
         else ok(`viewer (${theme}): Live calendar sync = the public full-schedule URL only (${full.replace("https://" + SUPABASE_HOST, "<project>")}); Account line 'a read-only account'`);
         // (d) Alerts: the badge counts the two visible rows; the panel lists exactly open_shifts + schedule_published (newest first)
-        const badge = await pv.$eval(ALERTS_BTN, el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
+        const badge = await pv.$eval(ALERTS_BTN, el => (Array.from(el.querySelectorAll("span")).find(s => /^\d+$/.test((s.textContent || "").trim())) || { textContent: "" }).textContent.trim()); // the numeric span: the count (a phone row's label is a span too)
         // 11/1 item 6: on a phone the unread count rides on the tab bar's More too (the Alerts row in its sheet carries it first)
         const moreBadgeV = await pv.$eval("[data-testid=more-badge]", el => el.textContent.trim()).catch(() => "");
         await clickNav(pv, ALERTS_BTN);
@@ -15637,7 +15641,7 @@ try {
           } catch (e) { fail(`${R2}: ` + errLine(e)); }
         }
         // (d) Alerts
-        const badge = await pf.$eval(ALERTS_BTN, el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
+        const badge = await pf.$eval(ALERTS_BTN, el => (Array.from(el.querySelectorAll("span")).find(s => /^\d+$/.test((s.textContent || "").trim())) || { textContent: "" }).textContent.trim()); // the numeric span: the count (a phone row's label is a span too)
         // 11/1 item 6: on a phone the unread count rides on the tab bar's More too (the Alerts row in its sheet carries it first)
         const moreBadgeF = await pf.$eval("[data-testid=more-badge]", el => el.textContent.trim()).catch(() => "");
         await clickNav(pf, ALERTS_BTN);

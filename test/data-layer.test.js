@@ -7198,7 +7198,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(n6c(", bannerLift),fontSize:12.5"), 3);
       const line = N6SRC.split("\n").find(l => l.includes('data-testid="toast-box"')) || "";
       // review 11/1: while a phone sheet (More, Alerts) stands on the bar the toast sits at the top (css.topToast), never over the sheet's rows
-      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? ((moreOpen || showNotifs) ? css.topToast : css.aboveTabBar(24)) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
+      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? ((moreOpen || showNotifs) && !editorDay && !claimSheet ? css.topToast : css.aboveTabBar(24)) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
       assert.deepStrictEqual(st6.css.topToast, { top: "calc(12px + env(safe-area-inset-top, 0px))", bottom: "auto" }, "the top placement, from app-styles (no new inset reader in index-source.html)");
       assert.ok(a > 0 && b > a && c > b);
       assert.ok(N6SRC.includes('document.documentElement.style.scrollPaddingBottom = tabBarShown ? TABBAR_CLEAR : "";'));
@@ -7627,7 +7627,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(B3count('  const isViewer = !!userProfile && userProfile.role === "viewer" && !userProfile.person_id && !profileLoadFailed;\n'), 1, "the isViewer const (a failed profile read keeps its own red banner and is never branded a viewer)");
       assert.ok(B3SRC.indexOf("const isViewer = ") > B3SRC.indexOf("const isUnlinked = "), "declared after isUnlinked, before the first render");
       assert.strictEqual(B3count("{!isPublicMode && isUnlinked && !isCoordinator && !isViewer && ("), 1, "the unlinked-account banner never renders for a viewer (a failed profile read still does: profileLoadFailed keeps isViewer false)");
-      assert.strictEqual(B3count("useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);"), 1, "myNotifications is the helper with isViewer in its inputs and its deps (Prompt 20 F3 adds follows: myFollows)");
+      // pin moved deliberately 11/1 (phone polish review): the feed is empty until the profile is known (the role filter needs it)
+      assert.strictEqual(B3count("useMemo(() => userProfile ? notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }) : [], [userProfile, notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);"), 1, "myNotifications is the helper with isViewer in its inputs and its deps (Prompt 20 F3 adds follows: myFollows), empty until the profile is known");
       assert.strictEqual(B3count("if (isCoordinator || isViewer) return null; // Prompt 16 A7 / B3"), 1, "the trades section (the card and the request list) returns null for a viewer as for the office");
       assert.strictEqual(B3count('{!mySurgeon && !canEnterForAnyone && !isViewer ? <p style={muted}>Your account is not linked to a roster entry yet - the scheduler will link it.</p> : ('), 1, "the Time off card's 'not linked' sentence is not shown to a viewer");
       assert.strictEqual(B3count("{!isViewer && renderVacationForm("), 1, "no vacation form for a viewer");
@@ -8638,7 +8639,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("P20 F3 pins: myFollows = followedIdsOf(userProfile, roster ids) (never after a failed profile read) is declared before myNotifications, which passes follows: myFollows (and lists it in the deps); the Mine tab reads 'Following' for a follower and shows for him although he has no roster link", () => {
       const decl = "  const myFollows = useMemo(() => profileLoadFailed ? [] : followedIdsOf(userProfile, surgeons.map(s => s.id)), [userProfile, surgeons, profileLoadFailed]);\n  const isFollowing = myFollows.length > 0;\n";
       assert.strictEqual(count(decl), 1, "the myFollows / isFollowing declarations");
-      const memo = "useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);";
+      // pin moved deliberately 11/1 (phone polish review): the feed is empty until the profile is known
+      const memo = "useMemo(() => userProfile ? notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }) : [], [userProfile, notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);";
       assert.strictEqual(count(memo), 1, "myNotifications passes follows and lists myFollows in its deps");
       assert.ok(src.indexOf(decl) > 0 && src.indexOf(decl) < src.indexOf(memo), "myFollows is declared before the feed memo reads it (a const read before its line is a TDZ crash)");
       assert.ok(src.indexOf(decl) > src.indexOf("  const isViewer = "), "declared after isViewer");

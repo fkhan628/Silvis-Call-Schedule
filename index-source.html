@@ -241,7 +241,8 @@
     /* item 1 review (11/1): at 340 px and under (an iPhone SE 1st generation, Display Zoom on the small phones) the month title
        keeps its year - a 13 px title and a slimmer Today (its 44 px minimum stays) */
     @media (max-width: 340px) {
-      .cal-title > :first-child { font-size: 13px !important; }
+      .cal-title > :first-child { font-size: 12px !important; }
+      .cal-caret { margin-left: 3px !important; }
       .cal-navbtn:not(.cal-navarrow) { padding-left: 4px !important; padding-right: 4px !important; }
     }
   </style>
@@ -1138,8 +1139,9 @@ function CallSchedule() {
   // (publish, change, manual edit, open shifts - the open-shifts notice is for everyone, Prompt 13; shift_claimed
   // reaches the claimer through data.surgeon_id) plus the rows that name them; a viewer schedule_published and
   // open_shifts only - unless he follows surgeons (Prompt 20 F3): then what each of them reads; the per-device Clear
-  // watermark applies to all.
-  const myNotifications = useMemo(() => notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }), [notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);
+  // watermark applies to all. 11/1 (phone polish review): nothing until the profile is known - before it lands the role filter
+  // cannot run (a viewer would briefly see the unfiltered feed and its count, on the phone tab bar's More as in the wide nav).
+  const myNotifications = useMemo(() => userProfile ? notifVisibleTo(notifications, { isScheduler, isViewer, mySurgeon, follows: myFollows, clearedBefore: notifClearedBefore }) : [], [userProfile, notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);
   const myUnreadCount = useMemo(() => myNotifications.filter(n => n.created_at > notifLastSeen).length, [myNotifications, notifLastSeen]);
   const myTradeRequests = useMemo(() => {
     if (isScheduler || !mySurgeon) return tradeRequests;
@@ -7444,9 +7446,10 @@ function CallSchedule() {
           shrank to the right half of the screen (195 px on a 390 px phone, a 160-character error 10 lines tall); over
           the day editor / claim sheet it lifts above their action row (toastLift). 11/1 item 6: while the phone tab bar shows it
           sits 24 px above the bar (css.aboveTabBar), and at the top while a phone sheet (More, Alerts) stands on the bar
-          (css.topToast - review 11/1: it covered the sheet's bottom rows); the lift still wins over a dialog. */}
+          (css.topToast - review 11/1: it covered the sheet's bottom rows) unless a centred dialog (the day editor, the claim
+          sheet) is up - then toastLift places it above the dialog's action row, never both top and bottom. */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(tabBarShown ? ((moreOpen || showNotifs) ? css.topToast : css.aboveTabBar(24)) : {}),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(tabBarShown ? ((moreOpen || showNotifs) && !editorDay && !claimSheet ? css.topToast : css.aboveTabBar(24)) : {}),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           <span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>
           {toast.count > 1 && <span data-testid="toast-count" title={"Shown " + toast.count + " times"} style={{flexShrink:0,background:"rgba(255,255,255,0.22)",borderRadius:8,padding:"1px 7px",fontSize:11,fontWeight:700}}>{"x" + toast.count}</span>}
           {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-10px -12px -10px 0",minWidth:36,minHeight:36,lineHeight:1,fontFamily:font}}>x</button>}
@@ -8126,7 +8129,7 @@ function CallSchedule() {
                     year field on a row of their own (cal-picks); a wide screen shows them in this row always (both wrappers are display:
                     contents there). cal-month's own text stays "Month Year" - the smoke reads it. */}
                 <span className="cal-title">
-                  <span data-testid="cal-month" style={{fontSize:15,fontWeight:700,color:dkText,minWidth:150,textAlign:"center"}}>{MO[calMonth]} {calYear}</span>
+                  <span data-testid="cal-month" aria-hidden={isPhone ? "true" : undefined} style={{fontSize:15,fontWeight:700,color:dkText,minWidth:150,textAlign:"center"}}>{MO[calMonth]} {calYear}</span>
                   <span className="cal-caret" aria-hidden="true" style={{width:0,height:0,borderLeft:"4px solid transparent",borderRight:"4px solid transparent",borderTop:"5px solid " + dkSubtext,marginLeft:6}}/>
                   <button type="button" data-testid="cal-month-toggle" className="cal-title-btn" aria-controls="cal-picks" aria-expanded={calPickOpen} aria-label={MO[calMonth] + " " + calYear + " - choose month and year"} onClick={()=>setCalPickOpen(o => !o)} style={{background:"transparent",border:"none",padding:0,cursor:"pointer"}}/>
                 </span>
