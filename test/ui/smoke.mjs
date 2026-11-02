@@ -8912,7 +8912,7 @@ try {
     // time, so the harness can make it throw for one editor open and restore it after.
     // Prompt 12 SM2: the days are chosen from the live rows each run (the schedule is published through the
     // milestone since 9/23, so no date can be named): fcDay = the first row-less Mon-Fri day on/after today
-    // that this run has not edited; weekendTriples = the first two Fri-Sun triples on/after today with all
+    // that this run has not edited and a pool surgeon may hold as primary (fcCands, 11/2); weekendTriples = the first two Fri-Sun triples on/after today with all
     // three days row-less and untouched (block-member check, then the trade-block check) and none of them
     // inside a holiday unit of the blob (SM2 review: a Sat in a unit reads 'holiday-unit', not the
     // 'weekend-block-only' override the check accepts). The scan runs from today to 400 days past the
@@ -8958,8 +8958,20 @@ try {
       if (!blockOkIdx.length) fail(`block-member premise: none of the first ${rowlessTriples.length} row-less Fri-Sun triples lets Fierce hold all three days as a block member - not a plausible data state: ${blockWhy(0)}`);
     }
     const tripleDays = new Set(weekendTriples.flat());
-    let fcDay = null;
-    for (let d = todayIso; !fcDay && d <= scanEnd; d = isoAddDays(d, 1)) { if (dowUtc(d) >= 1 && dowUtc(d) <= 5 && rowless(d) && !tripleDays.has(d)) fcDay = d; }
+    // 11/2 (time travel 4/7/2027): the restored check below ('the same day opens with eligible options') needs a day someone may
+    // hold as primary - the first row-less weekday can have nobody (4/8/2027: Khan's never-Thursday, the others' offers, windows,
+    // the day before a vacation); read from the rules on this page (rulesHardOn): the first of the next 15 such weekdays where a
+    // pool surgeon is eligible, else the first (its restored check then FAILs as before)
+    const fcCands = [];
+    for (let d = todayIso; fcCands.length < 15 && d <= scanEnd; d = isoAddDays(d, 1)) { if (dowUtc(d) >= 1 && dowUtc(d) <= 5 && rowless(d) && !tripleDays.has(d)) fcCands.push(d); }
+    const fcPool = (Array.isArray(gcBlobEarly.roster) ? gcBlobEarly.roster : []).filter(r => r && r.id && r.active !== false && r.type !== "external").map(r => r.id);
+    const fcIds = fcPool.length ? fcPool : ["s1", "s2", "s3", "s4", "s5", "s6"];
+    const fcRh = fcCands.length ? await rulesHardOn(page, fcCands.flatMap(d => fcIds.map(id => ({ day: d, role: "primary", id })))) : { out: [] };
+    if (fcRh.error) console.log(`     (small items: the rules context could not be read for the fail-closed day (${fcRh.error}) - the first row-less weekday is used)`);
+    const fcIdx = fcRh.error ? 0 : fcCands.findIndex((d, i) => fcIds.some((id, k) => { const h = (fcRh.out || [])[i * fcIds.length + k]; return Array.isArray(h) && h.length === 0; }));
+    let fcDay = fcCands[fcIdx > 0 ? fcIdx : 0] || null;
+    if (fcIdx > 0) console.log(`     (small items: by the rules nobody may hold primary on ${fcCands.slice(0, fcIdx).join(", ")} - the fail-closed day moves to ${fcDay})`);
+    else if (fcIdx < 0 && fcCands.length) console.log(`     (small items: by the rules nobody may hold primary on any of the next ${fcCands.length} row-less weekdays from ${fcCands[0]} - the restored check reads ${fcCands[0]})`);
     if (!fcDay || weekendTriples.length < 2) throw new Error(`no row-less weekday / holiday-free Fri-Sun triples between ${todayIso} and ${scanEnd} (fcDay ${fcDay}, triples ${weekendTriples.length})`);
     console.log(`     (small items: fail-closed day ${fcDay}, block-member triple ${weekendTriples[0].join("/")}, trade-block triple ${weekendTriples[1].join("/")} - the first row-less weekday and holiday-free Fri-Sun triples on/after today ${todayIso} untouched by this run where the rules let Fierce hold all three as a block member (${blockOkIdx.length} of the first ${rowlessTriples.length} row-less triples do${rowlessTriples[0] && !blockOkIdx.includes(0) ? "; not " + rowlessTriples[0][0] + ": " + blockWhy(0) : ""}); scan bounded by ${scanEnd} = last live row ${lastLiveDay} + 400 d; ${holidayUnitDays.size} holiday-unit day(s) in the blob)`);
     await page.evaluate(() => { window.__realEligibility = window.eligibility; window.eligibility = () => { throw new Error("harness: synthetic rules failure"); }; });
