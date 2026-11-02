@@ -3739,7 +3739,7 @@ try {
   //  - the coverage strip (the scheduler's "forecast-busy as primary", "East feed through", "unreviewed East vacations");
   //    the last was drawn for the scheduler and the person with the East code only, so KHAN AS A SURGEON (person s1, role
   //    surgeon) is the role that proves its gate - the other roles never saw it;
-  //  - Totals for November 2026, month and fairness views + EVERY line of the CSV (signed-in roles; ?public=1 has no
+  //  - Totals for E3_TOT (Nov 2026 until 2028), month and fairness views + EVERY line of the CSV (signed-in roles; ?public=1 has no
   //    Totals) - the scheduler's East days column, footnote, fairness " + N East P-week" and 23-field CSV lines; 22 fields
   //    on every line for the others (a header that lost its East column over rows that kept it would shift every value).
   // "No East text" = no match of E3_RE (case-insensitive: innerText returns CSS-uppercased text as shown) in the
@@ -3753,6 +3753,12 @@ try {
   {
     const E3_RE = /\beast\b|davenport|east-(?:busy|forecast|derived)|derived-lock/i;
     const E3_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    // 11/2 (date bombs, #18a): the Totals month - November 2026 while the year picker offers 2026 (Central year - 1 .. + 2, so until
+    // 1/1/2028); after that the latest month on or before this one, inside the offered years, in which Fierce has East P-week days
+    // (the ' + N East P-week' check needs some) - read from the scheduler page's rules context
+    const E3_CY = Number(todayCentral.slice(0, 4)), e3TotOffered = (y) => y >= E3_CY - 1 && y <= E3_CY + 2;
+    let E3_TOT = e3TotOffered(2026) ? "2026-11" : null;
+    const e3TotLabel = () => E3_TOT ? E3_MONTHS[+E3_TOT.slice(5, 7) - 1].slice(0, 3) + " " + E3_TOT.slice(0, 4) : "(none)";
     const E3_VAC_DAY = EASTVAC_RANGES[0].start;          // unreviewed (no review row in the harness store)
     const E3_LOCK_DAY = "2026-10-15";
     const E3_SRC_DAY = Object.keys(liveEarlyByDay).sort().find(d => d >= "2026-11-01" && liveEarlyByDay[d] && liveEarlyByDay[d].source === "east-derived") || null;
@@ -3799,7 +3805,7 @@ try {
       const eastVac = {};
       Object.keys(ctx.per || {}).forEach(id => { const P = ctx.per[id]; days.forEach(d => { if (P && P.eastVacationDays && P.eastVacationDays[d]) eastVac[d] = id + " " + P.eastVacationDays[d]; }); });
       const countsEast = Object.keys(ctx.per || {}).filter(id => ctx.per[id] && ctx.per[id].countsEastDays);
-      return { derivedDay, eastVac, countsEast };
+      return { derivedDay, eastVac, countsEast, eastPMonthsS5: [...new Set(Array.from((ctx.per && ctx.per.s5 && ctx.per.s5.eastPrimaryDays) || []).map(d => String(d).slice(0, 7)))].sort() };
     }, days);
     const e3Month = async (pg, y, m0) => {
       if (await pg.$('button[data-tab="calendar"]')) await pg.click('button[data-tab="calendar"]');
@@ -3879,9 +3885,10 @@ try {
       await clickTab(pg, "totals");
       await pg.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
       await pg.click("[data-testid=totals-mode-month]");
-      await pg.selectOption("[data-testid=totals-year]", "2026");
-      await pg.selectOption("[data-testid=totals-month]", "10");
-      await pg.waitForFunction(() => /2026-11-01 to 2026-11-30/.test((document.querySelector("[data-testid=totals-period]") || {}).textContent || ""), null, { timeout: 5000 });
+      const [ty, tm] = E3_TOT.split("-").map(Number), tLast = String(new Date(Date.UTC(ty, tm, 0)).getUTCDate()).padStart(2, "0");
+      await pg.selectOption("[data-testid=totals-year]", String(ty));
+      await pg.selectOption("[data-testid=totals-month]", String(tm - 1));
+      await pg.waitForFunction((want) => ((document.querySelector("[data-testid=totals-period]") || {}).textContent || "").includes(want), E3_TOT + "-01 to " + E3_TOT + "-" + tLast, { timeout: 5000 });
       await pg.waitForFunction(() => document.querySelectorAll("[data-testid^=totals-row-]").length >= 6, null, { timeout: 8000 });
       const month = await e3Scan(pg, "[data-testid=totals-card]");
       const monthText = await pg.$eval("[data-testid=totals-card]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
@@ -3932,18 +3939,22 @@ try {
         if (eS.source !== "Source: east-derived") fail(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): the served row's source must read 'Source: east-derived' to the scheduler, got '${eS.source}'`);
         else ok(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): '${eS.source}' (the served row's own source)`);
       }
-      const tS = await e3Totals(page, "e3-scheduler-totals.png");
-      // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 22 -> 23 fields for the scheduler
-      const badS = tS.csvRows.filter(r => r.length !== 23);
-      if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 23 || tS.csvHeader[22] !== "Weighted") fail(`Item E3 (scheduler, Totals Nov 2026): the East days column must stay on screen and in the CSV (23 columns, Weighted the last): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
-      else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 23 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
-      else if (!/East days: days on Davenport call/.test(tS.monthText)) fail(`Item E3 (scheduler, Totals Nov 2026): the 'East days: days on Davenport call ...' footnote is gone`);
-      else ok(`Item E3 (scheduler, Totals Nov 2026): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 23 fields each - the 22 older columns unchanged, Weighted appended)`);
-      sched.fierceEastP = /East P-week/.test(tS.fierce);
-      if (factsS.countsEast.includes("s5")) {
-        if (!sched.fierceEastP) fail(`Item E3 (scheduler, fairness Nov 2026): Fierce's cap counts East days, so his row must read ' + N East P-week': '${tS.fierce.slice(0, 160)}'`);
-        else ok(`Item E3 (scheduler, fairness Nov 2026): Fierce's row keeps ' + N East P-week' - '${tS.fierce.slice(0, 120)}'`);
-      } else console.log(`     (Item E3: Fierce's cap does not count East days in this rules context (countsEastDays: ${factsS.countsEast.join(",") || "none"}) - the fairness ' + N East P-week' check is vacuous this run)`);
+      if (!E3_TOT) E3_TOT = (factsS.eastPMonthsS5 || []).filter(ym => e3TotOffered(+ym.slice(0, 4)) && ym <= todayCentral.slice(0, 7)).pop() || null;
+      const tS = E3_TOT ? await e3Totals(page, "e3-scheduler-totals.png") : null;
+      if (!tS) console.log("     (Item E3 (scheduler): no month the Totals picker offers holds Fierce East P-week days - the Totals checks are not exercised this run)");
+      else {
+        // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 22 -> 23 fields for the scheduler
+        const badS = tS.csvRows.filter(r => r.length !== 23);
+        if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 23 || tS.csvHeader[22] !== "Weighted") fail(`Item E3 (scheduler, Totals ${e3TotLabel()}): the East days column must stay on screen and in the CSV (23 columns, Weighted the last): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
+        else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 23 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+        else if (!/East days: days on Davenport call/.test(tS.monthText)) fail(`Item E3 (scheduler, Totals ${e3TotLabel()}): the 'East days: days on Davenport call ...' footnote is gone`);
+        else ok(`Item E3 (scheduler, Totals ${e3TotLabel()}): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 23 fields each - the 22 older columns unchanged, Weighted appended)`);
+        sched.fierceEastP = /East P-week/.test(tS.fierce);
+        if (factsS.countsEast.includes("s5")) {
+          if (!sched.fierceEastP) fail(`Item E3 (scheduler, fairness ${e3TotLabel()}): Fierce's cap counts East days, so his row must read ' + N East P-week': '${tS.fierce.slice(0, 160)}'`);
+          else ok(`Item E3 (scheduler, fairness ${e3TotLabel()}): Fierce's row keeps ' + N East P-week' - '${tS.fierce.slice(0, 120)}'`);
+        } else console.log(`     (Item E3: Fierce's cap does not count East days in this rules context (countsEastDays: ${factsS.countsEast.join(",") || "none"}) - the fairness ' + N East P-week' check is vacuous this run)`);
+      }
     } catch (e) {
       fail("Item E3 (scheduler): the scheduler pass threw: " + errLine(e));
       if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
@@ -4145,8 +4156,8 @@ try {
           if (busy.length || acts.length) fail(`Day-click summary (${R.tag}), day editor ${d}: the summary shows ${busy.concat(acts).join(", ")}`);
           else ok(`Day-click summary (${R.tag}), day editor ${d}: the summary - no offers lines, no selects / Save, no keyboard hint, no filler${R.kind === "surgeon" ? (ed.you ? " (his own day: You chip" + (ed.trade && ed.give ? ", Propose a trade + Give away)" : ")") : "") : ", no action / You chip"}`);
         }
-        // Day-click summary (9/27): a surgeon on his OWN day (a day the served rows give him in November 2026 or, if he
-        // has none there, December; an upcoming one when the month has it) - the You chip on his row, Propose a trade +
+        // Day-click summary (9/27): a surgeon on his OWN day (an upcoming day the served rows give him this month or in the
+        // next two - 11/2; else his earliest past day this month) - the You chip on his row, Propose a trade +
         // (today onward) Give away as real buttons (>= 36px), no offers / Source; Give away opens the Propose card in give
         // mode. Then an OPEN slot the board lists, on a day he does not hold, offers 'See it on Open shifts', which lands
         // on the board, and the coverage strip's open count leads to the board too (not to a read-only day).
@@ -4155,15 +4166,24 @@ try {
           const DS = `Day-click summary (${R.tag} ${pid})`;
           try {
             const todayCal = await rp.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : ""));
-            let own = null;
-            for (const [yy, mm] of [[2026, 10], [2026, 11]]) {
+            // 11/2 (date bombs, #15): this month and the next two from the page's today (it was Nov / Dec 2026, so the upcoming branch went
+            // quiet once a surgeon's November days passed) - an UPCOMING own day in any of them wins; else the earliest past own day of
+            // the first month holding one stands in, as before
+            const tday = (typeof todayCal === "string" && todayCal.length === 10) ? todayCal : todayCentral;
+            const e3Scan3 = [0, 1, 2].map(k => { const t = Number(tday.slice(5, 7)) - 1 + k; return [Number(tday.slice(0, 4)) + Math.floor(t / 12), t % 12]; });
+            const e3ScanLabel = e3Scan3.map(([yy, mm]) => E3_MONTHS[mm] + " " + yy).join(" / ");
+            let own = null, ownPast = null;
+            for (const [yy, mm] of e3Scan3) {
               await e3Month(rp, yy, mm);
               const cells = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), b: e.getAttribute("data-backup"), pv: e.getAttribute("data-preview") })));
-              const mine = cells.filter(c => !c.pv && c.day.slice(5, 7) === String(mm + 1).padStart(2, "0") && (c.p === pid || c.b === pid));
-              own = mine.find(c => todayCal && c.day >= todayCal) || mine[0] || null;
+              const ym = yy + "-" + String(mm + 1).padStart(2, "0");
+              const mine = cells.filter(c => !c.pv && c.day.slice(0, 7) === ym && (c.p === pid || c.b === pid));
+              own = mine.find(c => c.day >= tday) || null;
+              if (!ownPast) ownPast = mine.find(c => c.day < tday) || null;
               if (own) break;
             }
-            if (!own) console.log(`     (${DS}: no day of ${pid} in November / December 2026 on this page - the own-day summary is not exercised)`);
+            if (!own) own = ownPast;
+            if (!own) console.log(`     (${DS}: no day of ${pid} in ${e3ScanLabel} on this page - the own-day summary is not exercised)`);
             else {
               const role = own.p === pid ? "primary" : "backup";
               await rp.click(`[data-testid=cal-grid] .cal-cell[data-day="${own.day}"]`);
@@ -4183,7 +4203,7 @@ try {
               }, role);
               if (od.blocks !== 2 || !od.youIn || od.you !== 1) fail(`${DS}, ${own.day} (${role}): his row must carry the one You chip (blocks ${od.blocks}, chip on his row ${od.youIn}, chips ${od.you})`);
               // Propose a trade and Give away only today onward (either on a past day is refused at accept - TRADE_PAST; Faraz 9/27)
-              const upcoming = !!todayCal && own.day >= todayCal;
+              const upcoming = own.day >= tday;
               if (upcoming ? (!od.trade || od.trade.tag !== "BUTTON" || !/^Propose a trade for this day/.test(od.trade.text) || !od.give || od.give.text !== "Give away") : (!!od.trade || !!od.give)) fail(`${DS}, ${own.day}: ${upcoming ? "Propose a trade + Give away" : "no Propose a trade and no Give away (a past day)"} expected, got ${JSON.stringify({ trade: od.trade, give: od.give })}`);
               else if (od.offers || od.source) fail(`${DS}, ${own.day}: the summary still shows ${od.offers} offers line(s) / a Source line (${od.source})`);
               else ok(`${DS}, ${own.day} (${role}): You chip on his row, ${upcoming ? "'" + od.trade.text.slice(0, 70) + "' (" + od.trade.h + "px) + 'Give away' (" + od.give.h + "px)" : "no Propose a trade, no Give away (a past day)"}, no offers lines, no Source line`);
@@ -4229,12 +4249,12 @@ try {
             const boardDays = await rp.$$eval("[data-testid=openshifts-table] tbody tr[data-day]", els => Array.from(new Set(els.map(e => e.getAttribute("data-day")))));
             await rp.click('button[data-tab="calendar"]');
             let openDay = null;
-            for (const [yy, mm] of [[2026, 10], [2026, 11]]) {
+            for (const [yy, mm] of e3Scan3) {
               await e3Month(rp, yy, mm);
-              openDay = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", (els, a) => { const c = els.find(e => e.getAttribute("data-open") && !e.getAttribute("data-preview") && e.getAttribute("data-day").slice(5, 7) === a.mo && a.board.includes(e.getAttribute("data-day")) && e.getAttribute("data-primary") !== a.pid && e.getAttribute("data-backup") !== a.pid); return c ? c.getAttribute("data-day") : null; }, { mo: String(mm + 1).padStart(2, "0"), board: boardDays, pid });
+              openDay = await rp.$$eval("[data-testid=cal-grid] .cal-cell[data-day]", (els, a) => { const c = els.find(e => e.getAttribute("data-open") && !e.getAttribute("data-preview") && e.getAttribute("data-day").slice(0, 7) === a.ym && a.board.includes(e.getAttribute("data-day")) && e.getAttribute("data-primary") !== a.pid && e.getAttribute("data-backup") !== a.pid); return c ? c.getAttribute("data-day") : null; }, { ym: yy + "-" + String(mm + 1).padStart(2, "0"), board: boardDays, pid });
               if (openDay) break;
             }
-            if (!openDay) console.log(`     (${DS}: no board-listed OPEN slot he does not hold in November / December 2026 on this page (${boardDays.length} board day(s)) - 'See it on Open shifts' is not exercised)`);
+            if (!openDay) console.log(`     (${DS}: no board-listed OPEN slot he does not hold in ${e3ScanLabel} on this page (${boardDays.length} board day(s)) - 'See it on Open shifts' is not exercised)`);
             else {
               await rp.click(`[data-testid=cal-grid] .cal-cell[data-day="${openDay}"]`);
               await rp.waitForSelector("[data-testid=day-editor] [role=dialog]", { timeout: 5000 });
@@ -4269,13 +4289,14 @@ try {
           await rp.click('button[data-tab="calendar"]').catch(() => {});
         }
         // Totals (signed-in roles): screen, fairness and EVERY CSV line
-        if (R.totals) {
+        if (R.totals && !E3_TOT) console.log(`     (${T}: no month the Totals picker offers holds Fierce East P-week days - the Totals checks are not exercised this run)`);
+        else if (R.totals) {
           const tt = await e3Totals(rp, "e3-" + R.file + "-totals.png");
           // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 21 -> 22 fields for everyone else
           const badRows = tt.csvRows.filter(r => r.length !== 22);
-          if (tt.rows < 6) fail(`${T}, Totals Nov 2026: ${tt.rows} row(s) - the table never loaded`);
-          else if (tt.month.hits.length || tt.fair.hits.length || tt.hdr.includes("East days")) fail(`${T}, Totals Nov 2026: East detail shown - month ${hitsText(tt.month.hits) || "none"}; fairness ${hitsText(tt.fair.hits) || "none"}; header ${tt.hdr.join(" | ")}`);
-          else ok(`${T}, Totals Nov 2026: ${tt.rows} rows, no East column / tooltip / footnote; fairness view without East text (Fierce: '${tt.fierce.slice(0, 90)}')${sched.fierceEastP ? " while the scheduler's reads 'East P-week'" : ""}`);
+          if (tt.rows < 6) fail(`${T}, Totals ${e3TotLabel()}: ${tt.rows} row(s) - the table never loaded`);
+          else if (tt.month.hits.length || tt.fair.hits.length || tt.hdr.includes("East days")) fail(`${T}, Totals ${e3TotLabel()}: East detail shown - month ${hitsText(tt.month.hits) || "none"}; fairness ${hitsText(tt.fair.hits) || "none"}; header ${tt.hdr.join(" | ")}`);
+          else ok(`${T}, Totals ${e3TotLabel()}: ${tt.rows} rows, no East column / tooltip / footnote; fairness view without East text (Fierce: '${tt.fierce.slice(0, 90)}')${sched.fierceEastP ? " while the scheduler's reads 'East P-week'" : ""}`);
           if (tt.csvHeader.some(h => E3_RE.test(h)) || tt.csvHeader.length !== 22 || !tt.csvHeader.includes("Counted vs cap") || tt.csvHeader[21] !== "Weighted") fail(`${T}, Totals CSV: the header must follow the screen (22 columns, no East column, 'Counted vs cap', Weighted the last): ${tt.csvHeader.join(" | ")}`);
           else if (tt.csvRows.length < 6 || badRows.length) fail(`${T}, Totals CSV: every line must carry the header's 22 fields (the East cell dropped from the rows too) - ${tt.csvRows.length} row(s), ${badRows.length} with another count: ${badRows.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
           else if (tt.csvRows.some(r => r.some(v => E3_RE.test(v)))) fail(`${T}, Totals CSV: a row names East: ${tt.csvRows.filter(r => r.some(v => E3_RE.test(v))).slice(0, 1).map(r => r.join(",")).join("")}`);
@@ -6355,7 +6376,11 @@ try {
   // Item J (9/22): a numeric monthlyTarget is a PRIMARY target, so the Totals deviation is primary minus target.
   const expDev = (() => { const d = recount.s3 ? recount.s3.primary - ACTON_TARGET : 0; return d > 0 ? "+" + d : String(d); })();
   let targetSet = false;
-  try {
+  // 11/2 (date bombs, #18b): the year picker offers Central year - 1 .. + 2, so October 2026 leaves it on 1/1/2028; the recount's other
+  // premises are October-2026 data (the over-cap flags, Acton's deviation, the 9/14 YTD start) - re-pin the recount month before 2028
+  const TOT_OCT_OFFERED = (() => { const cy = Number(todayCentral.slice(0, 4)); return 2026 >= cy - 1 && 2026 <= cy + 2; })();
+  totalsOct: try {
+    if (!TOT_OCT_OFFERED) { console.log(`     (Totals: the year picker offers ${Number(todayCentral.slice(0, 4)) - 1}-${Number(todayCentral.slice(0, 4)) + 2} - October 2026, the month the independent recount restates, is out of its reach; the Totals October checks are not exercised - re-pin the recount month)`); break totalsOct; }
     // ---- Totals: October 2026 ----
     await setActonTarget(ACTON_TARGET);
     targetSet = true;
@@ -11643,15 +11668,46 @@ try {
       else if (writesSince(before2).length) fail("Import: the refused seed produced writes: " + JSON.stringify(writesSince(before2).map(w => w.method + " " + w.path)));
       else if (!refToast) fail("Import: the refusal did not toast loudly");
       else ok("Import: a seed with an injected email KEY is refused loudly (CONTACT_DATA_REFUSED at roster[0].email; no dry run, no writes, toast)");
-      // Apply path: a seed with ONE extra Burchett December date -> dry run shows the blob update
+      // Apply path: a seed with ONE extra Burchett date (derived, 11/2) -> dry run shows the blob update
       // + 1 availability insert -> Apply (confirm accepted) -> snapshot 'seed_import' BEFORE the
       // blob PATCH and the availability POST; no schedule_days / time_off write; audit seed.import.
       const seed3 = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
-      const decList = seed3.surgeonRules.s2.explicitAvailable["2026-12"];
-      const has = (d) => decList.includes(d);
-      let extra = null;
-      for (let day = 2; day <= 30 && !extra; day++) { const d = "2026-12-" + String(day).padStart(2, "0"), p = "2026-12-" + String(day - 1).padStart(2, "0"), n = "2026-12-" + String(day + 1).padStart(2, "0"); if (!has(d) && !has(p) && !has(n)) extra = d; }
-      if (!extra || !Array.isArray(decList)) fail("Import apply: could not pick an isolated extra December date for Burchett");
+      // 11/2 (date bombs, #4 + critic): the extra date is DERIVED - the period-aware plan never offers a day before today (importer OF001),
+      // so the fixed first isolated December 2026 day (12/03) stopped planning an offer from 12/4. Tier 1: the first day on/after today,
+      // inside a period s2 is submitted in, in the month of one of his plain tagged lists, free (no list names it, not in his seed
+      // time_off - OF002) and with no listed neighbour in that list (the legacy plan collapses a list's consecutive days). Tier 2 (from
+      // 12/18 with today's seed): a one-month period of the harness's own after today and after every seed period (periods never
+      // overlap), s2 exhaustive, with a new tagged plain list there. Both legs - period-aware and legacy - read the list that got it.
+      const s2r = seed3.surgeonRules.s2;
+      const s2Listed = new Set(IMP.impOfferSources(seed3, "s2").flatMap(s => s.days.map(x => x.day)));
+      const s2Vac = (s2r.timeOff || []).map(t => [t.start, t.end || t.start]);
+      const freeDay = (d) => !s2Listed.has(d) && !s2Vac.some(v => d >= v[0] && d <= v[1]);
+      const s2Cov = IMP.impSeedOffers(seed3, { today: "2000-01-01" }).covered.s2 || [];
+      let extra = null, extraKey = null;
+      for (const m of Object.keys((s2r.offerSources && s2r.offerSources.explicitAvailable) || {}).sort()) {
+        const lst = s2r.explicitAvailable && s2r.explicitAvailable[m];
+        if (!Array.isArray(lst)) continue;
+        for (let d = m + "-01"; d.slice(0, 7) === m && !extra; d = isoPlus(d, 1))
+          if (d >= todayCentral && s2Cov.some(p => d >= p.start && d <= p.end) && freeDay(d) && !lst.includes(isoPlus(d, -1)) && !lst.includes(isoPlus(d, 1))) { extra = d; extraKey = m; }
+        if (extra) break;
+      }
+      if (!extra) {
+        const nextM = (ym) => isoPlus(ym + "-01", 32).slice(0, 7);
+        const lastEnd = (seed3.offerPeriods || []).map(p => String(p.end)).sort().pop() || todayCentral;
+        let m = nextM((lastEnd > todayCentral ? lastEnd : todayCentral).slice(0, 7));
+        for (let k = 0; k < 24 && ((s2r.explicitAvailable || {})[m] || (s2r.offeredDays || {})[m] || [...s2Listed].some(d => d.slice(0, 7) === m)); k++) m = nextM(m);
+        const start = m + "-01", end = isoPlus(nextM(m) + "-01", -1);
+        for (let d = start; d <= end && !extra; d = isoPlus(d, 1)) if (freeDay(d)) extra = d;
+        if (extra) {
+          extraKey = m;
+          seed3.offerPeriods = (seed3.offerPeriods || []).concat([{ label: "Smoke check " + m, start, end, offersCloseAt: start, publishBy: start, status: "upcoming", rulesOnly: [], offerModes: { s2: "exhaustive" } }]);
+          (s2r.explicitAvailable = s2r.explicitAvailable || {})[m] = [];
+          s2r.offerSources = s2r.offerSources || {}; (s2r.offerSources.explicitAvailable = s2r.offerSources.explicitAvailable || {})[m] = { source: "email-relay", tag: "smoke-extra-" + m };
+          console.log("     (Import apply: no seed period of s2 has a free isolated day on/after today " + todayCentral + " - the extra date " + extra + " sits in a synthesized period " + start + ".." + end + " (s2 exhaustive) on a new tagged " + m + " list)");
+        }
+      }
+      const decList = extraKey ? s2r.explicitAvailable[extraKey] : null;
+      if (!extra || !Array.isArray(decList)) fail("Import apply: could not derive an extra Burchett date (a seed period or a synthesized one)");
       else {
         decList.push(extra);
         const before3 = writes.length;
@@ -11672,7 +11728,7 @@ try {
         if (!blobDelta3.includes("surgeonRules") || !blobDelta3.includes("settings")) fail(`Import apply dry run (extra ${extra}) premise: the extra date must move surgeonRules and settings in the restatement (blob keys differing: ${blobDelta3.join(", ") || "none"})`);
         const expTotal3 = blobDelta3.length + plan3P.periodRows.length + plan3P.offerRows.length + avDel0.length + toInsOf(plan3P);
         const legs3 = await page.$eval("[data-testid=seed-period-legs]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
-        if (plan3P.offerRows.length !== PLAN_P.offerRows.length + 1 || plan3P.availabilityRows.length !== PLAN_P.availabilityRows.length) fail(`Import apply dry run (extra ${extra}) premise: the period-aware plan of the seed plus one Burchett December date must carry one more offer row and the same availability rows (offers ${PLAN_P.offerRows.length} -> ${plan3P.offerRows.length}, availability ${PLAN_P.availabilityRows.length} -> ${plan3P.availabilityRows.length})`);
+        if (plan3P.offerRows.length !== PLAN_P.offerRows.length + 1 || plan3P.availabilityRows.length !== PLAN_P.availabilityRows.length) fail(`Import apply dry run (extra ${extra}) premise: the period-aware plan of the seed plus one Burchett date must carry one more offer row and the same availability rows (offers ${PLAN_P.offerRows.length} -> ${plan3P.offerRows.length}, availability ${PLAN_P.availabilityRows.length} -> ${plan3P.availabilityRows.length})`);
         else if (total3.trim() !== `Total changes: ${expTotal3}` + blockedSuffix || !/settings=update/.test(diff3) || !/surgeonRules=update/.test(diff3) || new RegExp("insert s2 available/any " + extra).test(diff3) || !new RegExp("call_offers: plan " + plan3P.offerRows.length + " row\\(s\\)").test(diff3) || !legs3.includes(`${nm("s2")} ${plan3P.stats.offersByPerson.s2}`)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: ${expTotal3}${blockedSuffix}' (surgeonRules + settings + ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts${avDel0.length ? " + " + avDel0.length + " retired-row delete(s)" : ""}, NO 'insert s2 available/any ${extra}' - the date is an offer - and the legs naming ${nm("s2")} ${plan3P.stats.offersByPerson.s2}${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules|call_offers: plan/.test(l)).join(" | ")} | legs: ${legs3.slice(0, 200)}`);
         else ok(`Import apply dry run: extra Burchett date ${extra} -> ${expTotal3} changes as the CLI counts them (surgeonRules=update, settings=update - the seedCoreHash stamp, ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts - the date is one more offer of ${nm("s2")}'s, not an available row; ${toInsOf(plan3P)} time_off insert(s))${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
         // Prompt 14 IP (9/23): the in-app plan is period-aware, but the app has no writer for call_periods / call_offers and
@@ -11714,7 +11770,7 @@ try {
           const avDel3L = liveAv0.filter(r => r.source === "seed" && !plan3LKeys.has(avKey0(r)));
           const blobDelta3L = blobDeltaOf(plan3L.blob); // surgeonRules + settings (the extra date) - the legacy plan's blob, restated like the pins above
           const expTotal3b = blobDelta3L.length + avIns3L.length + avDel3L.length + toInsOf(plan3L);
-          if (total3b.trim() !== `Total changes: ${expTotal3b}` + blockedSuffix || !new RegExp("insert s2 available/any " + extra).test(diff3b) || !/call_periods: plan 0 row\(s\)/.test(diff3b) || !/call_offers: plan 0 row\(s\)/.test(diff3b) || /offers status \(/.test(diff3b)) fail(`Import apply dry run (no periods): the plan of the same seed without offerPeriods must read 'Total changes: ${expTotal3b}${blockedSuffix}' (surgeonRules + settings + ${avIns3L.length} availability insert(s) incl. 'insert s2 available/any ${extra}'${avDel3L.length ? " + " + avDel3L.length + " delete(s)" : ""}; the CLI's 'call_periods: plan 0 row(s)' / 'call_offers: plan 0 row(s)' lines, no status table) - got '${total3b.trim()}' | ${diff3b.split("\n").filter(l => /^availability|insert s2 available\/any 2026-12|^call_(periods|offers)|^offers status/.test(l)).slice(0, 6).join(" | ")}`);
+          if (total3b.trim() !== `Total changes: ${expTotal3b}` + blockedSuffix || !new RegExp("insert s2 available/any " + extra).test(diff3b) || !/call_periods: plan 0 row\(s\)/.test(diff3b) || !/call_offers: plan 0 row\(s\)/.test(diff3b) || /offers status \(/.test(diff3b)) fail(`Import apply dry run (no periods): the plan of the same seed without offerPeriods must read 'Total changes: ${expTotal3b}${blockedSuffix}' (surgeonRules + settings + ${avIns3L.length} availability insert(s) incl. 'insert s2 available/any ${extra}'${avDel3L.length ? " + " + avDel3L.length + " delete(s)" : ""}; the CLI's 'call_periods: plan 0 row(s)' / 'call_offers: plan 0 row(s)' lines, no status table) - got '${total3b.trim()}' | ${diff3b.split("\n").filter(l => /^availability|insert s2 available\/any \d{4}-\d{2}|^call_(periods|offers)|^offers status/.test(l)).slice(0, 6).join(" | ")}`);
           else if (await page.$("[data-testid=seed-period-block]") || await page.$("[data-testid=seed-period-legs]")) fail("Import apply dry run (no periods): neither the period block note nor the legs panel may show for a period-free seed");
           else if (await page.$eval("[data-testid=seed-apply]", el => el.disabled)) fail(`Import apply dry run (no periods): Apply must be enabled (${expTotal3b} changes, no periods)`);
           else ok(`Import apply dry run (no periods): the same seed without offerPeriods -> ${total3b.trim()} (= the legacy plan: ${avIns3L.length} availability insert(s) = the extra date${avIns3L.length > 1 ? " + the " + (avIns3L.length - 1) + " rows the period retired, which a period-free seed would re-add - the reason a period-carrying seed is refused" : ""}; ${toInsOf(plan3L)} time_off insert(s); the CLI's 'plan 0 row(s)' lines for the two offer tables), no block note, no legs, Apply enabled`);
@@ -11809,7 +11865,7 @@ try {
         const impAudit = auditSince(beforeApply, "seed.import");
         if (aSnap < 0 || aseq[aSnap].snapshotReason !== "seed_import") fail("Import apply: no snapshot 'seed_import' recorded: " + JSON.stringify(aseq.map(w => w.method + " " + w.path)));
         else if (aBlob < 0 || aBlob < aSnap) fail(`Import apply: blob PATCH missing or before the snapshot (snap #${aSnap}, blob #${aBlob})`);
-        else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
+        else if (!(blobBody.data && blobBody.data.surgeonRules && blobBody.data.surgeonRules.s2 && blobBody.data.surgeonRules.s2.explicitAvailable[extraKey] && blobBody.data.surgeonRules.s2.explicitAvailable[extraKey].includes(extra)) || !blobBody.data.roster || "schedule" in blobBody.data) fail("Import apply: the merged blob is wrong: keys " + Object.keys(blobBody.data || {}).join(","));
         else if (aAv < 0 || aAv < aSnap || avBody.length !== expAvIns.length || !avBody.some(r => r.start_date === extra && r.person_id === "s2" && r.source === "seed") || avBody.some(r => !expAvIns.some(e => avKey(e) === avKey(r)))) fail(`Import apply: availability insert wrong (index ${aAv}, snap ${aSnap}; expected exactly the ${expAvIns.length} missing row(s) incl. ${extra}): ` + JSON.stringify(avBody).slice(0, 600));
         else if (aBad.length) fail("Import apply: schedule_days / time_off were written although the restatement expects no change there: " + JSON.stringify(aBad.map(w => w.method + " " + w.path)));
         else if (!/Import applied/.test(resText) || !/blob merged/.test(resText) || !resText.includes(expResult)) fail(`Import apply: result panel wrong (expected 'Import applied - blob merged; ${expResult}' - ${expAvIns.length} availability insert of ${plan3.availabilityRows.length} plan rows, ${expToIns.length} time_off insert of ${plan3.timeOffRows.length}, ${expKept} plan day(s) kept = ${keptNotOwned.length} not seed-owned live + ${keptDirty.length} still carrying this run's edits): ` + resText);
@@ -11822,7 +11878,7 @@ try {
         // carry the merged keys (the pre-A4 pin filtered POSTs the autosave no longer sends and passed vacuously).
         await page.waitForTimeout(1200);
         const laterBlobWrites = writesSince(beforeApply, "/rest/v1/call_schedule_data").filter(w => (w.method === "PATCH" || w.method === "POST") && !(aBlob >= 0 && w === aseq[aBlob]));
-        const hasExtra = (b) => !!(b && b.data && b.data.surgeonRules && b.data.surgeonRules.s2 && b.data.surgeonRules.s2.explicitAvailable && Array.isArray(b.data.surgeonRules.s2.explicitAvailable["2026-12"]) && b.data.surgeonRules.s2.explicitAvailable["2026-12"].includes(extra));
+        const hasExtra = (b) => !!(b && b.data && b.data.surgeonRules && b.data.surgeonRules.s2 && b.data.surgeonRules.s2.explicitAvailable && Array.isArray(b.data.surgeonRules.s2.explicitAvailable[extraKey]) && b.data.surgeonRules.s2.explicitAvailable[extraKey].includes(extra));
         const laterBad = laterBlobWrites.map(bodyOf).find(b => !hasExtra(b));
         if (laterBad) fail("Import apply: a call_schedule_data write after the merge dropped the merged blob keys (adoptBlob did not take): keys " + Object.keys((laterBad && laterBad.data) || {}).join(","));
         else if (laterBlobWrites.length) fail(`Import apply (A4): ${laterBlobWrites.length} call_schedule_data write(s) followed the merge PATCH within 1200 ms although adoptBlob(merged) recorded its signature - the autosave re-wrote an adopted blob: ` + JSON.stringify(laterBlobWrites.map(w => w.method + " " + w.path)));
