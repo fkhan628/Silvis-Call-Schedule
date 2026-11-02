@@ -3430,6 +3430,19 @@ try {
             const f4 = await firstScreen();
             if (f4.row.length !== 7 || !oneRow(f4.row) || !oneRow(f4.nav) || f4.pageW > 362) fail("item 1 (surgeon, 360): the chips + only OPEN or the month controls left one row: " + JSON.stringify({ row: f4.row, nav: f4.nav, pageW: f4.pageW }));
             else ok("item 1 (surgeon, 360): the six chips + only OPEN and the month controls each stay one row");
+            // the 320 px title (fix check 11/1): the 340 px rule's 12 px title keeps "Month Year" whole - November and September,
+            // the longest name (1 px to spare at 320 px, measured 11/1) - the month controls one 44 px row, no sideways scroll
+            await sp.setViewportSize({ width: 320, height: 640 });
+            await sp.waitForTimeout(250);
+            const title320 = () => sp.evaluate(() => { const el = document.querySelector("[data-testid=cal-month]"); return { text: el.textContent.trim(), sw: el.scrollWidth, cw: el.clientWidth, fs: getComputedStyle(el).fontSize }; });
+            const goMonth = async (label, want) => { await sp.click(`button[aria-label='${label}']`); await sp.waitForFunction((w) => document.querySelector("[data-testid=cal-month]").textContent.trim() === w, want, { timeout: 5000 }); };
+            const n320 = await title320(), f5 = await firstScreen();
+            await goMonth("Previous month", "October 2026"); await goMonth("Previous month", "September 2026");
+            const s320 = await title320();
+            await goMonth("Next month", "October 2026"); await goMonth("Next month", "November 2026");
+            const whole = (t) => /^[A-Z][a-z]+ \d{4}$/.test(t.text) && t.sw <= t.cw;
+            if (n320.text !== "November 2026" || s320.text !== "September 2026" || !whole(n320) || !whole(s320) || !oneRow(f5.nav) || f5.nav.some(b => b.h < 44 || b.w < 44) || f5.pageW > 322) fail("item 1 (surgeon, 320): the month title is cut or the month controls left one 44 px row: " + JSON.stringify({ n320, s320, nav: f5.nav, pageW: f5.pageW }));
+            else ok(`item 1 (surgeon, 320): the ${n320.fs} title keeps its year - 'November 2026' (${n320.sw} of ${n320.cw} px) and 'September 2026', the longest month (${s320.sw} of ${s320.cw} px); the month controls one 44 px row; no sideways scroll`);
             await sp.setViewportSize({ width: 390, height: 844 });
             await sp.waitForTimeout(250);
           } catch (e) { fail("item 1 (surgeon, 390): " + String(e && e.message || e).split("\n")[0]); }
@@ -14268,6 +14281,64 @@ try {
       p30.profile = null;
       if (sctx) await sctx.close();
     }
+    // (8c) 11/1 fix check: a tap that moves the view closes the phone's open sheet - More or Alerts (it stayed open behind the
+    // day editor) - and, on a wide screen, the Alerts panel. The scheduler session (8b's profile) at 390 x 844, then 1180 x 900.
+    {
+      let cctx = null, cp = null;
+      try {
+        p30.errors = [];
+        p30.profile = { ...P30_PROFILE, person_id: "s1", role: "scheduler" };
+        cctx = await mkP30Ctx({ viewport: { width: 390, height: 844 } });
+        await cctx.addInitScript(p30Init, P30_CFG);
+        cp = await cctx.newPage();
+        watch(cp, "scheduler 390");
+        await loadApp(cp, P30_BASE);
+        await cp.waitForSelector("[data-testid=tabbar]", { timeout: 20000 });
+        const post = (data) => cp.evaluate((data) => { navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data })); }, data);
+        const sheets = () => cp.evaluate(() => ({ more: !!document.querySelector("[data-testid=more-sheet]:not([hidden])"), moreBackdrop: !!document.querySelector("[data-testid=more-backdrop]"), alerts: !!document.querySelector("[data-testid=notif-panel]"), alertsBackdrop: !!document.querySelector("[data-testid=notif-backdrop]"), editor: !!document.querySelector("[data-testid=day-editor]") }));
+        const dX = isoPlus(todayCentral, 3);
+        // More open, a tap to a day: the day editor opens and More is gone
+        await openMoreSheet(cp);
+        const s0 = await sheets();
+        await post({ type: "silvis-push-open", tab: "calendar", day: dX });
+        await cp.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
+        await cp.waitForTimeout(200);
+        const s1 = await sheets();
+        await cp.click("[data-testid=editor-x]");
+        await cp.waitForSelector("[data-testid=day-editor]", { state: "hidden", timeout: 5000 });
+        // Alerts open (More > Alerts), a tap to Time off: the sheet goes with the move
+        await openMoreSheet(cp);
+        await cp.click("button[data-alerts]");
+        await cp.waitForSelector("[data-testid=notif-panel]", { state: "visible", timeout: 5000 });
+        const s2 = await sheets();
+        await post({ type: "silvis-push-open", tab: "timeoff", day: null });
+        await waitFor(async () => (await viewNow(cp)) === "timeoff", 8000, 200);
+        await cp.waitForTimeout(200);
+        const s3 = await sheets(), v3 = await viewNow(cp);
+        // a wide screen: the header's Alerts panel closes the same way
+        await cp.setViewportSize({ width: 1180, height: 900 });
+        await settleNav(cp);
+        await cp.click('button[aria-label="Notifications"]');
+        await cp.waitForSelector("[data-testid=notif-panel]", { state: "visible", timeout: 5000 });
+        const s4 = await sheets();
+        await post({ type: "silvis-push-open", tab: "openshifts", day: null });
+        await waitFor(async () => (await viewNow(cp)) === "openshifts", 8000, 200);
+        await cp.waitForTimeout(200);
+        const s5 = await sheets(), v5 = await viewNow(cp);
+        const bad = [];
+        if (!s0.more || !s0.moreBackdrop) bad.push("More did not open: " + JSON.stringify(s0));
+        if (s1.more || s1.moreBackdrop || !s1.editor) bad.push(`a tap to ${dX} with More open: ` + JSON.stringify(s1));
+        if (!s2.alerts || !s2.alertsBackdrop) bad.push("the Alerts sheet did not open: " + JSON.stringify(s2));
+        if (s3.alerts || s3.alertsBackdrop || v3 !== "timeoff") bad.push("a tap to Time off with the Alerts sheet open: " + JSON.stringify({ s3, v3 }));
+        if (!s4.alerts) bad.push("the wide Alerts panel did not open: " + JSON.stringify(s4));
+        if (s5.alerts || v5 !== "openshifts") bad.push("a tap to Open shifts with the wide Alerts panel open: " + JSON.stringify({ s5, v5 }));
+        if (bad.length) fail("P30 x 11/1 a tap over an open sheet: " + bad.join(" | "));
+        else ok(`P30 x 11/1 a tap over an open sheet: at 390 px a tap to ${dX} closed More and opened the day editor alone; a tap to Time off closed the Alerts sheet; at 1180 px a tap to Open shifts closed the Alerts panel`);
+        if (p30.errors.length) fail("P30 x 11/1 sheet step errors: " + p30.errors.slice(0, 5).join(" | "));
+      } catch (e) { fail("P30 x 11/1 a tap over an open sheet: " + errLine(e)); try { if (cp) await cp.screenshot({ path: path.join(OUT, "failure-p30-sheets.png"), fullPage: false }); } catch (e2) {} }
+      p30.profile = null;
+      if (cctx) await cctx.close();
+    }
     // (15) iPhone: Safari outside the Home Screen app -> the iOS line as the ONE instruction, no push button (push UX c, 10/11:
     // none of Enable / Diagnose / Reset subscription / Send test works there; the generic line is hidden), the phone switches
     // stay; nothing asked, nothing registered. The Home Screen app (navigator.standalone) -> Enable offered; 390 px screenshots
@@ -14600,6 +14671,41 @@ try {
         await pt.keyboard.press("Escape").catch(() => {});
       }
     } catch (e) { fail(`${T8}: ` + errLine(e)); try { await pt.screenshot({ path: path.join(OUT, "failure-toast-390.png"), fullPage: false }); } catch (e2) {} }
+    // 11/1 fix check: while a phone sheet (More, Alerts) stands on the bar the toast sits at the top (css.topToast - it covered
+    // the sheet's bottom rows), clear of the sheet, and goes back 24 px above the bar once the sheet closes. A fresh load gives
+    // a fresh error toast (up >= 8 s); geometry only.
+    const T8c = "11/1 toast over a phone sheet (390)";
+    try {
+      await loadWithRetry(pt, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "toast-390 sheet page");
+      const up3 = await pt.waitForFunction(() => { const t = document.querySelector("[data-testid=toast]"); return !!t && /Couldn't load availability statements/.test(t.textContent || ""); }, undefined, { timeout: 30000 }).then(() => true).catch(() => false);
+      const t0 = Date.now();
+      if (!up3) fail(`${T8c}: the forced availability 500 raised no "Couldn't load availability statements" toast after the reload`);
+      else {
+        const geo = (sel) => pt.evaluate((sel) => {
+          const box = document.querySelector("[data-testid=toast-box]"), bar = document.querySelector("[data-testid=tabbar]"), sheet = sel ? document.querySelector(sel) : null;
+          if (!box || !bar) return null;
+          const b = box.getBoundingClientRect(), s = sheet && sheet.getClientRects().length ? sheet.getBoundingClientRect() : null;
+          return { top: Math.round(b.top), bottom: Math.round(b.bottom), barTop: Math.round(bar.getBoundingClientRect().top), sheetTop: s ? Math.round(s.top) : null };
+        }, sel);
+        await openMoreSheet(pt);
+        const onMore = await geo(MORE_SHEET);
+        await closeMoreSheet(pt);
+        const afterMore = await geo(null);
+        await openMoreSheet(pt);
+        await pt.click("button[data-alerts]");
+        await pt.waitForSelector("[data-testid=notif-panel]", { state: "visible", timeout: 5000 });
+        const onAlerts = await geo("[data-testid=notif-panel]");
+        await pt.keyboard.press("Escape");
+        await pt.waitForSelector("[data-testid=notif-panel]", { state: "hidden", timeout: 5000 });
+        const afterAlerts = await geo(null);
+        const ms = Date.now() - t0, all = { onMore, afterMore, onAlerts, afterAlerts };
+        const atTop = (g) => g.top === 12 && g.sheetTop !== null && g.bottom <= g.sheetTop;
+        const onBar = (g) => g.barTop - g.bottom === 24;
+        if (Object.values(all).some(g => !g)) fail(`${T8c}: the toast went away within ${ms} ms (an error stays >= 8 s) - not exercised: ` + JSON.stringify(all));
+        else if (!atTop(onMore) || !atTop(onAlerts) || !onBar(afterMore) || !onBar(afterAlerts)) fail(`${T8c}: the toast should sit at the top (12 px) clear of an open sheet, and 24 px above the bar once it closes: ` + JSON.stringify(all));
+        else ok(`${T8c}: with More open the toast sits at the top (${onMore.top}-${onMore.bottom}; the sheet from ${onMore.sheetTop}), with Alerts open too (${onAlerts.top}-${onAlerts.bottom}; the sheet from ${onAlerts.sheetTop}); each time the sheet closed it went back 24 px above the bar`);
+      }
+    } catch (e) { fail(`${T8c}: ` + errLine(e)); try { await pt.screenshot({ path: path.join(OUT, "failure-toast-sheet.png"), fullPage: false }); } catch (e2) {} }
     // Second review fixes of Do first 8 (10/2), 1180 x 800: a choice INSIDE the day editor (an ineligible pick brings up the
     // override box) grows the centred dialog and moves its action row down without a render of the app - the toast, clear
     // of the row at open, ended up over Save. The lift now re-measures on the dialog's resize (a ResizeObserver). A fresh

@@ -5973,7 +5973,8 @@ function CallSchedule() {
   };
   // An app window that is already open: sw.js focuses it and posts { type: "silvis-push-open", tab, day } - switched in place,
   // no reload; a dirty day edit is kept unless the person confirms discarding it (pushTapKeepsDraft), and unsaved My APP day
-  // taps unless the APP confirms leaving Mine (setView answers false on Cancel: nothing moves, no day is queued).
+  // taps unless the APP confirms leaving Mine (setView answers false on Cancel: nothing moves, no day is queued). Once the view
+  // has moved, the phone's More / Alerts sheet (and the wide Alerts panel) closes - 11/1: it stayed open behind the day editor.
   useEffect(() => {
     if (isPublicMode || !pushUid) return;
     const sw = typeof navigator !== "undefined" ? navigator.serviceWorker : null;
@@ -5984,6 +5985,7 @@ function CallSchedule() {
       if (pushTapKeepsDraft(r)) return;
       if (!setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question - no day queued, the day draft untouched
       pushTapDropDraft(r);
+      setMoreOpen(false); setShowNotifs(false); // state setters: safe in this once-per-account closure
       if (r.day) setPushDay({ day: r.day, at: Date.now() });
     };
     sw.addEventListener("message", onMsg);

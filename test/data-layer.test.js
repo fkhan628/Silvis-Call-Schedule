@@ -13669,9 +13669,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(PSRC.includes("    sw.addEventListener(\"message\", onMsg);\n    return () => sw.removeEventListener(\"message\", onMsg);\n  }, [isPublicMode, pushUid]);"), "onMsg is created once per account (an old render's closures)");
       assert.ok(SRC0.msg.includes("      if (pushTapKeepsDraft(r)) return;\n      if (!setView(r.tab)) return;") && SRC0.msg.indexOf("pushTapDropDraft(r);") > SRC0.msg.indexOf("if (!setView(r.tab)) return;") && SRC0.msg.indexOf("pushTapDropDraft(r);") < SRC0.msg.indexOf("setPushDay("), "onMsg: the editor's question, spec F's, then the drop, then the queue");
       assert.ok(SRC0.link.includes("    if (r.tab && !setView(r.tab)) return;") && SRC0.link.indexOf("if (r.tab && !setView(r.tab)) return;") < SRC0.link.indexOf("setPushDay("), "the deep link stops on false before it queues a day");
-      // instance(S, o): o = { view, appTaps, editorDay, editorDirty, answers } - answers are the person's replies in order
+      // instance(S, o): o = { view, appTaps, editorDay, editorDirty, answers, sheet } - answers are the person's replies in order;
+      // sheet: the phone sheet open when the tap comes ("more" / "alerts" - 11/1; setMoreOpen / setShowNotifs record their calls)
       const instance = (S, o) => {
-        const st = { view: o.view, editorDay: o.editorDay || null, pushDay: null, calMonth: null };
+        const st = { view: o.view, editorDay: o.editorDay || null, pushDay: null, calMonth: null, moreOpen: o.sheet === "more", showNotifs: o.sheet === "alerts" };
         const ev = [], answers = (o.answers || []).slice(), refs = {};
         const appDaysDirtyRef = { current: o.appTaps || 0 };
         const editorDayRef = { current: st.editorDay }, editorDirtyRef = { current: !!o.editorDirty };
@@ -13685,6 +13686,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const setEditorDay = (v) => { st.editorDay = v; ev.push("editor " + v); };
         const setPushDay = (v) => { st.pushDay = v; ev.push("queue " + (v ? v.day : null)); };
         const showToast = (m, k) => ev.push("toast " + k);
+        const setMoreOpen = (v) => { st.moreOpen = v; ev.push("more " + v); };
+        const setShowNotifs = (v) => { st.showNotifs = v; ev.push("notifs " + v); };
         const useRef = (init) => refs.view || (refs.view = { current: init });
         let prev = null, cur = null;
         const render = () => {
@@ -13698,7 +13701,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
           const g = new Function("view", "useRef", "appDaysDirtyRef", "confirm", "appDaysLeaveWords", "setViewState", S.guard + "\nreturn { setView, leaveMineOk };")(st.view, useRef, appDaysDirtyRef, confirm, H.appDaysLeaveWords, setViewState);
           const k = new Function("pushTapLeavesDraft", "editorDayRef", "editorDirtyRef", "confirm", "showToast", "setEditorDay", S.keep + "\n" + S.drop + "\nreturn { pushTapKeepsDraft, pushTapDropDraft };")(H.pushTapLeavesDraft, editorDayRef, editorDirtyRef, confirm, showToast, setEditorDay);
           const goToDay = new Function("suIsIso", "refuseUnreadDay", "setView", "parse", "setCalMonth", "setCalYear", "setEditorDay", S.go + "\nreturn goToDay;")(H.suIsIso, () => false, g.setView, H.parse, (m) => { st.calMonth = m; }, () => {}, setEditorDay);
-          const onMsg = new Function("pushOpenMessage", "pushTapKeepsDraft", "pushTapDropDraft", "setView", "setPushDay", S.msg + "\nreturn onMsg;")(H.pushOpenMessage, k.pushTapKeepsDraft, k.pushTapDropDraft, g.setView, setPushDay);
+          const onMsg = new Function("pushOpenMessage", "pushTapKeepsDraft", "pushTapDropDraft", "setView", "setMoreOpen", "setShowNotifs", "setPushDay", S.msg + "\nreturn onMsg;")(H.pushOpenMessage, k.pushTapKeepsDraft, k.pushTapDropDraft, g.setView, setMoreOpen, setShowNotifs, setPushDay);
           const queued = new Function("loaded", "pushDay", "setPushDay", "pushTapKeepsDraft", "goToDay", S.queued);
           const link = new Function("isPublicMode", "pushLinkReady", "pushLinkDoneRef", "pushDeepLink", "window", "console", "setView", "setPushDay", S.link);
           cur = { onMsg, runQueued: () => queued(true, st.pushDay, setPushDay, k.pushTapKeepsDraft, goToDay),
@@ -13707,7 +13710,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         };
         // React after a handler: re-render, run the queued-day effect if a day is queued, re-render again
         const settle = () => { render(); if (st.pushDay) { cur.runQueued(); render(); } };
-        const out = () => ({ asks: ev.filter(e => e.startsWith("ask ")).map(e => e.slice(4)), ev: ev.slice(), view: st.view, editorDay: st.editorDay, editorDirty: editorDirtyRef.current, appTaps: appDaysDirtyRef.current, queued: st.pushDay, calMonth: st.calMonth, left: answers.length });
+        const out = () => ({ asks: ev.filter(e => e.startsWith("ask ")).map(e => e.slice(4)), ev: ev.slice(), view: st.view, editorDay: st.editorDay, editorDirty: editorDirtyRef.current, appTaps: appDaysDirtyRef.current, queued: st.pushDay, calMonth: st.calMonth, left: answers.length, sheet: st.moreOpen ? "more" : st.showNotifs ? "alerts" : null });
         return { st, ev, appDaysDirtyRef, render, settle, out, cur: () => cur };
       };
       const msg = (tab, day) => ({ data: { type: "silvis-push-open", tab, day: day || null } });
@@ -13776,6 +13779,30 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.deepStrictEqual([x.ev, x.view, x.appTaps, x.queued], [["ask app"], "myschedule", 2, null], "(c) the deep link, Cancel: no day queued, the taps kept");
         x = linkC([true]);
         assert.deepStrictEqual([x.asks, x.view, x.editorDay], [["app"], "calendar", D], "(c) the deep link, OK: one question, the day opens");
+        // (d) 11/1: the phone sheet open when the tap comes (More or Alerts) closes once the view has moved - after the switch,
+        //     before the day is queued (it stayed open behind the day editor); a Cancel closes nothing (nothing moved)
+        const sheetTap = (target, answers, sheet, o) => {
+          const I = instance(S, Object.assign({ view: "calendar", answers, sheet }, o || {}));
+          I.render().onMsg(target); I.settle();
+          return I.out();
+        };
+        const closedAfter = (x, viewEv, label) => {
+          const iv = x.ev.indexOf(viewEv), im = x.ev.indexOf("more false"), iN = x.ev.indexOf("notifs false"), iq = x.ev.findIndex(e => e.startsWith("queue ") && e !== "queue null");
+          assert.ok(x.sheet === null && iv >= 0 && im > iv && iN > iv && (iq < 0 || (im < iq && iN < iq)), label + ": the sheet closes after the switch and before the queue: " + JSON.stringify(x));
+        };
+        for (const sheet of ["more", "alerts"]) {
+          x = sheetTap(msg("calendar", D), [], sheet);
+          closedAfter(x, "view calendar", "(d) " + sheet + ", a tap to a day");
+          assert.strictEqual(x.editorDay, D, "(d) " + sheet + ": the day opens");
+          x = sheetTap(msg("timeoff"), [], sheet);
+          closedAfter(x, "view timeoff", "(d) " + sheet + ", a tap to Time off");
+          x = sheetTap(msg("calendar", D), [false], sheet, { view: "myschedule", appTaps: 2 });
+          assert.ok(x.sheet === sheet && x.view === "myschedule" && !x.ev.some(e => /^(more|notifs) /.test(e)), "(d) " + sheet + ", APP Cancel: nothing moved, the sheet stays open: " + JSON.stringify(x));
+          x = sheetTap(msg("calendar", D), [true], sheet, { view: "myschedule", appTaps: 2 });
+          closedAfter(x, "view calendar", "(d) " + sheet + ", APP OK");
+        }
+        x = sheetTap({ data: { type: "silvis-push-open", tab: "evil" } }, [], "more");
+        assert.deepStrictEqual([x.ev, x.sheet], [[], "more"], "(d) a non-whitelisted message leaves the sheet open");
       };
       scenarios(SRC0);
       // mutants: each must turn a scenario red with an assertion (a crash would prove nothing)
@@ -13783,6 +13810,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         ["onMsg ignoring setView's answer (the pre-merge Prompt 30 line)", "msg", "      if (!setView(r.tab)) return;", "      setView(r.tab);"],
         ["onMsg dropping the day draft before spec F's question", "msg", "      if (!setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question - no day queued, the day draft untouched\n      pushTapDropDraft(r);", "      pushTapDropDraft(r);\n      if (!setView(r.tab)) return;"],
         ["onMsg without the day editor's guard", "msg", "      if (pushTapKeepsDraft(r)) return;\n", ""],
+        ["onMsg leaving the open sheet behind the day editor (the 11/1 leftover)", "msg", "      setMoreOpen(false); setShowNotifs(false);", ""],
+        ["onMsg closing More but not the Alerts sheet", "msg", " setShowNotifs(false);", ""],
+        ["onMsg closing the sheets before spec F's question", "msg", "      if (!setView(r.tab)) return;", "      setMoreOpen(false); setShowNotifs(false);\n      if (!setView(r.tab)) return;"],
         ["pushTapKeepsDraft closing the editor on OK (Prompt 30's pre-merge body)", "keep", "    return false;\n  };", "    editorDirtyRef.current = false;\n    editorDayRef.current = null;\n    setEditorDay(null);\n    return false;\n  };"],
         ["the deep link ignoring setView's answer", "link", "    if (r.tab && !setView(r.tab)) return;", "    if (r.tab) setView(r.tab);"],
         ["goToDay ignoring setView's answer", "go", "    if (!setView(\"calendar\")) return;", "    setView(\"calendar\");"],
