@@ -318,7 +318,7 @@
 //     and helpers.js (the share page / printable CSS); the .ics pill buttons,
 //     the active-tab label and the dark Fairness bar fill are measured too
 //   - Prompt 15 part 3 (East vacations, 9/23): the harness overlays THREE FAK
-//     ranges (2027-04/05, Tue-Fri each) on the newest cached east_feed row
+//     ranges (Tue-Fri each, two weeks apart, derived each run past the served rows, the offer period and the Davenport weeks - EASTVAC_RANGES) on the newest cached east_feed row
 //     (every live data.vacations list stripped first, so the picture does not
 //     depend on what Faraz has refreshed), serves east_vacation_reviews from an
 //     in-harness store seeded with one 'away' and one 'home' row (the third
@@ -525,18 +525,10 @@ let sessBlobWriteTs = null;     // Prompt 16 A3: the same stamp for the session 
 const EAST_HOST = "xqongyahdnkozqunpwmu.supabase.co";
 const EAST_WEEK = { week_monday: "2026-10-05", data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" }, off: [], isBackup: false, dayCallOverrides: {} } };
 const EAST_BLOB = { surgeons: [{ id: "s6", name: "FAK" }, { id: "s1", name: "AAA" }] };
-// Prompt 15 part 3: three FAK vacation ranges (Tue-Fri, far from every other pin: the clean time-off range is
-// 2027-03-02..03, the Generate presets end in 2026) - unreviewed / away / home in that order - overlaid on the
-// newest cached east_feed row, answered by the mocked Davenport time_off (person s6 = FAK), and reviewed through
-// the in-harness east_vacation_reviews store below (seeded: away for [1], home for [2]; [0] has no row).
-const EASTVAC_RANGES = [{ start: "2027-04-06", end: "2027-04-09" }, { start: "2027-04-20", end: "2027-04-23" }, { start: "2027-05-04", end: "2027-05-07" }];
-const eastVacReviewStore = [
-  { id: "fixture-eastvac-1", person_id: "s1", start: EASTVAC_RANGES[1].start, end: EASTVAC_RANGES[1].end, decision: "away", decided_at: "2026-09-23T04:00:00Z", decided_by: "s1" },
-  { id: "fixture-eastvac-2", person_id: "s1", start: EASTVAC_RANGES[2].start, end: EASTVAC_RANGES[2].end, decision: "home", decided_at: "2026-09-23T04:00:00Z", decided_by: "s1" },
-];
-// What Davenport currently says (the mocked time_off AND the east_feed overlay the reload reads): the fix round's
-// refresh-reset step swaps this list for one with a moved and a missing range, then restores it.
-let eastVacFeed = EASTVAC_RANGES;
+// Prompt 15 part 3: three FAK ranges (unreviewed / away / home) overlaid on the newest cached east_feed row, answered by the mocked
+// Davenport time_off (s6 = FAK) and reviewed through the in-harness store. 11/2 (date bombs, finding #11): EASTVAC_RANGES,
+// eastVacReviewStore and eastVacFeed are DERIVED further down (after the served offer period, before any page loads); every use
+// up here runs inside a function called later.
 // Prompt 31 Part A (A3, 10/16): the two functions of the revision x apply the client calls - silvis_derived_vacations() (GET,
 // every signed-in page, the mount load and the 60 s poll) and east_vacation_reset_stale(p_from) (POST, the scheduler's Refresh
 // from Davenport) - are answered by the harness on EVERY page and NEVER passed through: the functions are not on the live
@@ -1466,6 +1458,70 @@ const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER
   .concat(U3C && U3C.other ? [
     { id: crypto.randomUUID(), person_id: "s3", day: U3C.other.day, role_pref: U3C.other.offeredRole, note: null, entered_by: "s3", source: "app", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" },
   ] : []);
+// ---- the vacation fixtures, DERIVED (11/2 date bombs, review findings #6 / #7 / #11) ----
+// Until 11/2 the three FAK ranges were the literals 2027-04-06 / 04-20 / 05-04 (past on 4/7/2027). Now: Tue-Fri x3, two weeks apart,
+// EV[0] at the first Tuesday on/after the 2nd of the first month AFTER the month of max(today, the last served row + 1, the served
+// offer period's end + 1 - inside it s1's exhaustive painter save makes him not-offered, the newest published Davenport week's
+// Sunday + 28 days). A month is skipped while any day from the Monday before EV[0] to the Saturday after EV[2] is a served row, a
+// holiday-unit day, a Khan eastStanding day, in a statedWeeks week, a Khan override day or a Khan time_off day. On the 11/2 data
+// this is exactly the old literal set. The Time off clean range (VAC_A) and the office's range start after it; their lines carry
+// the year by the app's rule (vacLabelOf).
+const vacFixtureEarly = await (async () => {
+  const get = async (q) => { const r = await fetch(`https://${SUPABASE_HOST}/rest/v1/${q}`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } }); if (!r.ok) throw new Error(q.split("?")[0] + ": HTTP " + r.status); const j = await r.json(); if (!Array.isArray(j)) throw new Error(q.split("?")[0] + ": not an array"); return j; };
+  const out = { pubEnd: null, s1Override: new Set(), timeOff: null, notes: [] };
+  try { const pub = (await get("east_feed?select=week_monday,data")).filter(r => r && !(r.data && r.data.isForecast === true)).map(r => String(r.week_monday).slice(0, 10)).sort(); out.pubEnd = pub.length ? isoPlus(pub[pub.length - 1], 6) : null; }
+  catch (e) { out.notes.push("east_feed read failed (" + (e && e.message || e) + ") - the East ranges clear the served rows only"); }
+  try { (await get("east_overrides?select=day,person_id")).forEach(r => { if (r && r.person_id === "s1") out.s1Override.add(String(r.day).slice(0, 10)); }); }
+  catch (e) { out.notes.push("east_overrides read failed - Khan's override days are not avoided"); }
+  try { out.timeOff = fixture ? fixture.time_off.map(r => ({ id: r.id, person_id: r.person_id, start_date: r.start_date, end_date: r.end_date })) : await get("time_off?select=id,person_id,start_date,end_date"); }
+  catch (e) { out.notes.push("time_off read failed - the own-row / vacation-minimum premise of the Time off and office ranges is not checked"); }
+  return out;
+})();
+const HOLIDAY_UNIT_DAYS = new Set(); // every unit day of every served blob year
+{ const u = (gcBlobEarly.holidays && gcBlobEarly.holidays.units) || {}; Object.keys(u).forEach(y => (Array.isArray(u[y]) ? u[y] : []).forEach(x => (x && Array.isArray(x.days) ? x.days : []).forEach(d => HOLIDAY_UNIT_DAYS.add(String(d).slice(0, 10))))); }
+const EASTVAC_RANGES = (() => {
+  const lastRow = liveRowsEarly.reduce((m, r) => (r && r.day > m ? r.day : m), "");
+  let base = [todayCentral, lastRow ? isoPlus(lastRow, 1) : todayCentral, offerPeriod ? isoPlus(offerPeriod.end_day, 1) : todayCentral, vacFixtureEarly.pubEnd ? isoPlus(vacFixtureEarly.pubEnd, 28) : todayCentral].sort().pop();
+  const sr = gcBlobEarly.surgeonRules || {}, standing = new Set(), stated = new Set();
+  ((sr.s1 && sr.s1.eastStanding) || []).forEach(e => (e && Array.isArray(e.days) ? e.days : []).forEach(md => standing.add(String(md))));
+  Object.keys(sr).forEach(id => { const sw = sr[id] && sr[id].eastFeed && sr[id].eastFeed.statedWeeks; if (sw && typeof sw === "object") ["eastPrimary", "eastBackup"].forEach(k => (Array.isArray(sw[k]) ? sw[k] : []).forEach(m => { for (let i = 0; i < 7; i++) stated.add(isoPlus(String(m).slice(0, 10), i)); })); });
+  const s1Off = (d) => (vacFixtureEarly.timeOff || []).some(r => r && r.person_id === "s1" && String(r.start_date).slice(0, 10) <= d && String(r.end_date || r.start_date).slice(0, 10) >= d);
+  const why = (d) => liveEarlyByDay[d] ? "a served row" : HOLIDAY_UNIT_DAYS.has(d) ? "a holiday-unit day" : standing.has(d.slice(5)) ? "Khan's eastStanding" : stated.has(d) ? "a statedWeeks week" : vacFixtureEarly.s1Override.has(d) ? "a Khan east_overrides day" : s1Off(d) ? "a Khan time_off day" : null;
+  const skipped = []; let rs = null, last = null;
+  for (let n = 0; n < 36 && !rs; n++) {
+    const m1 = base.slice(5, 7) === "12" ? (+base.slice(0, 4) + 1) + "-01-01" : base.slice(0, 4) + "-" + String(+base.slice(5, 7) + 1).padStart(2, "0") + "-01";
+    let t = isoPlus(m1, 1); while (new Date(t + "T12:00:00Z").getUTCDay() !== 2) t = isoPlus(t, 1);
+    last = [0, 14, 28].map(k => ({ start: isoPlus(t, k), end: isoPlus(t, k + 3) }));
+    let bad = null; for (let d = isoPlus(t, -1); d <= isoPlus(last[2].end, 1) && !bad; d = isoPlus(d, 1)) { const w = why(d); if (w) bad = d + " " + w; }
+    if (bad) { skipped.push(m1.slice(0, 7) + " (" + bad + ")"); base = m1; } else rs = last;
+  }
+  if (!rs) { fail("vacation fixtures: no Tue-Fri block in 36 months past " + todayCentral + " clears the rows / holiday units / East weeks - " + skipped.slice(-3).join("; ")); rs = last; }
+  console.log(`     (vacation fixtures for today ${todayCentral}: East vacations ${rs.map(r => r.start + ".." + r.end).join(" / ")} (unreviewed / away / home) - past the served rows (to ${lastRow || "none"}), the served offer period (to ${offerPeriod ? offerPeriod.end_day : "none"}) and the Davenport weeks (to ${vacFixtureEarly.pubEnd || "unread"}) + 28 days${skipped.length ? "; skipped " + skipped.join(", ") : ""}${vacFixtureEarly.notes.length ? "; " + vacFixtureEarly.notes.join("; ") : ""})`);
+  return rs;
+})();
+const eastVacReviewStore = [
+  { id: "fixture-eastvac-1", person_id: "s1", start: EASTVAC_RANGES[1].start, end: EASTVAC_RANGES[1].end, decision: "away", decided_at: "2026-09-23T04:00:00Z", decided_by: "s1" },
+  { id: "fixture-eastvac-2", person_id: "s1", start: EASTVAC_RANGES[2].start, end: EASTVAC_RANGES[2].end, decision: "home", decided_at: "2026-09-23T04:00:00Z", decided_by: "s1" },
+];
+// What Davenport currently says (the mocked time_off AND the east_feed overlay the reload reads): the fix round's
+// refresh-reset step swaps this list for one with a moved and a missing range, then restores it.
+let eastVacFeed = EASTVAC_RANGES;
+const EV0_Y = +EASTVAC_RANGES[0].start.slice(0, 4), EV0_M = +EASTVAC_RANGES[0].start.slice(5, 7) - 1; // EV[1] shares this month by construction
+const EV2_Y = +EASTVAC_RANGES[2].start.slice(0, 4), EV2_M = +EASTVAC_RANGES[2].start.slice(5, 7) - 1;
+const EV0_MONTH = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][EV0_M] + " " + EV0_Y; // the grid header
+// vacFreeEarly(pid, a, b): no served time_off row of pid touches [a, b] (a second vac-line-<pid>-<start> would collide), and the app's own
+// guard - helpers.vacationGuard, which the client gate vacGuardFor calls - lets it through with the fixture's East ranges counted away
+// (selection only: the assertions stay the POST, the audit, the notification and the line). A failed read answers true (named above).
+const vacFreeEarly = (pid, a, b) => { const rows = vacFixtureEarly.timeOff; if (!rows) return true; if (rows.some(r => r && r.person_id === pid && String(r.start_date).slice(0, 10) <= b && String(r.end_date || r.start_date).slice(0, 10) >= a)) return false; return HELPERS.vacationGuard({ personId: pid, start: a, end: b, timeOffRows: rows, eastAway: { s1: EASTVAC_RANGES.map(r => ({ start: r.start, end: r.end, state: "away" })) }, roster: gcBlobEarly.roster || [], groupRules: gcBlobEarly.groupRules || {}, eastReviewsLoaded: true }).ok; };
+// helpers.js vacRangeLabel (Item B, 9/23) restated: "May 10-11" (en dash), one day "May 10", across months "Apr 30-May 1", and " (2027)" /
+// " (2026-2027)" ONLY when the range leaves the current year, read from todayCentral (the app passes its todayStr, the Central date)
+const VAC_MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const vacLabelOf = (a, b) => {
+  const ty = todayCentral.slice(0, 4), ay = a.slice(0, 4), ey = b.slice(0, 4), am = +a.slice(5, 7), em = +b.slice(5, 7), ad = +a.slice(8, 10), ed = +b.slice(8, 10);
+  let t = VAC_MON3[am - 1] + " " + ad;
+  if (ay !== ey || am !== em) t += "\u2013" + VAC_MON3[em - 1] + " " + ed; else if (ed !== ad) t += "\u2013" + ed;
+  return t + (ay !== ty || ey !== ty ? " (" + (ay === ey ? ay : ay + "\u2013" + ey) + ")" : "");
+};
 // 9/27 offer deadline notice: an INDEPENDENT restatement of helpers.offerDeadlineNotices over the harness's stores, read
 // at call time: every served period with status upcoming, a close after today, and the close within
 // groupRules.offerPeriods.noticeDaysBeforeClose days (the served blob's, the seed's as a fallback - see NOTICE_OP; 42 when
@@ -7923,21 +7979,24 @@ try {
       await page.fill("[data-testid=trade-day]", "");
       await page.selectOption("[data-testid=trade-to]", "").catch(() => {});
     }
-    // clean range: two days with no schedule rows at all. Smoke clean on main (9/29): DERIVED from the rows the app is served -
-    // 2027-03-02..03 while it stays clean (row-less, untouched by this run, s1 not primary on the day before - the handoff
-    // rule), else the first such pair of days in one month after it (the Feb-Apr 2027 period will be published one day);
-    // every later pin on this range (the POST, the lead-time note, the grouped line and its text) reads VAC_A / VAC_B.
-    const vacClean = (d) => !liveByDay[d] && !harnessDays[d] && !claimedDays[d];
+    // clean range: two days with no schedule rows at all. 11/2 (date bombs, finding #6): DERIVED - the first pair of days in one month
+    // from the Monday after the East-vacation fixture (EASTVAC_RANGES[2], past every served row, the offer period and the Davenport
+    // weeks). Row-less and untouched by this run, s1 not primary on the day before (the handoff rule), off every holiday-unit day and
+    // not the day after one (critic-12: Plan's day-before-vacation edge), and clear in the served time_off (vacFreeEarly: no row of s1's
+    // on it, inside the vacation minimum - else the scheduler's confirm stops the add). Every later pin (the POST, the lead-time note,
+    // the grouped line and its text - the year by the app's rule, vacLabelOf) reads VAC_A / VAC_B / VAC_TEXT.
+    const vacClean = (d) => !liveByDay[d] && !harnessDays[d] && !claimedDays[d] && !HOLIDAY_UNIT_DAYS.has(d);
+    const VAC_FROM = isoAddDays(EASTVAC_RANGES[2].end, 3);
     const [VAC_A, VAC_B] = (() => {
-      for (let d = "2027-03-02"; d <= isoAddDays("2027-03-02", 400); d = isoAddDays(d, 1)) {
+      for (let d = VAC_FROM; d <= isoAddDays(VAC_FROM, 400); d = isoAddDays(d, 1)) {
         const e = isoAddDays(d, 1);
-        if (d.slice(0, 7) === e.slice(0, 7) && vacClean(d) && vacClean(e) && curDay(isoAddDays(d, -1)).primary !== "s1") return [d, e];
+        if (d.slice(0, 7) === e.slice(0, 7) && vacClean(d) && vacClean(e) && !HOLIDAY_UNIT_DAYS.has(isoAddDays(d, -1)) && curDay(isoAddDays(d, -1)).primary !== "s1" && vacFreeEarly("s1", d, e)) return [d, e];
       }
-      return ["2027-03-02", "2027-03-03"];
+      return [null, null];
     })();
-    const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const VAC_TEXT = `${MON3[+VAC_A.slice(5, 7) - 1]} ${+VAC_A.slice(8, 10)}\u2013${+VAC_B.slice(8, 10)} (${VAC_A.slice(0, 4)})`;
-    if (VAC_A !== "2027-03-02") console.log(`     (Time off clean range: 2027-03-02..03 is no longer clean in the served rows - using ${VAC_A}..${VAC_B})`);
+    if (!VAC_A) throw new Error("Time off clean range: no clean pair of days in the 400 days from " + VAC_FROM);
+    const VAC_TEXT = vacLabelOf(VAC_A, VAC_B);
+    console.log(`     (Time off clean range: ${VAC_A}..${VAC_B}, the first clean pair from ${VAC_FROM} (the Monday after the East-vacation fixture); expected line '${VAC_TEXT} harness range' - the year by the app's rule, today ${todayCentral})`);
     const before2 = writes.length;
     await form.locator("select").first().selectOption("s1");
     await dates.nth(0).fill(VAC_A);
@@ -7989,7 +8048,7 @@ try {
     }
     // ---- Item B (Faraz 9/23 evening): the list is grouped per surgeon in roster order - a vac-group-<id> header
     //      (Badge, full name, N upcoming) with that person's compact "Mon D-D" lines under it; the range just added
-    //      reads "Mar 2-3 (2027) harness range" (en dash) with its Edit / Remove controls, under Khan's header. ----
+    //      reads VAC_TEXT + " harness range" (vacLabelOf: "(YYYY)" only when the range leaves today's year) with its Edit / Remove controls, under Khan's header. ----
     try {
       await page.waitForSelector(`[data-testid=timeoff-card] [data-testid=vac-line-s1-${VAC_A}]`, { timeout: 15000 });   // 5 s timed out under load (landing run 9/25)
       const readGroups = (sel) => page.$eval(sel, (card, vacA) => {
@@ -10190,25 +10249,25 @@ try {
       else if (Object.values(mk).some(x => x.dot)) fail("calendar East vacations: a Silvis vacation entry for s1 sits on a fixture day (a derived vacation must not write time_off)");
       else ok(`calendar: East vacations in the bar - ${want.map(([st, r]) => r.start + " " + st + " '" + (mk[st].name || "-") + "'").join(", ")} (home: hover only), no Silvis vacation entry`);
       // 10/21 review: the bar joins the next / previous day inside a week row when it shows the same people (and the two days are both
-      // preview or both not) - the expectation derived from the drawn bars of April 2027 (the fixture's unreviewed run Tue 4/6 - Fri 4/9)
+      // preview or both not) - the expectation derived from the drawn bars of EV[0]'s month (the fixture's unreviewed run, Tue - Fri)
       {
-        await showMonth(2027, 3);
+        await showMonth(EV0_Y, EV0_M);
         const jn = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map((e, i) => { const b = e.querySelector("[data-testid=cal-vac]"); const key = b ? Array.from(b.querySelectorAll("[data-vac],[data-eastvac]")).map(x => (x.getAttribute("data-vac") || x.getAttribute("data-eastvac")) + (/\?$/.test((x.querySelector(".cal-name") || {}).textContent || "") ? "?" : "")).sort().join(",") : null; return { day: e.getAttribute("data-day"), col: i % 7, pv: e.classList.contains("cal-preview"), key, l: !!b && b.classList.contains("cal-vac-l"), r: !!b && b.classList.contains("cal-vac-r") }; }));
         const bad = [], joins = [];
         jn.forEach((c, i) => { if (!c.key) return; const p = jn[i - 1], n = jn[i + 1]; const wl = c.col > 0 && !!p && p.key === c.key && p.pv === c.pv, wr = c.col < 6 && !!n && n.key === c.key && n.pv === c.pv; if (wl !== c.l || wr !== c.r) bad.push(c.day + " l=" + c.l + "/" + wl + " r=" + c.r + "/" + wr); if (c.r) joins.push(c.day); });
-        const fx = jn.filter(c => c.day >= "2027-04-06" && c.day <= "2027-04-09");
+        const fx = jn.filter(c => c.day >= EASTVAC_RANGES[0].start && c.day <= EASTVAC_RANGES[0].end);
         if (bad.length) fail("calendar vacation bar: the joins differ from the drawn people (day l=got/want r=got/want): " + bad.join("; "));
-        // the fixture's unreviewed run 4/6-4/9 shows "Khan?" on all four days; whether two of them join depends on who else is off
+        // the fixture's unreviewed run EV[0] (Tue-Fri) shows "Khan?" on all four days; whether two of them join depends on who else is off
         // (the served time_off) - the derived check above holds every join to the drawn people, so here: Khan? on each day, and at
         // least one join in the month (the check above is never vacuous)
-        else if (fx.length !== 4 || !fx.every(c => /(^|,)s1\?(,|$)/.test(c.key || "")) || !joins.length) fail("calendar vacation bar: the fixture's unreviewed run 4/6-4/9 should show 'Khan?' (s1?) in each day's bar, and April 2027 should have a join: " + JSON.stringify(fx) + " joins " + joins.length);
-        else ok(`calendar vacation bar: April 2027's ${jn.filter(c => c.key).length} bar(s) join exactly where the same people are off inside a week row (${joins.length} join(s); the fixture's 4/6-4/9 run ${fx.map(c => c.day.slice(5) + (c.l ? "<" : "") + (c.r ? ">" : "")).join(" ")})`);
+        else if (fx.length !== 4 || !fx.every(c => /(^|,)s1\?(,|$)/.test(c.key || "")) || !joins.length) fail(`calendar vacation bar: the fixture's unreviewed run ${mdOf(EASTVAC_RANGES[0].start)}-${mdOf(EASTVAC_RANGES[0].end)} should show 'Khan?' (s1?) in each day's bar, and ${EV0_MONTH} should have a join: ` + JSON.stringify(fx) + " joins " + joins.length);
+        else ok(`calendar vacation bar: ${EV0_MONTH}'s ${jn.filter(c => c.key).length} bar(s) join exactly where the same people are off inside a week row (${joins.length} join(s); the fixture's 4/6-4/9 run ${fx.map(c => c.day.slice(5) + (c.l ? "<" : "") + (c.r ? ">" : "")).join(" ")})`);
         // the bar's colours are the theme's tokens, light then dark (the fixture day, so the check never depends on live rows)
         const barColours = () => page.$eval(`[data-day="${EV[0].start}"] [data-testid=cal-vac]`, el => ({ bg: getComputedStyle(el).backgroundColor, fg: getComputedStyle(el).color }));
         const lightC = await barColours();
-        await setTheme(true); await showMonth(2027, 3);
+        await setTheme(true); await showMonth(EV0_Y, EV0_M);
         const darkC = await barColours();
-        await setTheme(false); await showMonth(2027, 3);
+        await setTheme(false); await showMonth(EV0_Y, EV0_M);
         if (lightC.bg !== "rgb(211, 218, 227)" || lightC.fg !== "rgb(47, 60, 79)" || darkC.bg !== "rgb(42, 58, 92)" || darkC.fg !== "rgb(210, 220, 234)") fail("calendar vacation bar: the colours are not the theme's vacBar / vacText (light #D3DAE3 / #2F3C4F, dark #2A3A5C / #D2DCEA): " + JSON.stringify({ lightC, darkC }));
         else ok("calendar vacation bar: light " + lightC.fg + " on " + lightC.bg + ", dark " + darkC.fg + " on " + darkC.bg + " - the theme's vacText on vacBar (7.93:1 / 8.16:1)");
         // at 390 px the bar shows codes, never names: 'FAK?' while unreviewed, 'FAK' while away
@@ -10219,9 +10278,9 @@ try {
         if (!pU || !pA || pU.nameShown || pA.nameShown || !/^[A-Z]{2,4}\?$/.test(pU.code || "") || !/^[A-Z]{2,4}$/.test(pA.code || "")) fail("calendar vacation bar at 390 px: codes, not names - 'CODE?' unreviewed, 'CODE' away: " + JSON.stringify({ pU, pA }));
         else ok(`calendar vacation bar at 390 px: codes, no names - '${pU.code}' (unreviewed) / '${pA.code}' (away)`);
       }
-      await showMonth(2027, 3);
-      await page.screenshot({ path: path.join(OUT, "calendar-eastvac-2027-04.png"), fullPage: false });
-      ok("screenshot test/ui/out/calendar-eastvac-2027-04.png");
+      await showMonth(EV0_Y, EV0_M);
+      await page.screenshot({ path: path.join(OUT, "calendar-eastvac.png"), fullPage: false });
+      ok("screenshot test/ui/out/calendar-eastvac.png");
       // the day editor: the East line with the state; Khan's primary reason glossed; on the home Tuesday he is eligible (Tue lifted)
       await page.click(`[data-day="${EV[0].start}"]`);
       await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
@@ -10235,7 +10294,7 @@ try {
       else ok(`day editor ${EV[0].start}: East line '${evLine.text.slice(0, 96)}'; Khan ineligible (${khanOpt.label.trim()}) with the East-vacation gloss`);
       await page.keyboard.press("Escape");
       await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
-      await showMonth(2027, 4);
+      await showMonth(EV2_Y, EV2_M);
       await page.click(`[data-day="${EV[2].start}"]`);
       await page.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
       await page.waitForTimeout(300);
@@ -10310,7 +10369,7 @@ try {
         await waitFor(async () => (await page.getAttribute(row0, "data-state")) === "away", 8000);
         await page.waitForTimeout(300);
         const md = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
-        const moved = { start: EV[1].start, end: "2027-04-24" };
+        const moved = { start: EV[1].start, end: isoAddDays(EV[1].end, 1) };
         eastVacFeed = [EV[0], moved];
         const beforeR = writes.length;
         await page.click("[data-testid=east-refresh]");
@@ -10381,7 +10440,7 @@ try {
         const short0 = await evShortIn("eastvac-timeoff-warnings");
         if (!short0) fail("P31A A3 (scheduler): no [data-testid=eastvac-timeoff-warnings] box in the Time off East card - EV[0]'s short days could not be read before the harness vacations");
         else if (short0.indexOf(offDay) >= 0) console.log(`     (P31A A3 (scheduler): Khan's ${EV[0].start} range already lists ${offDay} under the vacation minimum before the harness vacations (live vacations; its short days ${short0.join(", ")}) - the 'gains the day' half is not exercised this run)`);
-        await showMonth(2027, 3);
+        await showMonth(EV0_Y, EV0_M);
         const stripNow = () => page.$eval("[data-testid=cov-eastvac-warn]", el => ({ count: Number(el.getAttribute("data-count")), title: el.getAttribute("title") || "" })).catch(() => null);
         const s0 = await stripNow();
         if (!s0 || !(s0.count >= 0)) fail("P31A A3 (scheduler): no [data-testid=cov-eastvac-warn] item in the coverage strip");
@@ -10454,9 +10513,9 @@ try {
         else ok(`P31A A3 (office): silvis_derived_vacations read ${served.length}x with its own token (GET)`);
         await sa.click('button[data-tab="calendar"]');
         await sa.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
-        await sa.selectOption("[data-testid=cal-month-select]", "3");
-        if ((await sa.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2027") await sa.fill("[data-testid=cal-year-input]", "2027");
-        await sa.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "April 2027"; }, null, { timeout: 10000 });
+        await sa.selectOption("[data-testid=cal-month-select]", String(EV0_M));
+        if ((await sa.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(EV0_Y)) await sa.fill("[data-testid=cal-year-input]", String(EV0_Y));
+        await sa.waitForFunction((want) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === want; }, EV0_MONTH, { timeout: 10000 });
         await sa.waitForTimeout(400);
         const cell = await sa.$eval(`[data-day="${EV[0].start}"]`, el => ({ dot: !!el.querySelector("[data-testid=cal-vac] [data-vac=s1]"), diamond: el.querySelectorAll("[data-eastvac]").length, dotsTitle: ((el.querySelector("[data-testid=cal-vac]") || {}).getAttribute ? el.querySelector("[data-testid=cal-vac]").getAttribute("title") : "") || "" })).catch(() => null);
         if (!cell || !cell.dot || cell.diamond || !/On vacation: .*Khan/.test(cell.dotsTitle) || EASTWORD_A3.test(cell.dotsTitle)) fail(`P31A A3 (office): ${EV[0].start} should carry Khan in the vacation bar (no East entry, no East word): ` + JSON.stringify(cell));
@@ -15461,8 +15520,22 @@ try {
       if (!(await pc.$("[data-testid=coord-offers-card]"))) fail("coordinator: the 'Offers - enter for a surgeon' card is missing"); else ok("coordinator: the 'Offers - enter for a surgeon' card renders");
       const dates = card.locator("input[type=date]");
       await sel.selectOption("s3");
-      await dates.nth(0).fill("2027-03-16");
-      await dates.nth(1).fill("2027-03-17");
+      // 11/2 (date bombs, finding #7): the office's s3 range is DERIVED like the Time off clean range - the first pair of days in one month
+      // from the Monday a week after the East-vacation fixture (a week clear of VAC_A's scan start). No served row on it or the day
+      // before (s3 holds no role, nor primary on the eve - the client pre-check), off every holiday-unit day, and clear in the served
+      // time_off (vacFreeEarly: no row of s3's on it, inside the vacation minimum - the office is refused, never asked). It lies past
+      // today, so the office may Remove it (toRemove refuses a started one for a non-scheduler). Its line follows the app's year rule.
+      const C_FROM = isoAddDays(EASTVAC_RANGES[2].end, 10);
+      const cClean = (d) => !liveByDay[d] && !claimedDays[d] && !planDayStore[d] && !HOLIDAY_UNIT_DAYS.has(d);
+      const [C_A, C_B] = (() => {
+        for (let d = C_FROM; d <= isoAddDays(C_FROM, 400); d = isoAddDays(d, 1)) { const e = isoAddDays(d, 1); if (d.slice(0, 7) === e.slice(0, 7) && cClean(isoAddDays(d, -1)) && cClean(d) && cClean(e) && vacFreeEarly("s3", d, e)) return [d, e]; }
+        return [null, null];
+      })();
+      if (!C_A) throw new Error("no clean pair of days for s3 in the 400 days from " + C_FROM);
+      const C_TEXT = vacLabelOf(C_A, C_B);
+      console.log(`     (coordinator: the office's s3 range ${C_A}..${C_B}, the first clean pair from ${C_FROM}; expected line '${C_TEXT} office entry')`);
+      await dates.nth(0).fill(C_A);
+      await dates.nth(1).fill(C_B);
       const b0 = writes.length;
       await pc.fill("[data-testid=vac-note]", "family trip");
       await pc.click("[data-testid=vac-add]");
@@ -15481,9 +15554,9 @@ try {
       const toAudit = auditSince(b1, "timeoff.add");
       const toNotif = writesSince(b1, "/rest/v1/notifications").map(bodyOf).find(n => n && n.type === "vacation_logged");
       const mails = writesSince(b1).filter(w => /send-notification/.test(w.path));
-      if (toPost.length !== 1 || !toBody || toBody.person_id !== "s3" || toBody.start_date !== "2027-03-16" || toBody.end_date !== "2027-03-17" || toBody.note !== "office entry" || toBody.created_by !== COORD_UID) fail("coordinator: expected ONE POST /rest/v1/time_off { s3, 2027-03-16..17, note, created_by = the coordinator's profile id }: " + JSON.stringify(toPost.map(w => w.body)));
+      if (toPost.length !== 1 || !toBody || toBody.person_id !== "s3" || toBody.start_date !== C_A || toBody.end_date !== C_B || toBody.note !== "office entry" || toBody.created_by !== COORD_UID) fail("coordinator: expected ONE POST /rest/v1/time_off { s3, " + C_A + ".." + C_B + ", note, created_by = the coordinator's profile id }: " + JSON.stringify(toPost.map(w => w.body)));
       else if (!toAudit || toAudit.actor_id !== COORD_UID || toAudit.actor_name !== COORD_PROFILE.display_name || !toAudit.detail || toAudit.detail.person_id !== "s3") fail("coordinator: the audit timeoff.add must carry actor_id = the profile id and actor_name = the display name: " + JSON.stringify(toAudit));
-      else if (!toNotif || !/Acton logged vacation 3\/16-3\/17 \(office entry\) - entered by Office \(harness\)/.test(toNotif.message) || !toNotif.data || toNotif.data.entered_by !== COORD_UID || toNotif.data.surgeon_id !== "s3") fail("coordinator: the vacation_logged feed row must name the office and carry entered_by = the profile id: " + JSON.stringify(toNotif));
+      else if (!toNotif || !String(toNotif.message || "").includes(`Acton logged vacation ${mdOf(C_A)}-${mdOf(C_B)} (office entry) - entered by Office (harness)`) || !toNotif.data || toNotif.data.entered_by !== COORD_UID || toNotif.data.surgeon_id !== "s3") fail("coordinator: the vacation_logged feed row must name the office and carry entered_by = the profile id: " + JSON.stringify(toNotif));
       else if (mails.length) fail("coordinator: a send-notification call went out (the function answers 403 for the role; nothing should be attempted): " + JSON.stringify(mails.map(w => w.path)));
       else ok(`coordinator: vacation for s3 = POST time_off { created_by ${COORD_UID.slice(-4)} } + audit timeoff.add { actor_id = profile id, actor_name '${toAudit.actor_name}' } + feed "${toNotif.message}"; no e-mail attempted`);
       // Prompt 21 step 2 (Faraz 9/26): the office's audit row goes out with Prefer: return=minimal too - a coordinator is a
@@ -15495,15 +15568,15 @@ try {
       if (!writesSince(b1).every(w => noAddress(w.body))) fail("coordinator: a write body carries an email address");
       // Remove the row just added: Edit / Remove render for the office; the DELETE goes by id and is audited as the office
       const b2 = writes.length;
-      // Item B: the row is the compact line under Acton's group header (vac-line-<id>-<start>), reading "Mar 16-17 (2027) office entry".
-      const newLine = card.locator("[data-testid=vac-line-s3-2027-03-16]");
+      // Item B: the row is the compact line under Acton's group header (vac-line-<id>-<start>), reading C_TEXT + " office entry" (the app's year rule).
+      const newLine = card.locator(`[data-testid=vac-line-s3-${C_A}]`);
       const newLineText = (await newLine.count()) ? (await newLine.innerText()).replace(/\s+/g, " ").trim() : "";
       const newLineUnderS3 = (await newLine.count()) ? await newLine.evaluate(el => !!el.parentElement.querySelector("[data-testid=vac-group-s3]")) : false;
-      if (!/^Mar 16\u201317 \(2027\) office entry/.test(newLineText) || !newLineUnderS3) fail("coordinator (Item B): the new row should read 'Mar 16-17 (2027) office entry' under Acton's group header: '" + newLineText + "' (under vac-group-s3: " + newLineUnderS3 + ")");
-      else ok("coordinator (Item B): the new row reads 'Mar 16\u201317 (2027) office entry' under Acton's group header");
+      if (!newLineText.startsWith(C_TEXT + " office entry") || !newLineUnderS3) fail(`coordinator (Item B): the new row should read '${C_TEXT} office entry' under Acton's group header: '${newLineText}' (under vac-group-s3: ${newLineUnderS3})`);
+      else ok(`coordinator (Item B): the new row reads '${C_TEXT} office entry' under Acton's group header`);
       let removeBtn = null;
       for (const h of await newLine.locator("button:has-text('Remove')").elementHandles()) { removeBtn = h; break; }
-      if (!removeBtn) fail("coordinator: the new row (2027-03-16 to 2027-03-17) shows no Remove button for the office");
+      if (!removeBtn) fail(`coordinator: the new row (${C_A} to ${C_B}) shows no Remove button for the office`);
       else {
         await removeBtn.click();
         await waitFor(() => writesSince(b2, "/rest/v1/audit_log").some(w => (bodyOf(w) || {}).action === "timeoff.remove"), 8000);

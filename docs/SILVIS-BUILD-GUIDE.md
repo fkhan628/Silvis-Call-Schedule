@@ -2111,7 +2111,7 @@ possible later migration.
   Refresh whose mocked Davenport answer moved one range and dropped another issues exactly two DELETEs by the old
   triples, two `eastvac.review` reset audits (reason `changed` / `removed`, `removed: 1`), names both in the toast and
   keeps the unchanged range's row; screenshots `eastvac-panel.png`, `eastvac-panel-390.png`, `eastvac-panel-dark.png`,
-  `eastvac-panel-390-dark.png`, `calendar-eastvac-2027-04.png`, `mine-eastvac.png` — written to **`test/ui/out/`**, which
+  `eastvac-panel-390-dark.png`, `calendar-eastvac.png`, `mine-eastvac.png` — written to **`test/ui/out/`**, which
   is **gitignored**; nothing was copied into `docs/screenshots/` in this delivery, as of `19b9efc` (part 4 added no binaries),
   and since B10 (9/23) the repo carries no screenshot folder at all: the open-shifts set that used to live there showed the
   local harness URL in the e-mail preview, and the harness cannot render the production origin, so review shots stay in

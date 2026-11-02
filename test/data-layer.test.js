@@ -15318,7 +15318,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const readAt = st.indexOf('const short0 = await evShortIn("eastvac-timeoff-warnings");'), sendAt = st.indexOf('rtSendRow("time_off", extraTimeOff[0], "INSERT")');
       assert.ok(readAt > 0 && sendAt > readAt, "EV[0]'s short days are read from the Time off East card's box BEFORE the harness vacations are sent");
       assert.ok(st.includes('const evShortIn = (box) => page.$eval(`[data-testid=${box}]`, (el, s) => {') && st.includes('x.getAttribute("data-person") === "s1" && x.getAttribute("data-start") === s') && st.includes('r.getAttribute("data-short")'), "evShortIn reads data-short of the s1 / EV[0].start row");
-      assert.ok(st.indexOf("await showMonth(2027, 3);") > readAt && st.indexOf("await showMonth(2027, 3);") < sendAt, "the calendar (the strip) is shown after the read and before the vacations");
+      // pin moved deliberately 11/2 (smoke date bombs): the East-vacation fixture is derived from today - its month is EV0_Y / EV0_M
+      assert.ok(st.indexOf("await showMonth(EV0_Y, EV0_M);") > readAt && st.indexOf("await showMonth(EV0_Y, EV0_M);") < sendAt, "the calendar (the strip) is shown after the read and before the vacations");
       assert.ok(st.includes('const wantOn = "under the vacation minimum on " + HELPERS.vgDaysLabel((short0 || []).concat([offDay])) + " (";'), "the strip's EV[0] words are waited for with the app's own label of short0 plus offDay");
       assert.ok(/console\.log\(`     \(P31A A3 \(scheduler\): Khan's \$\{EV\[0\]\.start\} range already lists \$\{offDay\} under the vacation minimum before the harness vacations[^`]*not exercised this run\)`\)/.test(st), "a live vacation that already lists offDay is named as not exercised");
       assert.ok(!/did not rise/.test(st) && !/> warn0/.test(st) && !/\bwarn0\b/.test(st), "no premise on the strip's total (the old 'count did not rise' FAIL is gone)");
