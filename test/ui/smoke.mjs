@@ -3050,7 +3050,9 @@ try {
   // Real downloads are captured and read back; the share page is re-opened
   // through the static server (test/ui/out is under ROOT) and the printable
   // view is the popup window.open produced. October 2026 is still showing.
-  const errLine = (e) => String(e && e.message || e).split("\n")[0];
+  // a Playwright timeout's first line names only the call ("page.click: Timeout 30000ms exceeded."); its call log names what it
+  // waited for - kept in brackets (11/2: a time-travel FAIL could not say which click hung)
+  const errLine = (e) => { const m = String(e && e.message || e).split("\n"); const w = m.find(l => /^\s*-\s*waiting for /.test(l)); return m[0] + (w ? " [" + w.trim().replace(/^-\s*/, "").slice(0, 160) + "]" : ""); };
   await context.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
   const saveDownload = async (trigger) => {
     const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 8000 }), trigger()]);
@@ -6722,6 +6724,10 @@ try {
         return from === String(yNow) ? { status: 200, body: [] } : { status: 500, body: { message: "harness: pay read failed" } };
       };
       await page.click("[data-testid=pay-refresh]");
+      // 11/2 (time travel 1/4): the card opens on the app's pay year, which Totals > Pay moves to the Totals card's year (TotalsCard's
+      // year effect) - an earlier step leaves it on 2026, and from 1/1/2027 that is not the current year this mock answers: pick it
+      await page.waitForSelector("[data-testid=pay-card][data-state=ok], [data-testid=pay-card][data-state=failed]", { timeout: 8000 });
+      if ((await page.$eval("[data-testid=pay-year-select]", el => el.value).catch(() => null)) !== String(yNow)) await page.selectOption("[data-testid=pay-year-select]", String(yNow));
       await page.waitForSelector("[data-testid=pay-card][data-state=ok]", { timeout: 8000 });
       await page.selectOption("[data-testid=pay-year-select]", String(yNow - 1));
       await page.waitForSelector("[data-testid=pay-card][data-state=failed]", { timeout: 8000 });
@@ -10854,11 +10860,22 @@ try {
           else { const r = await fetch(`https://${SUPABASE_HOST}/rest/v1/time_off?select=person_id,start_date,end_date`, { headers: { apikey: ANON_KEY, authorization: "Bearer " + ANON_KEY } }); if (!r.ok) throw new Error("HTTP " + r.status); servedTimeOff = await r.json(); if (!Array.isArray(servedTimeOff)) throw new Error("the body is not an array"); }
         } catch (e) { fail("Periods (Prompt 26): could not read the served time_off rows - the vacations of the roll call cannot be restated: " + String(e && e.message || e).split("\n")[0]); }
         const postedTimeOff = () => writes.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/time_off")).map(bodyOf).flatMap(b => Array.isArray(b) ? b : b ? [b] : []);
-        const vacKeys = (rows, id, p) => (rows || []).filter(t => t && t.person_id === id && t.start_date <= p.end_day && t.end_date >= p.start_day).map(t => t.start_date + ".." + t.end_date);
+        // the roll call's vacations, restated: each overlapping row CLIPPED to the period, then MERGED where rows overlap or touch
+        // (helpers.offerFreezeRollcall). 11/2 (time travel 12/31): the moved served period and the created one can cut a served
+        // vacation (Fierce's 2/10-2/17 read 2/10-2/14 in a box ending 2/14, 2/15-2/17 in the next) - the old keys were the rows' dates
+        const vacKeys = (rows, id, p) => {
+          const cl = (rows || []).filter(t => t && t.person_id === id && String(t.start_date).slice(0, 10) <= p.end_day && String(t.end_date).slice(0, 10) >= p.start_day)
+            .map(t => { const s = String(t.start_date).slice(0, 10), e = String(t.end_date).slice(0, 10); return { s: s < p.start_day ? p.start_day : s, e: e > p.end_day ? p.end_day : e }; })
+            .sort((a, b) => (a.s !== b.s ? (a.s < b.s ? -1 : 1) : (a.e < b.e ? -1 : a.e > b.e ? 1 : 0)));
+          const out = [];
+          cl.forEach(x => { const last = out[out.length - 1]; if (last && x.s <= isoAddDays(last.e, 1)) { if (x.e > last.e) last.e = x.e; } else out.push({ s: x.s, e: x.e }); });
+          return out.map(x => x.s + ".." + x.e);
+        };
         // words + attributes of one row, restated: painted N day(s) / added vacations M/D-M/D / following their rules; kind; never the old words
         const rowWordsWrong = (r, p) => {
-          const must = vacKeys(servedTimeOff, r.id, p), may = new Set(must.concat(vacKeys(postedTimeOff(), r.id, p)));
-          if (servedTimeOff && (must.some(k => !r.vac.includes(k)) || r.vac.some(k => !may.has(k)))) return `${r.id}: vacations ${JSON.stringify(r.vac)}, expected the served ${JSON.stringify(must)} (plus at most this run's posted rows)`;
+          // the served rows alone, or with this run's posted rows (kept by the page until a poll drops them - one per person here)
+          const must = vacKeys(servedTimeOff, r.id, p), withPosted = vacKeys((servedTimeOff || []).concat(postedTimeOff()), r.id, p);
+          if (servedTimeOff && JSON.stringify(r.vac) !== JSON.stringify(must) && JSON.stringify(r.vac) !== JSON.stringify(withPosted)) return `${r.id}: vacations ${JSON.stringify(r.vac)}, expected the served ${JSON.stringify(must)}${JSON.stringify(withPosted) !== JSON.stringify(must) ? " (or with this run's posted rows " + JSON.stringify(withPosted) + ")" : ""} - clipped to the period, merged where they touch`;
           const kind = r.offered > 0 ? "painted" : r.vac.length ? "vacations" : "rules";
           if (r.kind !== kind) return `${r.id}: kind ${r.kind}, expected ${kind}`;
           if (r.offered > 0 && !new RegExp(`painted ${r.offered} days?`).test(r.text)) return `${r.id}: no 'painted ${r.offered} day(s)' in '${r.text}'`;
