@@ -2268,6 +2268,36 @@ const openCalPicks = async (pg) => {
   return true;
 };
 const closeCalPicks = async (pg, opened) => { if (opened) await pg.click("[data-testid=cal-month-toggle]"); };
+// 11/2 (date bombs, #13): the load probes (Item E3 / E4 ?public=1, the main ?public=1 block, the month view per theme) need an
+// assignment in the month they read. Once the served rows end before today's Central month (2/1/2027 if nothing after 1/3 is
+// published by then), today's month holds none; the probes then read the nearest served month holding a primary (the last one
+// before today's, else the first after it), logged. null = today's month holds one - nothing changes, so a page that draws no
+// assignment over served rows still FAILs (the RLS-blocked picture vis-008 is there for).
+const CAL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const servedPrimaryMonth = (byDay) => {
+  const tm = todayCentral.slice(0, 7);
+  const days = Object.keys(byDay).filter(d => byDay[d] && byDay[d].primary_id).sort();
+  if (!days.length || days.some(d => d.slice(0, 7) === tm)) return null;
+  const before = days.filter(d => d.slice(0, 7) < tm);
+  const day = before.length ? before[before.length - 1] : days.find(d => d.slice(0, 7) > tm);
+  return { y: +day.slice(0, 4), m0: +day.slice(5, 7) - 1, label: CAL_MONTHS[+day.slice(5, 7) - 1] + " " + day.slice(0, 4), day };
+};
+const gotoCalMonth = async (pg, y, m0) => {
+  const picks = await openCalPicks(pg);
+  await pg.selectOption("[data-testid=cal-month-select]", String(m0));
+  if ((await pg.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(y)) await pg.fill("[data-testid=cal-year-input]", String(y));
+  await closeCalPicks(pg, picks);
+  await pg.waitForFunction((t) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === t; }, CAL_MONTHS[m0] + " " + y, { timeout: 8000 });
+};
+// a ?public=1 load probe: when servedPrimaryMonth names a month, wait for the load to finish, log, and show that month
+const probeServedMonth = async (pg, tag, byDay) => {
+  const pm = servedPrimaryMonth(byDay || liveEarlyByDay);
+  if (!pm) return null;
+  await pg.waitForFunction(() => !/Loading schedule/i.test(document.body.innerText || ""), null, { timeout: 30000 });
+  console.log(`     (${tag}: today's month ${todayCentral.slice(0, 7)} holds no served primary - the load probe reads ${pm.label} (served primary ${pm.day}))`);
+  await gotoCalMonth(pg, pm.y, pm.m0);
+  return pm;
+};
 const waitFor = async (predicate, timeoutMs, stepMs) => {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) { if (await predicate()) return true; await new Promise(r => setTimeout(r, stepMs || 100)); }
@@ -4014,6 +4044,7 @@ try {
       try {
         if (R.url) {
           await loadWithRetry(rp, R.url, "[data-testid=cal-month]", 30000, "item E3 " + R.tag);
+          await probeServedMonth(rp, "item E3 " + R.tag); // 11/2 (date bombs, #13)
           await rp.waitForFunction(() => !/Loading schedule/i.test(document.body.innerText || "") && !!document.querySelector("[data-testid=cal-grid] .cal-cell:not([data-primary=''])"), null, { timeout: 30000 });
           if (await rp.$("button[data-tab]")) throw new Error("the ?public=1 page shows the signed-in nav - it is not the public page");
         } else {
@@ -4567,6 +4598,7 @@ try {
     const e4Load = async (pg, R) => {
       if (R.url) {
         await loadWithRetry(pg, R.url, "[data-testid=cal-month]", 30000, "item E4 " + R.tag);
+        await probeServedMonth(pg, "item E4 " + R.tag); // 11/2 (date bombs, #13)
         await pg.waitForFunction(() => !/Loading schedule/i.test(document.body.innerText || "") && !!document.querySelector("[data-testid=cal-grid] .cal-cell:not([data-primary=''])"), null, { timeout: 30000 });
       } else {
         await loadWithRetry(pg, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "item E4 " + R.tag);
@@ -5923,13 +5955,25 @@ try {
   } catch (e) { fail("Open shifts board: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-openshifts.png"), fullPage: true }); } catch (e2) {} }
   await page.setViewportSize({ width: 1180, height: 900 });
 
-  const now = new Date();
-  // The edit day: the first row-less day from the start of the current month
-  // (so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett'),
-  // scanning forward up to a year once the current month is fully published.
-  const day = (() => { const start = Date.UTC(now.getFullYear(), now.getMonth(), 1); for (let i = 0; i < 366; i++) { const d = utcDay(start + i * 86400000); if (!fixtureHasDay(d) && !liveByDay[d]) return d; } return null; })();
-  if (!day) fail("no row-less day within a year of the current month for the day-editor edit");
-  else if (day.slice(0, 7) !== `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`) console.log(`     (edit day ${day}: the current month is fully published)`);
+  // The edit day: the first row-less day on/after today (Central) whose month keeps three more row-less days after it (the B1
+  // undo step's two spare days and Do first 2's), so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett';
+  // scanning forward up to 400 days once the rest of the current month is published.
+  // 11/2 (date bombs, critic): the scan started at the first of the machine's LOCAL month - once the served rows end before
+  // today the edit day was a past day, and the B1 undo, the publish arrow and the realtime race ran on a past slot.
+  const rowlessDay = (d) => !fixtureHasDay(d) && !liveByDay[d];
+  const day = (() => {
+    for (let i = 0; i < 400; i++) {
+      const d = isoPlus(todayCentral, i);
+      if (!rowlessDay(d)) continue;
+      const dim = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).getUTCDate();
+      let after = 0;
+      for (let k = +d.slice(8, 10) + 1; k <= dim; k++) if (rowlessDay(d.slice(0, 8) + String(k).padStart(2, "0"))) after++;
+      if (after >= 3) return d;
+    }
+    return null;
+  })();
+  if (!day) fail("no row-less day (with three more after it in its month) within 400 days of today for the day-editor edit");
+  else if (day.slice(0, 7) !== todayCentral.slice(0, 7)) console.log(`     (edit day ${day}: the rest of the current month is published)`);
   if (day) {
     // Prompt 16 B1 review: the edit below, the B1 undo step and the realtime race that follows all read `day` as
     // this run left it (P Burchett) - about 20 s of steps that every write-intercepting run races against the
@@ -9242,16 +9286,17 @@ try {
       await page.click("[data-testid=rules-pick-s3]");
       await page.waitForSelector("[data-testid=pattern-row]", { timeout: 5000 });
       const previews = await page.$$eval("[data-testid=pattern-preview]", els => els.map(e => e.textContent));
-      const first = previews[0] || "";
-      const dates = first.match(/\d{4}-\d{2}-\d{2}/g) || [];
-      // 9/30 (TASK 2): the expectation is restated from the SERVED first pattern (Acton's recurringUnavailable[0] in the
-      // blob read up front) - weekday, nth of the month, start / end honoured - the next up-to-8 dates from today
-      // (Central), the preview's own scan (suNextMatchingDates over 730 days). Live settings move ahead of the seed:
-      // Cowork set Acton's 2027 outreach patterns on 10/1, and his first pattern (2nd / 4th Mon) now ends 2026-12-31.
-      // the page renders Acton's editors as recurringAvailable, recurringUnavailable, recurringAvoid (index-source RulesEditor), so
-      // previews[0] is the first pattern across those lists in that order (9/30 review)
+      // 9/30 (TASK 2): the expectation is restated from the SERVED patterns (Acton's, in the blob read up front) - weekday, nth of
+      // the month, start / end honoured - the next up-to-8 dates from today (Central), the preview's own scan (suNextMatchingDates
+      // over 730 days). Live settings move ahead of the seed: Cowork set Acton's 2027 outreach patterns on 10/1, and his first
+      // pattern (2nd / 4th Mon) ends 2026-12-31. The page renders Acton's editors as recurringAvailable, recurringUnavailable,
+      // recurringAvoid (index-source RulesEditor, the SU_RULE_FIELDS order; the clinic-day list comes after them), one preview per
+      // row, so previews[i] is the i-th pattern across those lists in that order (9/30 review).
+      // 11/2 (date bombs, critic): EVERY restatable served pattern is compared, not the first alone - the first one's preview is
+      // empty from 12/29 (its end, 12/31, leaves no match) and the check then compared nothing; at least one compared preview must
+      // list a date, else the check says it was not exercised.
       const s3r = gcBlobEarly.read && gcBlobEarly.surgeonRules && gcBlobEarly.surgeonRules.s3 ? gcBlobEarly.surgeonRules.s3 : null;
-      const servedPat = s3r ? [].concat(Array.isArray(s3r.recurringAvailable) ? s3r.recurringAvailable : [], Array.isArray(s3r.recurringUnavailable) ? s3r.recurringUnavailable : [], Array.isArray(s3r.recurringAvoid) ? s3r.recurringAvoid : [])[0] || null : null;
+      const servedPats = s3r ? [].concat(Array.isArray(s3r.recurringAvailable) ? s3r.recurringAvailable : [], Array.isArray(s3r.recurringUnavailable) ? s3r.recurringUnavailable : [], Array.isArray(s3r.recurringAvoid) ? s3r.recurringAvoid : []) : [];
       const DOWS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
       const expPreview = (p) => {
         // only a plain nth-weekday pattern is restated here (no dates / nthWeekOfMonth / beforeNthMonday / every)
@@ -9266,10 +9311,14 @@ try {
         }
         return out;
       };
-      const want = expPreview(servedPat);
-      if (!want) console.log(`     (Rules: Acton's first served pattern is not an nth-weekday pattern (${JSON.stringify(servedPat)}) - the preview's dates are not restated this run)`);
-      else if (JSON.stringify(dates) !== JSON.stringify(want)) fail(`Rules: the first pattern preview should list ${JSON.stringify(want)} (the served pattern ${JSON.stringify(servedPat)}: the next up-to-8 matching dates, start / end honoured) - got: ` + first.slice(0, 220));
-      else ok(`Rules (Acton): pattern preview lists the served first pattern's next ${want.length} date(s) (${servedPat.weekday} nth ${servedPat.nth.join("/")}${servedPat.start ? " from " + servedPat.start : ""}${servedPat.end ? " to " + servedPat.end : ""}): ${dates[0]} .. ${dates[dates.length - 1]}`);
+      const cmpP = servedPats.map((p, i) => ({ i, p, want: expPreview(p), got: (previews[i] || "").match(/\d{4}-\d{2}-\d{2}/g) || [] })).filter(c => c.want);
+      const badP = cmpP.filter(c => JSON.stringify(c.got) !== JSON.stringify(c.want));
+      const litP = cmpP.filter(c => c.want.length);
+      const patWords = (p) => `${p.weekday} nth ${p.nth.join("/")}${p.start ? " from " + p.start : ""}${p.end ? " to " + p.end : ""}`;
+      if (previews.length < servedPats.length) fail(`Rules: ${previews.length} pattern preview(s) on the page for Acton's ${servedPats.length} served pattern(s)`);
+      else if (badP.length) fail(`Rules: pattern preview #${badP[0].i} should list ${JSON.stringify(badP[0].want)} (the served pattern ${JSON.stringify(badP[0].p)}: the next up-to-8 matching dates, start / end honoured) - got: ${(previews[badP[0].i] || "").slice(0, 220)}${badP.length > 1 ? " (+" + (badP.length - 1) + " more preview(s) off)" : ""}`);
+      else if (!litP.length) console.log(`     (Rules: ${!s3r ? "the served blob was not read up front" : cmpP.length ? "no restatable served pattern of Acton's (" + cmpP.length + " of " + servedPats.length + ") has a date in the next two years" : "none of Acton's " + servedPats.length + " served pattern(s) is a plain nth-weekday pattern"} - the preview's dates are not exercised this run)`);
+      else ok(`Rules (Acton): ${cmpP.length} of ${servedPats.length} served pattern preview(s) restated, ${litP.length} listing dates (start / end honoured) - e.g. #${litP[0].i} ${patWords(litP[0].p)}: ${litP[0].want[0]} .. ${litP[0].want[litP[0].want.length - 1]}`);
       await page.locator("[data-testid=rules-editor]").screenshot({ path: path.join(OUT, "setup-rules-acton.png") });
       // save round trip: maxConsecutiveDays 3 -> 4 -> audit + blob autosave carries it, then back to 3
       let before = writes.length;
@@ -10945,12 +10994,18 @@ try {
           await page.waitForSelector(boxSel(created.id), { timeout: 5000 });
           const box1 = await readBox(created.id);
           const expRemind1 = isOpen(created) ? IDS.slice() : [];
-          // Prompt 26: the new box's words are the roll call's too - nobody painted, so each row reads 'following their rules' or
-          // names the vacations overlapping the new range (restated like the seed period's above)
+          // Prompt 26: the new box's words are the roll call's too - each row reads 'following their rules', names the vacations
+          // overlapping the new range or the days painted there (restated like the seed period's above)
+          // 11/2 (date bombs, critic): the rows' status / offered count are restated from the stores (expStatus / expOffered), not
+          // fixed at not_started / 0 - offers already painted inside the new range (the scheduler's own, when they spill into it)
+          // make that row submitted
           const wordsWrong1 = box1.rows.map(r => rowWordsWrong(r, created)).filter(Boolean);
-          if (box1.rows.length !== 6 || box1.rows.some(r => r.status !== "not_started" || r.offered !== 0) || box1.label !== expLabel || box1.status !== "upcoming" || JSON.stringify(box1.remind) !== JSON.stringify(expRemind1) || !box1.closeNow || (await page.$("[data-testid=prd-form]"))) fail(`Periods create: the new box should read '${expLabel}' upcoming, six not_started rows, Remind on all six, Close now, form folded: ` + JSON.stringify({ label: box1.label, status: box1.status, remind: box1.remind, closeNow: box1.closeNow, rows: box1.rows.map(r => r.text) }));
+          const rollWrong1 = box1.rows.filter(r => r.status !== expStatus(r.id, created) || r.offered !== expOffered(r.id, created));
+          const rollWords1 = (rows) => rows.map(r => `${r.id} ${r.status}${r.offered ? " " + r.offered + "d" : ""}`).join(", ");
+          if (box1.rows.length !== 6 || rollWrong1.length || box1.label !== expLabel || box1.status !== "upcoming" || JSON.stringify(box1.remind) !== JSON.stringify(expRemind1) || !box1.closeNow || (await page.$("[data-testid=prd-form]"))) fail(`Periods create: the new box should read '${expLabel}' upcoming, six rows as the offer / period stores restate them (${box1.rows.map(r => r.id + " " + expStatus(r.id, created) + " " + expOffered(r.id, created) + "d").join(", ")}), Remind on all six, Close now, form folded: ` + JSON.stringify({ label: box1.label, status: box1.status, remind: box1.remind, closeNow: box1.closeNow, rollWrong: rollWrong1.map(r => r.id + " " + r.status + " " + r.offered + "d"), rows: box1.rows.map(r => r.text) }));
           else if (wordsWrong1.length || box1.summary.trim() !== summaryOf(box1.rows)) fail(`Periods create (Prompt 26): the new box's roll call words are off: ${JSON.stringify({ wrong: wordsWrong1, summary: box1.summary, expSummary: summaryOf(box1.rows) }).slice(0, 500)}`);
-          else ok(`Periods create: ONE POST call_periods + ONE audit period.create ("${cAud[0].detail.summary}"); '${expLabel}' renders upcoming with six not_started rows reading '${box1.summary.trim()}' and Remind on each`);
+          else ok(`Periods create: ONE POST call_periods + ONE audit period.create ("${cAud[0].detail.summary}"); '${expLabel}' renders upcoming with six rows (${rollWords1(box1.rows)}) reading '${box1.summary.trim()}' and Remind on each`);
+          if (!expRemind.length && box1.rows.every(r => r.status === "not_started")) console.log("     (Periods (Prompt 26): the served period is frozen and every row of the new box is not_started - 'Remind on every status' and the 'painted' roll call are not exercised this run)");
           // 9/27: the new period closes exactly start - 6 weeks - no short-lead line (strict); the next-period line follows the new last end
           try {
             const lk1 = await leadKinds(created.id);
@@ -12622,21 +12677,31 @@ try {
       if (m.todayBorder === null) console.log(`     (month ${theme}: today's cell is not in the shown month - today ring not measured)`);
       else if (m.todayBorder !== (theme === "dark" ? "rgb(255, 138, 76)" : "rgb(255, 95, 5)")) fail(`month ${theme}: today ring is ${m.todayBorder}, not the orange accent`); else ok(`month ${theme}: today ring ${m.todayBorder}`);
       // every visible pill = the id-keyed table (tx on tg, both themes; an outside surgeon's border dashed)
-      const pillIds = Object.keys(m.pills);
-      const wrongPills = pillIds.filter(id => { const c = themeMod.rosterColors({ id, type: /^s\d+$/.test(id) ? undefined : "external" }, 0); const p = m.pills[id]; return p.color !== rgbOf(c.tx) || p.bg !== rgbOf(c.tg) || p.border !== (c.dashed ? "dashed" : "solid"); });
+      // 11/2 (date bombs, #13): past the served rows today's month holds no pill - the pill, own-ring and OPEN reads move to the
+      // month servedPrimaryMonth names (logged); the header, tabs, .ics buttons, today ring and page background stay on today's
+      let mP = m, pmP = null;
+      if (!Object.keys(m.pills).length && (pmP = servedPrimaryMonth(liveByDay))) {
+        console.log(`     (month ${theme}: today's month ${todayCentral.slice(0, 7)} holds no served primary - the pill reads use ${pmP.label} (served primary ${pmP.day}))`);
+        await showMonth(pmP.y, pmP.m0);
+        await page.waitForTimeout(300);
+        mP = await monthProbe();
+      }
+      const pillIds = Object.keys(mP.pills);
+      const wrongPills = pillIds.filter(id => { const c = themeMod.rosterColors({ id, type: /^s\d+$/.test(id) ? undefined : "external" }, 0); const p = mP.pills[id]; return p.color !== rgbOf(c.tx) || p.bg !== rgbOf(c.tg) || p.border !== (c.dashed ? "dashed" : "solid"); });
       if (!pillIds.length) fail(`month ${theme}: no P pill with a roster holder in the shown month`);
-      else if (wrongPills.length) fail(`month ${theme}: pills off the id-keyed table: ` + wrongPills.map(id => `${id} ${JSON.stringify(m.pills[id])}`).join("; "));
-      else ok(`month ${theme}: ${pillIds.length} pill colour(s) match the id-keyed table - ` + pillIds.map(id => `${id} ${m.pills[id].color}`).join(", "));
+      else if (wrongPills.length) fail(`month ${theme}: pills off the id-keyed table: ` + wrongPills.map(id => `${id} ${JSON.stringify(mP.pills[id])}`).join("; "));
+      else ok(`month ${theme}: ${pillIds.length} pill colour(s) match the id-keyed table - ` + pillIds.map(id => `${id} ${mP.pills[id].color}`).join(", "));
       const wantRing = rgbOf(themeMod.THEME[theme].mineRing) + " 0px 0px 0px " + (theme === "dark" ? "1.5px" : "1px");
-      const offRing = m.mine.filter(x => x.rim !== rgbOf(themeMod.THEME[theme].mineRim) || x.shadow !== wantRing);
-      if (!m.mine.length) console.log(`     (month ${theme}: no pill of s1 in the shown month - the own-day ring is not measured)`);
+      const offRing = mP.mine.filter(x => x.rim !== rgbOf(themeMod.THEME[theme].mineRim) || x.shadow !== wantRing);
+      if (!mP.mine.length) console.log(`     (month ${theme}: no pill of s1 in the shown month - the own-day ring is not measured)`);
       else if (offRing.length) fail(`month ${theme}: ${offRing.length} own-day ring(s) off THEME.${theme}.mineRim / mineRing (${wantRing}): ${JSON.stringify(offRing.slice(0, 3))}`);
-      else ok(`month ${theme}: ${m.mine.length} own-day ring(s) (s1, the scheduler as Khan) in THEME.${theme}.mineRim + ${wantRing}`);
-      if (m.open && m.open !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill is ${m.open}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (m.open) ok(`month ${theme}: OPEN pill ${m.open}`);
+      else ok(`month ${theme}: ${mP.mine.length} own-day ring(s) (s1, the scheduler as Khan) in THEME.${theme}.mineRim + ${wantRing}`);
+      if (mP.open && mP.open !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill is ${mP.open}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (mP.open) ok(`month ${theme}: OPEN pill ${mP.open}`);
       const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
       if (m.bodyBg !== wantBody) fail(`month ${theme}: page background ${m.bodyBg}, expected ${wantBody}`); else ok(`month ${theme}: page background ${m.bodyBg}`);
       await page.screenshot({ path: path.join(OUT, `theme-month-${theme}.png`), fullPage: true });
       ok(`screenshot test/ui/out/theme-month-${theme}.png`);
+      if (pmP) await showMonth(+todayCentral.slice(0, 4), +todayCentral.slice(5, 7) - 1); // back to today's month (#13)
     } catch (e) { fail(`month ${theme}: ` + errLine(e)); }
   }
   try { await clickTab(page, "settings"); await page.click("button:has-text('Light')"); } catch (e) { /* leave the theme as it is */ }
@@ -13632,6 +13697,9 @@ try {
     // read (HTTP 200 + []). Wait for the load to finish AND for real data:
     // no "Loading schedule" text, no loading placeholders, and at least one
     // visible cell with a primary or external cover.
+    // 11/2 (date bombs, #13): past the served rows the probe reads the nearest served month (logged; Item E below moves on to
+    // November 2026 itself)
+    const pubPm = await probeServedMonth(pub, "?public=1");
     const loadedPublic = await pub.waitForFunction(() => {
       const txt = document.body.innerText || "";
       if (/Loading schedule/i.test(txt)) return false;
@@ -13640,8 +13708,8 @@ try {
     }, null, { timeout: 20000 }).then(() => true).catch(() => false);
     const pubCells = await pub.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), ext: e.getAttribute("data-ext"), text: e.textContent })));
     const filled = pubCells.filter(c => c.p || c.ext);
-    if (!loadedPublic || !filled.length) fail(`?public=1: the schedule never loaded (every cell empty/OPEN - the same picture an RLS-blocked anon read gives): ${pubCells.length} cells, filled ${filled.length}, banner: ${(await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "?")).slice(0, 80)}`);
-    else ok(`?public=1: schedule loaded - ${filled.length} of ${pubCells.length} visible cells carry an assignment (e.g. ${filled[0].day} P ${filled[0].p || filled[0].ext})`);
+    if (!loadedPublic || !filled.length) fail(`?public=1: the schedule never loaded${pubPm ? " in " + pubPm.label : ""} (every cell empty/OPEN - the same picture an RLS-blocked anon read gives): ${pubCells.length} cells, filled ${filled.length}, banner: ${(await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "?")).slice(0, 80)}`);
+    else ok(`?public=1: schedule loaded - ${filled.length} of ${pubCells.length} visible cells${pubPm ? " of " + pubPm.label : ""} carry an assignment (e.g. ${filled[0].day} P ${filled[0].p || filled[0].ext})`);
     if (pubP31a.length) fail("?public=1 (P31A A3): the public page called a Prompt 31 Part A function: " + JSON.stringify(pubP31a.slice(0, 4)));
     else ok("?public=1 (P31A A3): no call of silvis_derived_vacations / east_vacation_reset_stale - the public page shows time_off only");
     const pubBanner = await pub.$eval("[data-testid=today-banner]", el => el.textContent).catch(() => "");
