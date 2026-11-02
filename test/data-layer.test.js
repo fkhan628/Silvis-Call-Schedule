@@ -3594,7 +3594,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('>On call now<span className="ocn-until"> (until 07:00 {onCall.handoffDow})</span>:</strong>'), "the until words are a span a phone hides (the text is unchanged)");
     assert.ok(src.includes('{!isPublicMode && <button data-testid="share-today" className="ocn-share" onClick={shareTonightMsg}') && src.includes('{copied ? "Copied" : <>Share<span className="ocn-share-long"> today</span></>}'), "Share: the phone class; 'today' a span a phone hides");
     assert.ok(src.includes("  const [calPickOpen, setCalPickOpen] = useState(false);"), "the pickers start closed");
-    assert.ok(src.includes('<button type="button" data-testid="cal-month-toggle" className="cal-title-btn" aria-controls="cal-picks" aria-expanded={calPickOpen} aria-label="Choose month and year" onClick={()=>setCalPickOpen(o => !o)}'), "the title's toggle");
+    assert.ok(src.includes('<button type="button" data-testid="cal-month-toggle" className="cal-title-btn" aria-controls="cal-picks" aria-expanded={calPickOpen} aria-label={MO[calMonth] + " " + calYear + " - choose month and year"} onClick={()=>setCalPickOpen(o => !o)}'), "the title's toggle - its name carries the month it shows (review 11/1)");
     const pk0 = at('<div id="cal-picks" className={"cal-picks" + (calPickOpen ? " cal-picks-open" : "")}>'), pk = src.slice(pk0, src.indexOf("</div>", pk0));
     assert.ok(pk0 > 0 && pk.includes('<select data-testid="cal-month-select"') && pk.includes('<input data-testid="cal-year-input"'), "the month select and the year field live in the pickers' wrapper");
     assert.strictEqual(count('className="cal-chip"'), 1, "the chips' class (one map)");
@@ -7159,7 +7159,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("N6: ONE nav in the DOM - the header nav off a phone only, the bar on one only (600 px), both from navTabs; More is no data-tab destination; the slots per role (Faraz 11/1: Calendar, Mine, Open shifts, Time off - each where the role has it - then More)", () => {
       assert.strictEqual(n6c('const isPhone = useMediaQuery("(max-width: 600px)");'), 1);
       assert.strictEqual(n6c("{!isPublicMode && !isPhone && <div style={css.nav}>"), 1);
-      assert.strictEqual(n6c("const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !!userProfile && !paintSheet && !offerSheet;"), 1);
+      // review 11/1: not held for the profile read (a slow read must never leave a phone without a nav)
+      assert.strictEqual(n6c("const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !paintSheet && !offerSheet;"), 1);
       assert.ok(N6SRC.includes('{tabBarShown && (\n        <nav data-testid="tabbar" className="tabbar" aria-label="Main"'));
       assert.strictEqual(n6c("const allTabs = ["), 1, "one tab list");
       assert.strictEqual(n6c("data-tab={k}"), 5, "the header nav, the bar, and the More sheet's Totals, Settings and Setup rows");
@@ -7175,7 +7176,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(N6SRC.includes('{tabBarShown && (\n        <div id="more-sheet" ref={moreSheetRef} data-testid="more-sheet" className="more-sheet" role="dialog" aria-modal="true" aria-labelledby="more-sheet-title" hidden={!moreOpen} onKeyDown={sheetTabKeyDown}'), "mounted with the bar, hidden when closed");
       assert.ok(N6SRC.includes('{tabBarShown && moreOpen && <div className="sheet-backdrop" data-testid="more-backdrop" onClick={() => closeMore(true)}'), "the backdrop only while open");
       const sh = N6SRC.slice(N6SRC.indexOf('data-testid="more-sheet"'), N6SRC.indexOf("{/* --- end of the phone tab bar --- */}"));
-      const at = ['moreTabs.filter(([k]) => k === "totals")', 'data-testid="nav-paint-offers"', 'moreTabs.filter(([k]) => k === "settings")', 'aria-label="Notifications"', 'moreTabs.filter(([k]) => k === "setup")', 'data-testid="undo-btn"'].map(s => sh.indexOf(s));
+      const at = ['moreTabs.filter(([k]) => k === "totals")', 'data-testid="nav-paint-offers"', 'moreTabs.filter(([k]) => k === "settings")', 'data-alerts=""', 'moreTabs.filter(([k]) => k === "setup")', 'data-testid="undo-btn"'].map(s => sh.indexOf(s));
+      // review 11/1: the Alerts row is named by what it shows - "Alerts" plus the unread count (label in name), not "Notifications"
+      assert.ok(sh.includes('aria-label={"Alerts" + (myUnreadCount > 0 ? ", " + myUnreadCount + " unread" : "")}') && !sh.includes('aria-label="Notifications"'), "the Alerts row's name");
       assert.ok(at.every((x, i) => x > 0 && (i === 0 || x > at[i - 1])), "the More rows' order: " + JSON.stringify(at));
       assert.ok(sh.includes("{mySurgeon && (") && sh.includes("{isScheduler && scheduleHistory.length > 0 && ("), "Paint offers for a linked surgeon, Undo for the scheduler with history");
     });
@@ -7194,7 +7197,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(n6c("const bannerLift = tabBarShown ? TABBAR_H : 0;"), 1);
       assert.strictEqual(n6c(", bannerLift),fontSize:12.5"), 3);
       const line = N6SRC.split("\n").find(l => l.includes('data-testid="toast-box"')) || "";
-      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? css.aboveTabBar(24) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
+      // review 11/1: while a phone sheet (More, Alerts) stands on the bar the toast sits at the top (css.topToast), never over the sheet's rows
+      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? ((moreOpen || showNotifs) ? css.topToast : css.aboveTabBar(24)) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
+      assert.deepStrictEqual(st6.css.topToast, { top: "calc(12px + env(safe-area-inset-top, 0px))", bottom: "auto" }, "the top placement, from app-styles (no new inset reader in index-source.html)");
       assert.ok(a > 0 && b > a && c > b);
       assert.ok(N6SRC.includes('document.documentElement.style.scrollPaddingBottom = tabBarShown ? TABBAR_CLEAR : "";'));
       const pr = N6SRC.slice(N6SRC.indexOf("@media print {"), N6SRC.indexOf("@page"));

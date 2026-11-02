@@ -2110,10 +2110,20 @@ const openNotifSettings = async (pg) => {
 // the bar shows (hidden when closed), so a read of button[data-tab] sees every destination once at any width; a click on a More
 // row waits for it to show, so the helpers below open More first. Keyed on what the page shows, never a viewport number: on a
 // wide page, or for a bar tab, they are the plain click they replace.
-const MORE_BTN = "[data-testid=tabbar-more]", MORE_SHEET = "[data-testid=more-sheet]", ALERTS_BTN = 'button[aria-label="Notifications"]';
-const openMoreSheet = async (pg) => { if (!(await pg.isVisible(MORE_SHEET))) await pg.click(MORE_BTN); await pg.waitForSelector(MORE_SHEET, { state: "visible", timeout: 5000 }); };
+// ALERTS_BTN: the wide nav's Alerts button (aria-label Notifications) or, on a phone, the More sheet's Alerts row (data-alerts - it
+// is named by what it shows, "Alerts" + the unread count); its first span is the unread count either way
+const MORE_BTN = "[data-testid=tabbar-more]", MORE_SHEET = "[data-testid=more-sheet]", ALERTS_BTN = 'button[aria-label="Notifications"], button[data-alerts]';
+// The nav that matches the viewport: right after a setViewportSize across 600 px the app re-renders on matchMedia's change event -
+// wait for that render (no header tab on a phone, no bar off one), so a click never heads for the nav that is leaving
+const settleNav = (pg) => pg.waitForFunction(() => { const phone = window.matchMedia("(max-width: 600px)").matches; return phone ? !document.querySelector("[data-testid=app-header] button[data-tab]") : !document.querySelector("[data-testid=tabbar]"); }, null, { timeout: 5000 }).catch(() => {});
+// More opens with a 140 ms slide (translateY 12 px -> 0): measurements wait for it to finish
+const openMoreSheet = async (pg) => {
+  if (!(await pg.isVisible(MORE_SHEET))) await pg.click(MORE_BTN);
+  await pg.waitForSelector(MORE_SHEET, { state: "visible", timeout: 5000 });
+  await pg.waitForFunction(() => { const s = document.querySelector("[data-testid=more-sheet]"); return !!s && !s.hidden && s.getAnimations().every(a => a.playState !== "running"); }, null, { timeout: 2000 }).catch(() => {});
+};
 const closeMoreSheet = async (pg) => { if (await pg.isVisible(MORE_SHEET)) { await pg.keyboard.press("Escape"); await pg.waitForSelector(MORE_SHEET, { state: "hidden", timeout: 5000 }); } };
-const clickNav = async (pg, sel) => { if (!(await pg.isVisible(sel)) && (await pg.isVisible(MORE_BTN))) await openMoreSheet(pg); await pg.click(sel); };
+const clickNav = async (pg, sel) => { await settleNav(pg); if (!(await pg.isVisible(sel)) && (await pg.isVisible(MORE_BTN))) await openMoreSheet(pg); await pg.click(sel); };
 const clickTab = (pg, key) => clickNav(pg, `button[data-tab="${key}"]`);
 // The phone nav as a page shows it, read without opening anything: the bar's buttons in order (data-tab, or tabbar-more), their
 // labels, the More sheet's rows in order (data-tab / testid / alerts), More's badge and the Alerts row's count; null off a phone.
@@ -2121,10 +2131,10 @@ const phoneNavModel = (pg) => pg.evaluate(() => {
   const bar = document.querySelector("[data-testid=tabbar]");
   if (!bar) return null;
   const sheet = document.querySelector("[data-testid=more-sheet]");
-  const key = (b) => b.getAttribute("data-tab") || b.getAttribute("data-testid") || (b.getAttribute("aria-label") === "Notifications" ? "alerts" : "?");
+  const key = (b) => b.getAttribute("data-tab") || b.getAttribute("data-testid") || (b.hasAttribute("data-alerts") ? "alerts" : "?");
   const label = (b) => { const l = b.querySelector(".tabbar-label"); return (l ? l.textContent : b.textContent).trim(); };
   const rows = sheet ? Array.from(sheet.querySelectorAll("[data-more-item]")) : [];
-  const alertsRow = rows.find(b => b.getAttribute("aria-label") === "Notifications");
+  const alertsRow = rows.find(b => b.hasAttribute("data-alerts"));
   const badge = document.querySelector("[data-testid=more-badge]");
   return { bar: Array.from(bar.children).map(key), labels: Array.from(bar.children).map(label), more: rows.map(key), moreBadge: badge ? badge.textContent.trim() : "",
     alertsCount: alertsRow ? ((alertsRow.querySelector("span") || { textContent: "" }).textContent || "").trim() : "", sheetMounted: !!sheet, sheetHidden: !!sheet && sheet.hidden,
@@ -2995,6 +3005,11 @@ try {
     // that Monday, To = the Sunday 41 days on, six week rows, no widened-range note; the fixed button (er-preset-1213) is gone
     {
       const b6 = await page.$eval("[data-testid=er-preset-6w]", el => ({ text: el.textContent.trim(), title: el.title || "" })).catch(() => null);
+      // review 11/1: start from the visible month (er-reset) - from 11/1 to 11/7 the preset equals the 11/2-12/13 range typed just
+      // before, and a click that did nothing would read back the same From / To
+      await page.click("[data-testid=er-reset]");
+      await page.waitForFunction(() => { const f = document.querySelector("[data-testid=er-from]"); return !!f && f.value !== "2026-11-02"; }, null, { timeout: 3000 }).catch(() => {});
+      const pre6 = await page.$eval("[data-testid=er-from]", el => el.value);
       if (b6) await page.click("[data-testid=er-preset-6w]");
       const t6 = await page.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : ""));
       const ok6 = typeof t6 === "string" && t6.length === 10 && t6[4] === "-" && t6[7] === "-";
@@ -3010,7 +3025,8 @@ try {
       else if (!weeks6 || weeks6[5] !== isoAddDays(mon6, 35)) fail(`ER panel Next 6 weeks: expected six week rows ${mon6} .. ${isoAddDays(mon6, 35)}, got ${JSON.stringify(weeks6)}`);
       else if (note6) fail("ER panel Next 6 weeks: the widened-range note shows for a Mon..Sun range");
       else if (b6.title !== `Six Mon-Sun weeks: ${mdOf(mon6)} - ${mdOf(sun6)}`) fail(`ER panel Next 6 weeks: the button's title reads '${b6.title}'`);
-      else ok(`ER panel Next 6 weeks: today ${t6} -> ${mon6} .. ${sun6} (six Mon-Sun rows ${weeks6[0]} .. ${weeks6[5]}, no widened-range note; title '${b6.title}')`);
+      else if (pre6 === mon6) console.log(`     (ER panel Next 6 weeks: the visible month already starts on ${mon6} - the click's change of From is not exercised this run)`);
+      else ok(`ER panel Next 6 weeks: today ${t6} -> ${mon6} .. ${sun6} (From moved from the visible month's ${pre6}; six Mon-Sun rows ${weeks6[0]} .. ${weeks6[5]}, no widened-range note; title '${b6.title}')`);
     }
     await page.click("[data-testid=er-reset]");
   } catch (e) { fail("ER panel: " + errLine(e)); }
@@ -4728,6 +4744,10 @@ try {
         if (g.slots.some(s => s.w < 44 || s.h < 44 || s.clipped)) bad.push("a slot under 44 px or a clipped label: " + JSON.stringify(g.slots));
         if (g.pageW > 392) bad.push(`the page scrolls sideways (${g.pageW})`);
       }
+      // the in-flow spacer is exactly the bar's height (review 11/1: app-main's own 60 px padding alone would hide a missing spacer
+      // at 390 px - the 34 px home-indicator band makes the bar 90 px; the safe-area block checks that case too)
+      const sp6 = await page.evaluate(() => { const s = document.querySelector(".tabbar-spacer"), bar = document.querySelector("[data-testid=tabbar]"); return s && bar ? { spacer: Math.round(s.getBoundingClientRect().height), bar: Math.round(bar.getBoundingClientRect().height) } : null; });
+      if (!sp6 || sp6.spacer !== sp6.bar) bad.push("the spacer is not the bar's height: " + JSON.stringify(sp6));
       const m = await phoneNavModel(page);
       const wantMore = ["totals", "nav-paint-offers", "settings", "alerts", "setup"];
       if (!m || m.more.slice(0, 5).join(",") !== wantMore.join(",") || m.more.slice(5).some(k => k !== "undo-btn") || !m.sheetMounted || !m.sheetHidden) bad.push("More's rows / state: " + JSON.stringify(m && { more: m.more, mounted: m.sheetMounted, hidden: m.sheetHidden }));
@@ -4751,12 +4771,15 @@ try {
       // every view through the bar / More: renders, More closed, one current destination, the page's end above the bar
       for (const k of ["calendar", "myschedule", "openshifts", "timeoff", "totals", "settings", "setup"]) {
         const before = pageErrors.length;
+        // review 11/1: start scrolled down, so 'shows the page from its top' (tabBarGo's scrollTopNow) is really tested
+        const y0 = await page.evaluate(() => { window.scrollTo(0, 600); return Math.round(window.scrollY); });
         await clickTab(page, k);
         await page.waitForTimeout(400);
         const st = await page.evaluate((key) => ({ sheetHidden: document.querySelector("[data-testid=more-sheet]").hidden, current: Array.from(document.querySelectorAll("[data-testid=tabbar] [aria-current=page], [data-testid=more-sheet] [aria-current=page]")).map(b => b.getAttribute("data-tab")), y: Math.round(window.scrollY) }), k);
         const end = await lastAboveBar(page);
         if (pageErrors.length > before) bad.push(`${k}: a page error`);
-        if (!st.sheetHidden || st.current.join(",") !== k || st.y !== 0) bad.push(`${k}: ${JSON.stringify(st)}`);
+        if (!st.sheetHidden || st.current.join(",") !== k || st.y !== 0) bad.push(`${k}: ${JSON.stringify({ ...st, scrolledFrom: y0 })}`);
+        if (!y0) console.log(`     (${N6}: the page before ${k} could not scroll down - its scroll-to-top is not exercised)`);
         if (!end || end.lastBottom === null || end.lastBottom > end.barTop) bad.push(`${k}: the page's last content ends under the bar ${JSON.stringify(end)}`);
       }
       const mark = await page.evaluate(() => !!document.querySelector("[data-testid=tabbar-more] > span[aria-hidden=true]"));
@@ -4875,9 +4898,9 @@ try {
       else ok(`safe area (390 x 844, insets 47 / 34): viewport-fit=cover, theme-color kept, header padding-top ${saHdr.padTop} / bottom ${saHdr.padBottom}`);
       // 11/1 item 6: the bottom tab bar under the 34 px home-indicator band - on the bottom edge, padded by the inset (56 + 34 =
       // 90 px), its tabs ending above the band
-      const saBar = await page.$eval("[data-testid=tabbar]", el => { const cs = getComputedStyle(el), r = el.getBoundingClientRect(), b = el.querySelector("button").getBoundingClientRect(); return { padBottom: cs.paddingBottom, h: Math.round(r.height), bottom: Math.round(r.bottom), btnBottom: Math.round(b.bottom), vh: window.innerHeight }; }).catch(() => null);
+      const saBar = await page.$eval("[data-testid=tabbar]", el => { const cs = getComputedStyle(el), r = el.getBoundingClientRect(), b = el.querySelector("button").getBoundingClientRect(), s = document.querySelector(".tabbar-spacer"); return { padBottom: cs.paddingBottom, h: Math.round(r.height), bottom: Math.round(r.bottom), btnBottom: Math.round(b.bottom), vh: window.innerHeight, spacer: s ? Math.round(s.getBoundingClientRect().height) : null }; }).catch(() => null);
       if (!saBar) fail("safe area: 11/1 item 6 - no tab bar at 390 px");
-      else if (saBar.padBottom !== "34px" || saBar.h !== 90 || saBar.bottom !== saBar.vh || saBar.btnBottom > saBar.vh - 34) fail("safe area: 11/1 item 6 - the tab bar should stand on the bottom edge, 90 px with 34 px of inset padding, its tabs above the band: " + JSON.stringify(saBar));
+      else if (saBar.padBottom !== "34px" || saBar.h !== 90 || saBar.bottom !== saBar.vh || saBar.btnBottom > saBar.vh - 34 || saBar.spacer !== 90) fail("safe area: 11/1 item 6 - the tab bar should stand on the bottom edge, 90 px with 34 px of inset padding, its tabs above the band, and the spacer 90 px too: " + JSON.stringify(saBar));
       else ok(`safe area: 11/1 item 6 - the tab bar is ${saBar.h} px on the bottom edge (padding-bottom ${saBar.padBottom}); its tabs end at ${saBar.btnBottom} of ${saBar.vh}, above the 34 px band`);
       await page.evaluate(() => { const t = document.querySelector("[data-testid=toast]"); if (t) t.click(); });
       await page.waitForTimeout(150);
@@ -15316,9 +15339,11 @@ try {
         // 11/1 item 6: no Mine, so the bar is Calendar / Open shifts / Time off / More; More holds Totals, Settings, Alerts; no pay words
         await checkPhoneNav(pv, `viewer (${theme}, 390)`, { bar: ["calendar", "openshifts", "timeoff", "tabbar-more"], labels: ["Calendar", "Open shifts", "Time off", "More"], more: ["totals", "settings", "alerts"] }, true);
         // The tab reads "Time off" (no "& Trades") - the trades section returns null for the role, so the label must not promise it.
+        // 11/1 item 6 (review): at 390 px this is the phone tab bar's tab, whose label is "Time off" for EVERY role (a fifth of the
+        // screen); the role's own wide-nav label ("Time off" for the office and a viewer) is read at 1180 by the E3 / E4 role premises
         const timeoffLabel = await pv.$eval("button[data-tab=timeoff]", el => (el.textContent || "").trim());
-        if (!/^Time off$/.test(timeoffLabel)) fail(`viewer (${theme}): the Time off tab should read 'Time off' (no trade card behind it), got '${timeoffLabel}'`);
-        else ok(`viewer (${theme}): the tab reads 'Time off' (no '& Trades')`);
+        if (!/^Time off$/.test(timeoffLabel)) fail(`viewer (${theme}): the phone bar's Time off tab should read 'Time off', got '${timeoffLabel}'`);
+        else ok(`viewer (${theme}): the phone bar's tab reads 'Time off' (no '& Trades'; the bar's fixed label - the wide nav's role label is read at 1180)`);
         // (b) Time off & Trades: one 'Vacations' card with the viewer's sentence, no form, no trade card, no 'not linked' anywhere
         await pv.click('button[data-tab="timeoff"]');
         await pv.waitForSelector("[data-testid=timeoff-card]", { timeout: 8000 });
@@ -15346,7 +15371,7 @@ try {
         else if (sBody.split(NOT_LINKED).length - 1) fail(`viewer (${theme}): the 'not linked' sentence appears on Settings`);
         else ok(`viewer (${theme}): Live calendar sync = the public full-schedule URL only (${full.replace("https://" + SUPABASE_HOST, "<project>")}); Account line 'a read-only account'`);
         // (d) Alerts: the badge counts the two visible rows; the panel lists exactly open_shifts + schedule_published (newest first)
-        const badge = await pv.$eval('button[aria-label="Notifications"]', el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
+        const badge = await pv.$eval(ALERTS_BTN, el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
         // 11/1 item 6: on a phone the unread count rides on the tab bar's More too (the Alerts row in its sheet carries it first)
         const moreBadgeV = await pv.$eval("[data-testid=more-badge]", el => el.textContent.trim()).catch(() => "");
         await clickNav(pv, ALERTS_BTN);
@@ -15612,7 +15637,7 @@ try {
           } catch (e) { fail(`${R2}: ` + errLine(e)); }
         }
         // (d) Alerts
-        const badge = await pf.$eval('button[aria-label="Notifications"]', el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
+        const badge = await pf.$eval(ALERTS_BTN, el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
         // 11/1 item 6: on a phone the unread count rides on the tab bar's More too (the Alerts row in its sheet carries it first)
         const moreBadgeF = await pf.$eval("[data-testid=more-badge]", el => el.textContent.trim()).catch(() => "");
         await clickNav(pf, ALERTS_BTN);

@@ -238,6 +238,12 @@
       .mine-hol-name { display: none; }
       .mine-hol-letter { display: inline; }
     }
+    /* item 1 review (11/1): at 340 px and under (an iPhone SE 1st generation, Display Zoom on the small phones) the month title
+       keeps its year - a 13 px title and a slimmer Today (its 44 px minimum stays) */
+    @media (max-width: 340px) {
+      .cal-title > :first-child { font-size: 13px !important; }
+      .cal-navbtn:not(.cal-navarrow) { padding-left: 4px !important; padding-right: 4px !important; }
+    }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
        ?v=APP_VERSION loader at the top of <body>; no script comes from a CDN. config.js captures the
@@ -7305,13 +7311,13 @@ function CallSchedule() {
   const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
   const pendingTradesTitle = isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer";
   const openSlotsTitle = boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "");
-  // 11/1 item 6 - the phone's bottom tab bar. Shown once the signed-in shell renders on a phone with the profile in (the header's
-  // gate plus userProfile: right after a password sign-in the slots would otherwise jump), never on ?public=1 / sign-in / loading
-  // / Welcome back, and not under a full-screen painter sheet (it owns the bottom edge and its own insets; keys must not reach a
-  // bar behind it). The centred dialogs (day editor, claim sheet, e-mail preview, Recent errors, publish) cover it with their
+  // 11/1 item 6 - the phone's bottom tab bar. Shown whenever the signed-in shell renders on a phone (the header nav's own gate -
+  // review 11/1: not held for the profile read, so a slow read never leaves a phone without a nav; the role's slots fill in when
+  // the profile lands, as the wide nav's do), never on ?public=1 / sign-in / loading / Welcome back, and not under a full-screen
+  // painter sheet (it owns the bottom edge and its own insets; keys must not reach a bar behind it). The centred dialogs (day editor, claim sheet, e-mail preview, Recent errors, publish) cover it with their
   // backdrop. Slots (Faraz 11/1): Calendar, Mine (Following), Open shifts, Time off - each where the role has it - then More:
   // Totals, Paint offers, Settings, Alerts, and Setup and Undo for the scheduler.
-  const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !!userProfile && !paintSheet && !offerSheet;
+  const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !paintSheet && !offerSheet;
   const barTabs = ["calendar", "myschedule", "openshifts", "timeoff"].map(k => navTabs.find(([t]) => t === k)).filter(Boolean);
   const moreTabs = navTabs.filter(([k]) => !barTabs.some(([b]) => b === k));
   const viewInMore = moreTabs.some(([k]) => k === view);
@@ -7437,9 +7443,10 @@ function CallSchedule() {
           Review of Do first 8 (10/2): width max-content up to min(90vw, 640px) - with left 50% and no width the box
           shrank to the right half of the screen (195 px on a 390 px phone, a 160-character error 10 lines tall); over
           the day editor / claim sheet it lifts above their action row (toastLift). 11/1 item 6: while the phone tab bar shows it
-          sits 24 px above the bar (css.aboveTabBar); the lift still wins over a dialog. */}
+          sits 24 px above the bar (css.aboveTabBar), and at the top while a phone sheet (More, Alerts) stands on the bar
+          (css.topToast - review 11/1: it covered the sheet's bottom rows); the lift still wins over a dialog. */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(tabBarShown ? css.aboveTabBar(24) : {}),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(tabBarShown ? ((moreOpen || showNotifs) ? css.topToast : css.aboveTabBar(24)) : {}),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           <span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>
           {toast.count > 1 && <span data-testid="toast-count" title={"Shown " + toast.count + " times"} style={{flexShrink:0,background:"rgba(255,255,255,0.22)",borderRadius:8,padding:"1px 7px",fontSize:11,fontWeight:700}}>{"x" + toast.count}</span>}
           {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-10px -12px -10px 0",minWidth:36,minHeight:36,lineHeight:1,fontFamily:font}}>x</button>}
@@ -8121,7 +8128,7 @@ function CallSchedule() {
                 <span className="cal-title">
                   <span data-testid="cal-month" style={{fontSize:15,fontWeight:700,color:dkText,minWidth:150,textAlign:"center"}}>{MO[calMonth]} {calYear}</span>
                   <span className="cal-caret" aria-hidden="true" style={{width:0,height:0,borderLeft:"4px solid transparent",borderRight:"4px solid transparent",borderTop:"5px solid " + dkSubtext,marginLeft:6}}/>
-                  <button type="button" data-testid="cal-month-toggle" className="cal-title-btn" aria-controls="cal-picks" aria-expanded={calPickOpen} aria-label="Choose month and year" onClick={()=>setCalPickOpen(o => !o)} style={{background:"transparent",border:"none",padding:0,cursor:"pointer"}}/>
+                  <button type="button" data-testid="cal-month-toggle" className="cal-title-btn" aria-controls="cal-picks" aria-expanded={calPickOpen} aria-label={MO[calMonth] + " " + calYear + " - choose month and year"} onClick={()=>setCalPickOpen(o => !o)} style={{background:"transparent",border:"none",padding:0,cursor:"pointer"}}/>
                 </span>
                 <button onClick={nextMonth} aria-label="Next month" className="cal-navbtn cal-navarrow" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&rsaquo;</button>
                 <button onClick={goToday} data-testid="cal-today" className="cal-navbtn" style={{...css.btn(false),padding:"5px 10px",fontSize:11}}>Today</button>
@@ -9410,9 +9417,12 @@ function CallSchedule() {
               <NavIcon name={k}/>{l}
             </button>
           ))}
-          <button type="button" data-more-item="" className="more-row" aria-label="Notifications" onClick={openAlertsSheet} style={moreRow}>
+          {/* Alerts: named by what it shows (the visible "Alerts" plus the unread count - review 11/1); data-alerts marks it for the
+              smoke. Its ink sits in a T.text span (the dark sheet repaints a plain button's own colour); the count span comes first in
+              the DOM (the smoke reads the row's first span) and is drawn last (order 2) */}
+          <button type="button" data-more-item="" data-alerts="" className="more-row" aria-label={"Alerts" + (myUnreadCount > 0 ? ", " + myUnreadCount + " unread" : "")} onClick={openAlertsSheet} style={moreRow}>
             {myUnreadCount > 0 && <span style={{order:2,marginLeft:"auto",minWidth:20,height:20,padding:"0 6px",borderRadius:10,background:T.accent,color:T.onAccent,fontSize:11,fontWeight:700,lineHeight:"20px",textAlign:"center"}}>{myUnreadCount}</span>}
-            <NavIcon name="alerts"/>Alerts
+            <span style={{display:"flex",alignItems:"center",gap:14,color:T.text}}><NavIcon name="alerts"/>Alerts</span>
           </button>
           {moreTabs.filter(([k]) => k === "setup").map(([k,l]) => (
             <button key={k} type="button" data-more-item="" data-tab={k} className="more-row" aria-current={view === k ? "page" : undefined} onClick={() => { closeMore(true); tabBarGo(k); }} style={{...moreRow,...(view === k ? {color:T.accentText} : {})}}>

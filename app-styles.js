@@ -175,6 +175,9 @@ const css = {
   tabBar: { position:"fixed", left:0, right:0, bottom:0, zIndex:9100, display:"flex", alignItems:"stretch", height:TABBAR_CLEAR, paddingBottom:SAFE_AREA.bottom, boxSizing:"border-box" },
   tabBarSpacer: { height:TABBAR_CLEAR },
   aboveTabBar: (gap) => ({ bottom: `calc(${TABBAR_H + (gap || 0)}px + ${SAFE_AREA.bottom})` }),
+  // ... and while a phone sheet (More, Alerts) stands on the bar a toast sits at the top instead, as over the painter sheets - it
+  // never covers the sheet's rows (an Alerts give's Accept / Decline; review 11/1)
+  topToast: { top: `calc(12px + ${SAFE_AREA.top})`, bottom: "auto" },
   sub: { fontSize:11, color:LIGHT.navyMuted, margin:"2px 0 0", letterSpacing:0.8, textTransform:"uppercase" },
   nav: { display:"flex", gap:3, flexWrap:"wrap" },
   // Nav tabs sit on the navy bar: the active tab is lifted a touch and underlined in the accent (the caller passes T.accent so dark mode gets its own).

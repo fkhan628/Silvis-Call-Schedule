@@ -749,7 +749,8 @@ buttons, the notification center, the refresh/version banner, and Settings → D
     each where the role has it - then More, whose sheet (mounted while the bar shows, `hidden` when closed) holds Totals, Paint offers
     (a linked surgeon), Settings, Alerts (the unread count on More too), and Setup and Undo for the scheduler. The bar is navy in both
     themes (`css.tabBar`, z 9100, 56 px + the home-indicator inset - `TABBAR_H` / `TABBAR_CLEAR` in app-styles.js); the three
-    bottom banners stand on it (`css.bottomBanner(n, bannerLift)`), the toast sits 24 px above it (`css.aboveTabBar(24)`), the page's
+    bottom banners stand on it (`css.bottomBanner(n, bannerLift)`), the toast sits 24 px above it (`css.aboveTabBar(24)`; at the top -
+    `css.topToast` - while More or the phone Alerts sheet is open, so it never covers their rows), the page's
     scroll padding and an in-flow spacer keep content above it; More and the phone Alerts sheet are modal sheets on the bar (Escape,
     the Tab trap, focus back on More); a bar tap or a More pick shows the page from its top. The bar is absent on `?public=1`, the
     sign-in cards and under the painter sheets. Icons are inline SVG (`NavIcon`, hidden from assistive tech). The smoke reaches More
