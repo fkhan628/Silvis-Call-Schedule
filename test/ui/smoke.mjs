@@ -7431,20 +7431,22 @@ try {
       await page.waitForTimeout(3300);
       if (await page.$("[data-testid=ofp-saved]")) fail("Offer painter: the saved note did not clear after 3 s"); else ok("Offer painter: the saved note cleared after 3 s");
       // tap-again on a saved day drafts a clear; Close on a dirty draft confirms (dismissed = the sheet stays); Discard restores.
-      // 11/2 (time travel 1/4/2027): the saved d1 can read 'blocked' (grey) after the save - the Primary brush then does nothing
-      // (canTap), Close shut the clean sheet and the Discard click waited 30 s. A greyed saved offer is cleared with the Clear brush
-      // (the app's path for it, data-clearable); its grey reason is printed, so a wrong grey stays visible. A PRIMARY-only block ('backup only - ...':
-      // fix-check 2 - on 1/4/2027 Fierce's derived week holds 2/2's primary, masked before the save by Khan's Tuesday rule: an app
-      // question reported to Faraz) makes the Primary tap a no-op too - Clear drafts a clear on any saved, non-past, non-frozen row
+      // 11/2 (time travel 1/4/2027 + fix-checks): the saved d1 2/2 read 'saved' / 'backup only - your East/Silvis week' after the save
+      // - a PRIMARY-only block the pre-save picture hid behind Khan's Tuesday confirm (eligibility() returns at the pattern block; the
+      // saved offer lifts the pattern and Fierce's derived week shows - an app question for Faraz). The Primary tap is a no-op there,
+      // so that diagnosed case (a primary confirm code before the save) takes the Clear brush; a 'blocked' (grey) saved row with
+      // data-clearable takes it too (a defensive path no observed date takes); any other post-save primary block FAILs, naming it
       const d1Cell = await page.$eval(`[data-testid=ofp-day][data-day="${d1}"]`, el => ({ state: el.getAttribute("data-state"), why: el.getAttribute("data-why") || "", clearable: el.getAttribute("data-clearable") }));
-      const d1Brush = d1Cell.state === "blocked" || /^backup only - /.test(d1Cell.why) ? "clear" : "primary";
+      const d1Masked = /^backup only - /.test(d1Cell.why) && confirmCodesOf(d1, "primary").length > 0;
+      const d1Brush = d1Cell.state === "blocked" || d1Masked ? "clear" : "primary";
       if (d1Cell.state === "blocked" && d1Cell.clearable !== "1") fail(`Offer painter: the saved ${d1} reads blocked and not clearable after the save ('${d1Cell.why}') - the tap-again / Close / Discard step cannot run`);
+      else if (/^backup only - /.test(d1Cell.why) && !d1Masked) fail(`Offer painter: the saved ${d1} reads '${d1Cell.why}' after the save although it read free with no primary confirm before it - a just-saved primary offer the painter now blocks`);
       else {
-        if (d1Brush === "clear") console.log(`     (Offer painter: the saved ${d1} reads ${d1Cell.state} after the save ('${d1Cell.why}') - Primary cannot draft there, so the tap-again step clears it with the Clear brush)`);
+        if (d1Brush === "clear") console.log(`     (Offer painter: the saved ${d1} ${d1Masked ? "read free before the save (confirm " + confirmCodesOf(d1, "primary").join(", ") + ") and '" + d1Cell.why + "' after it - the pattern masked a primary block" : "reads blocked after the save ('" + d1Cell.why + "')"}; Primary cannot draft there, so the tap-again step clears it with the Clear brush)`);
         await page.click(`[data-testid=ofp-brush-${d1Brush}]`); await tap(d1);
         const clearState = await stateOf(d1);
-        // 11/2 (time travel 1/4/2027): a tap the painter skips (a one-role block, a declined confirm) drafts nothing - Close then shut the
-        // clean sheet and the Discard click waited out 30 s; the cell and the painter's hint (it names a skip) go into the FAIL instead
+        // 11/2: an unexpected skip (the tap drafted nothing) FAILs at once with the cell and the painter's hint, which names the skip -
+        // never a 30 s wait for a Discard button a clean sheet does not show
         if (clearState.state !== "draft" || clearState.offer !== "") {
           const tapHint = await page.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
           const d1After = await page.$eval(`[data-testid=ofp-day][data-day="${d1}"]`, el => ({ state: el.getAttribute("data-state"), offer: el.getAttribute("data-offer"), why: el.getAttribute("data-why") || "" })).catch(() => null);
@@ -9016,7 +9018,7 @@ try {
     if (fcIdx > 0) console.log(`     (small items: by the rules nobody may hold primary on ${fcCands.slice(0, fcIdx).join(", ")} - the fail-closed day moves to ${fcDay})`);
     else if (fcIdx < 0 && fcCands.length) console.log(`     (small items: by the rules nobody may hold primary on any of the next ${fcCands.length} row-less weekdays from ${fcCands[0]} - the restored check reads ${fcCands[0]})`);
     if (!fcDay || weekendTriples.length < 2) throw new Error(`no row-less weekday / holiday-free Fri-Sun triples between ${todayIso} and ${scanEnd} (fcDay ${fcDay}, triples ${weekendTriples.length})`);
-    console.log(`     (small items: fail-closed day ${fcDay}, block-member triple ${weekendTriples[0].join("/")}, trade-block triple ${weekendTriples[1].join("/")} - the first row-less weekday a pool surgeon may hold as primary and the first holiday-free Fri-Sun triples on/after today ${todayIso} untouched by this run where the rules let Fierce hold all three as a block member (${blockOkIdx.length} of the first ${rowlessTriples.length} row-less triples do${rowlessTriples[0] && !blockOkIdx.includes(0) ? "; not " + rowlessTriples[0][0] + ": " + blockWhy(0) : ""}); scan bounded by ${scanEnd} = last live row ${lastLiveDay} + 400 d; ${holidayUnitDays.size} holiday-unit day(s) in the blob)`);
+    console.log(`     (small items: fail-closed day ${fcDay}, block-member triple ${weekendTriples[0].join("/")}, trade-block triple ${weekendTriples[1].join("/")} - ${fcIdx >= 0 && !fcRh.error ? "the first row-less weekday a pool surgeon may hold as primary" : "the first row-less weekday (" + (fcRh.error ? "the rules context was unread" : "by the rules nobody may hold primary there") + ")"} and the first holiday-free Fri-Sun triples on/after today ${todayIso} untouched by this run where the rules let Fierce hold all three as a block member (${blockOkIdx.length} of the first ${rowlessTriples.length} row-less triples do${rowlessTriples[0] && !blockOkIdx.includes(0) ? "; not " + rowlessTriples[0][0] + ": " + blockWhy(0) : ""}); scan bounded by ${scanEnd} = last live row ${lastLiveDay} + 400 d; ${holidayUnitDays.size} holiday-unit day(s) in the blob)`);
     await page.evaluate(() => { window.__realEligibility = window.eligibility; window.eligibility = () => { throw new Error("harness: synthetic rules failure"); }; });
     try {
       await showMonth(+fcDay.slice(0, 4), +fcDay.slice(5, 7) - 1);
