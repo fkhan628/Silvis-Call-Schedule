@@ -763,6 +763,8 @@ const failedRequests = [];
   const margin = Number(process.env.SMOKE_MIDNIGHT_MARGIN_MIN || 35);
   const hms = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date()).filter(p => p.type !== "literal").map(p => [p.type, Number(p.value)]));
   const toMidnight = (86400 - (hms.hour * 3600 + hms.minute * 60 + hms.second)) * 1000;
+  // 11/2 (fix-check): a time-travel instant inside the margin would wait REAL minutes and then test the next day - refuse it
+  if (TT && process.env.SMOKE_MIDNIGHT_WAIT !== "0" && toMidnight <= margin * 60000) { console.error(`FAIL: SMOKE_FAKE_NOW=${TT.fakeStartIso} is ${Math.ceil(toMidnight / 60000)} min before midnight Central and a run takes ~17 - pick another time of day (e.g. T18:00:00Z, noon Central), or set SMOKE_MIDNIGHT_WAIT=0 to run across it`); process.exit(1); }
   if (process.env.SMOKE_MIDNIGHT_WAIT !== "0" && toMidnight <= margin * 60000) {
     const wait = toMidnight + 30000;
     console.log(`(midnight Central is ${Math.ceil(toMidnight / 60000)} min away and a run takes ~17 - waiting ${Math.ceil(wait / 60000)} min for it to pass, so the whole run keeps one date; SMOKE_MIDNIGHT_WAIT=0 skips the wait)`);
@@ -970,7 +972,7 @@ const liveOpenEarly = (d, role) => { const r = liveEarlyByDay[d]; return role ==
 // Time travel: where today sits against the rows read up front - past the last one, a check that needs a published day on/after
 // today has nothing to read (no future schedule yet), which is not a date bomb
 if (TT) {
-  const lastRow = liveRowsEarly.reduce((m, r) => (r && r.day > m ? r.day : m), "");
+  const lastRow = liveRowsEarly.reduce((m, r) => (r && r.updated_by !== "fixture" && r.day > m ? r.day : m), ""); // the served rows, not the fixture's own held-day row (fix-check 11/2)
   console.log(`TIME TRAVEL: today ${todayCentral} (real ${new Date(TT.realNow()).toLocaleDateString("en-CA", { timeZone: "America/Chicago" })}); the ${fixture ? "fixture" : "live"} schedule_days rows run to ${lastRow || "(none)"}` + (lastRow && todayCentral > lastRow ? " - today is past them: a FAIL or 'not exercised' that needs a published day on/after today means no future schedule yet, not a date bomb" : ""));
 }
 // 11/2: an .ics download is all-day - past its DTSTAMP lines (the generation time to the minute, seconds "00": during the
@@ -4539,13 +4541,15 @@ try {
           .sort((a, b) => ((a.e.ok ? 0 : 1) - (b.e.ok ? 0 : 1)) || (a.d < b.d ? -1 : a.d > b.d ? 1 : 0))
           .map(x => { why[x.d] = x.e.ok ? "free" : x.e.hard.join(","); return x.d; });
         const rows = Object.keys(ctx.schedule).sort().filter(d => { const e = ctx.schedule[d] || {}; return plain(d) && !!e.primary && e.primary !== "s1" && e.backup !== "s1" && !e.primaryLocked && !e.externalCover; });
-        const softRows = rank(rows, { claim: true }, SOFT_OK, clearBeyond), soft = softRows[0] || null;
-        const busyRows = rank(rows.filter(d => d !== soft), { claim: true }, BUSY_OK), busy = busyRows[0] || null;
-        // Khan not the backup (11/2, time travel 11/23): eligibility() returns at the first failed pattern rule, so a
-        // 'hard-never-weekday' day hid 'holds-other-role' until the overlay's home day lifted the pattern
-        const tDays = args.values.map(v => v.split("|")).filter(([d, role]) => role === "primary" && plain(d) && d !== busy && d !== soft && (ctx.schedule[d] || {}).backup !== "s1").map(([d]) => d);
-        const tSoftList = rank(tDays.filter(d => !near(d, soft)), { ignoreLocks: true, claim: true }, SOFT_OK, clearBeyond), tSoft = tSoftList[0] || null;
-        const tHardList = rank(tDays.filter(d => d !== tSoft), { ignoreLocks: true, claim: true }, BUSY_OK), tHard = tHardList[0] || null;
+        // 11/2 (fix-check): T_SOFT first - Burchett's primary days are the scarcer pool (11/9-12/11/2026 the one Khan could take,
+        // 12/14, went to E4_SOFT first and T_SOFT read none); then E4_SOFT off it and off the days next to it (two home days a day
+        // apart merge into one range), E4_BUSY off both (a busy override on a home day drops its east-clear), T_HARD off all three.
+        // T_HARD keeps the days Khan backs up: 'east-busy' reads first there (clearBeyond guards the SOFT ranks only)
+        const tDays = args.values.map(v => v.split("|")).filter(([d, role]) => role === "primary" && plain(d)).map(([d]) => d);
+        const tSoftList = rank(tDays, { ignoreLocks: true, claim: true }, SOFT_OK, clearBeyond), tSoft = tSoftList[0] || null;
+        const softRows = rank(rows.filter(d => d !== tSoft && !near(d, tSoft)), { claim: true }, SOFT_OK, clearBeyond), soft = softRows[0] || null;
+        const busyRows = rank(rows.filter(d => d !== soft && d !== tSoft), { claim: true }, BUSY_OK), busy = busyRows[0] || null;
+        const tHardList = rank(tDays.filter(d => d !== tSoft && d !== soft && d !== busy), { ignoreLocks: true, claim: true }, BUSY_OK), tHard = tHardList[0] || null;
         const w = (d) => d ? d + " (" + why[d] + ")" : "none";
         return { rows: rows.length, softN: softRows.length, busyN: busyRows.length, tDays: tDays.length, tSoftN: tSoftList.length, tHardN: tHardList.length, busy, soft, tHard, tSoft, text: { busy: w(busy), soft: w(soft), tHard: w(tHard), tSoft: w(tSoft) } };
       }
@@ -5855,12 +5859,14 @@ try {
       if (!writes.slice(beforeMail).every(w => noAddr(w.body))) fail("Open shifts: a notice write body carries an email address");
     };
     // Take this shift as s1 on the first row where s1 is eligible.
-    const target = all.rows.find(r => r.take === "enabled");
+    // 11/2 (fix-check): never FIX_HELD_DAY in fixture mode - a claimed day is person-held (the generator keeps both roles), and the
+    // RF2 Accept confirm needs its held backup regenerated
+    const target = all.rows.find(r => r.take === "enabled" && !(fixture && r.slot.split("|")[0] === FIX_HELD_DAY));
     // the claim would take the board's only open slot (LIVE mode since 10/15 was filled 9/25): announce while it is listed
     const emailBeforeClaim = !!target && all.rows.length === 1;
     if (emailBeforeClaim) await emailGroupNow("before the claim, which takes the board's only open slot");
     let claimExercised = false;
-    if (!target) console.log("     (no row where s1 is eligible under the current rules - the claim flow is not exercised)");
+    if (!target) console.log(`     (no row where s1 is eligible under the current rules${fixture && all.rows.some(r => r.take === "enabled") ? " other than FIX_HELD_DAY " + FIX_HELD_DAY + " (kept for the RF2 Accept confirm)" : ""} - the claim flow is not exercised)`);
     else {
       claimExercised = true;
       const [cDay, cRole] = target.slot.split("|");
@@ -5986,12 +5992,12 @@ try {
   await page.setViewportSize({ width: 1180, height: 900 });
 
   // The edit day: the first row-less day on/after today (Central) whose month keeps three more row-less days after it (the B1
-  // undo step's two spare days and Do first 2's) and four besides it (the realtime / keepalive steps' other .. fifth, which take
-  // the month's first non-fixture days), so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett';
-  // scanning forward up to 400 days once the rest of the current month is published.
+  // undo step's two spare days and Do first 2's) and seven besides it in all - the realtime / keepalive steps' other .. fifth take
+  // the month's FIRST four row-less days, B1 the LAST two, Do first 2 the next, none shared (fix-check 11/2: four let them overlap)
+  // - so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett'; scanning up to 400 days forward.
   // 11/2 (date bombs, critic): the scan started at the first of the machine's LOCAL month - once the served rows end before
   // today the edit day was a past day, and the B1 undo, the publish arrow and the realtime race ran on a past slot. Review 11/2:
-  // the 'four besides it' - in fixture mode on 11/2-11/19 November held only three, and keepalive-busy failed (before this too).
+  // the 'besides it' count - in fixture mode on 11/2-11/19 November held only three, and keepalive-busy failed (before this too).
   const rowlessDay = (d) => !fixtureHasDay(d) && !liveByDay[d];
   const day = (() => {
     for (let i = 0; i < 400; i++) {
@@ -6000,12 +6006,12 @@ try {
       const dim = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).getUTCDate(), dd = +d.slice(8, 10);
       let after = 0, others = 0;
       for (let k = 1; k <= dim; k++) if (k !== dd && rowlessDay(d.slice(0, 8) + String(k).padStart(2, "0"))) { others++; if (k > dd) after++; }
-      if (after >= 3 && others >= 4) return d;
+      if (after >= 3 && others >= 7) return d;
     }
     return null;
   })();
-  if (!day) fail("no row-less day (with three more after it and four besides it in its month) within 400 days of today for the day-editor edit");
-  else if (day.slice(0, 7) !== todayCentral.slice(0, 7)) console.log(`     (edit day ${day}: the rest of the current month is published)`);
+  if (!day) fail("no row-less day (with three more after it and seven besides it in its month) within 400 days of today for the day-editor edit");
+  else if (day.slice(0, 7) !== todayCentral.slice(0, 7)) console.log(`     (edit day ${day}: no day of the current month leaves room for the later steps' row-less days)`);
   if (day) {
     // Prompt 16 B1 review: the edit below, the B1 undo step and the realtime race that follows all read `day` as
     // this run left it (P Burchett) - about 20 s of steps that every write-intercepting run races against the
@@ -6111,7 +6117,7 @@ try {
   // ---- Realtime: a foreign row is adopted; a pending local edit survives the echo ----
   if (day && rt.joined) {
     const days = await page.$$eval("[data-day]", els => els.map(e => e.getAttribute("data-day")));
-    const other = days.find(d => d !== day && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d));
+    const other = days.find(d => d !== day && d.slice(0, 7) === day.slice(0, 7) && rowlessDay(d)); // 11/2 (fix-check): row-less in LIVE mode too - a live row there may be locked or hold the target already
     // (a) foreign UPDATE on a day with no local edit -> adopted into the UI
     rtSendDayRow(dayRow(other, { primary_id: "s4", backup_id: "s5", version: 5 }));
     noteEdit(other, { primary_id: "s4", backup_id: "s5" });
@@ -6158,7 +6164,7 @@ try {
     //     PATCH ?day=eq.third&version=eq.3 with version 4, and NO
     //     POST ...?on_conflict=day (the old blind upsert that could regress a
     //     newer device's row).
-    const third = days.find(d => d !== day && d !== other && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d));
+    const third = days.find(d => d !== day && d !== other && d.slice(0, 7) === day.slice(0, 7) && rowlessDay(d));
     rtSendDayRow(dayRow(third, { primary_id: "s4", backup_id: "s6", version: 3 }));
     const adopted3 = await waitFor(async () => (await cellAttr(third, "data-primary")) === "s4", 4000);
     if (!adopted3) fail(`keepalive: foreign v3 row for ${third} was not adopted`);
@@ -6187,8 +6193,8 @@ try {
     //     keepalive flush must NOT send parallel schedule_days writes - the same days at the same versions would go
     //     out twice. It skips the days leg, says so, keeps the blob leg, and the pending edit lands through the
     //     serialized sync afterwards (never lost). The harness holds the first edit's write open for 5 s.
-    const fourth = days.find(d => ![day, other, third].includes(d) && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d));
-    const fifth = days.find(d => ![day, other, third, fourth].includes(d) && d.slice(0, 7) === day.slice(0, 7) && !fixtureHasDay(d));
+    const fourth = days.find(d => ![day, other, third].includes(d) && d.slice(0, 7) === day.slice(0, 7) && rowlessDay(d));
+    const fifth = days.find(d => ![day, other, third, fourth].includes(d) && d.slice(0, 7) === day.slice(0, 7) && rowlessDay(d));
     if (!fourth || !fifth) fail("RF2 keepalive-busy: no two free days left in the month for the step");
     else {
       delayScheduleWriteMs = 5000;
@@ -10924,7 +10930,7 @@ try {
         else if (JSON.stringify(box0.remind) !== JSON.stringify(expRemind)) fail(`Periods: Remind must appear on every pool row while the period is open, none once frozen (expected ${JSON.stringify(expRemind)}, got ${JSON.stringify(box0.remind)})`);
         else ok(`Periods: ${per.label} (${box0.pill}) = ${IDS.map(id => id + " " + expStatus(id, per) + (expStatus(id, per) === "submitted" ? " " + expOffered(id, per) + "d" : "")).join(", ")}; words '${box0.rows.map(r => r.text.split(" ").slice(1, 6).join(" ")).join(" | ").slice(0, 200)}'; summary '${box0.summary.trim()}'; Remind on ${expRemind.length ? expRemind.join(", ") : "nobody (frozen)"}; ${SELF}'s row 'Paint my offers', the others 'Enter for <name>'`);
         // (a2) 9/27 lead-time lines (helpers.offerPeriodLeadWarnings), restated from the stores - date-independent: the served
-        // period is upcoming with its close 10/2 only 31 days before its 11/2 start (later than start - 6 weeks), so its
+        // period is upcoming with its close 10/2 only 31 days before its 11/2 start (later than start - the rules' close weeks, 6), so its
         // box MUST carry prd-lead-warn[data-kind=short-lead] naming 4 weeks (31 days); "create the next period" shows iff
         // today >= (last end + 1) - 7 * closeWeeksBeforeStart - noticeDaysBeforeClose (NOTICE_OP: the served blob's, the seed's as a
         // fallback; 6 weeks / 42 days when absent - 9/30 review: the close no longer hard-codes 42).
@@ -10934,7 +10940,7 @@ try {
         try {
           const lk0 = await leadKinds(per.id);
           const leadDays = Math.round((Date.parse(per.start_day + "T00:00:00Z") - Date.parse(per.offers_close_at + "T00:00:00Z")) / 86400000);
-          const expShort = (per.status || "upcoming") === "upcoming" && leadDays < 42;
+          const expShort = (per.status || "upcoming") === "upcoming" && leadDays < OFFER_LEAD_DAYS; // the rules' lead, 42 with 6 weeks (fix-check 11/2)
           const short = lk0.find(w => w.kind === "short-lead");
           if (expShort && (!short || !short.text.includes(`only ${Math.floor(leadDays / 7)} weeks (${leadDays} days) before the start`))) fail(`Periods lead (a2): ${per.label} closes ${leadDays} days before its start - expected a short-lead line naming ${Math.floor(leadDays / 7)} weeks (${leadDays} days), got ${JSON.stringify(lk0)}`);
           else if (!expShort && short) fail(`Periods lead (a2): ${per.label} has ${leadDays} days of lead - no short-lead line expected, got '${short.text}'`);
@@ -11377,12 +11383,18 @@ try {
       if (otherMsgs.length) fail("RF2 Accept confirm: an unexpected dialog on Accept (respect locks ON, no locked change expected): " + JSON.stringify(otherMsgs.map(m => m.slice(0, 160))));
       // RF2 review fix: under the fixture the positive branch is REQUIRED - the injected unlocked generated backup
       // (FIX_HELD_DAY B s2, see the fixture) must be regenerated to another holder (or cleared) and named by the app.
-      // 11/2 (review): a preview that keeps s2 there passes only when the confirm names OTHER held slots (the checks below then
-      // run the positive branch on them) - the seed plan holds none of its own, so with none it FAILs as before
+      // 11/2 (review + fix-check): a preview that keeps s2 there passes when the confirm names OTHER held slots (the checks below
+      // run the positive branch on them); else the page's own rules decide - s2 refused there (11/19 read 'whitelist-month')
+      // and kept = FAIL; s2 allowed there (a later FIX_HELD_DAY: Generate may keep a held holder the rules allow) = not exercised,
+      // said. The board claim never takes FIX_HELD_DAY in fixture mode (a claimed day is person-held: both roles kept).
       if (fixture && !heldUnlocked.some(s => s.startsWith(mdOf(FIX_HELD_DAY) + " B "))) {
         const pvFix = previewGrid.find(c => c.day === FIX_HELD_DAY);
-        if (pvFix && (pvFix.b || null) === "s2" && heldUnlocked.length) console.log(`     (RF2 Accept confirm (fixture): the preview kept s2 as the ${FIX_HELD_DAY} backup - the positive branch runs on the other held slot(s): ${heldUnlocked.slice(0, 4).join(", ")})`);
-        else fail("RF2 Accept confirm (fixture): the injected held but unlocked " + FIX_HELD_DAY + " backup (s2) was not regenerated and no other held slot is replaced - the positive branch did not run; grid cell: " + JSON.stringify(pvFix) + ", derived: " + JSON.stringify(heldUnlocked));
+        const keptS2 = !!pvFix && (pvFix.b || null) === "s2";
+        const fixRh = keptS2 && !heldUnlocked.length ? await rulesHardOn(page, [{ day: FIX_HELD_DAY, role: "backup", id: "s2" }]) : null;
+        const fixHard = fixRh && !fixRh.error && Array.isArray(fixRh.out[0]) ? fixRh.out[0] : null;
+        if (keptS2 && heldUnlocked.length) console.log(`     (RF2 Accept confirm (fixture): the preview kept s2 as the ${FIX_HELD_DAY} backup - the positive branch runs on the other held slot(s): ${heldUnlocked.slice(0, 4).join(", ")})`);
+        else if (keptS2 && fixHard && !fixHard.length) console.log(`     (RF2 Accept confirm (fixture): the rules let s2 hold the ${FIX_HELD_DAY} backup and the preview kept him - no held slot is replaced, so the positive branch is not exercised this run)`);
+        else fail("RF2 Accept confirm (fixture): the injected held but unlocked " + FIX_HELD_DAY + " backup (s2) was not regenerated" + (fixHard && fixHard.length ? " although the rules refuse s2 there (" + fixHard.join(", ") + ")" : fixRh && fixRh.error ? " (the rules context could not be read: " + fixRh.error + ")" : "") + " and no other held slot is replaced - the positive branch did not run; grid cell: " + JSON.stringify(pvFix) + ", derived: " + JSON.stringify(heldUnlocked));
       }
       if (heldUnlocked.length === 0) {
         if (heldMsgs.length) fail("RF2 Accept confirm: the harness derived no held but unlocked slot in the preview range, yet the app asked: " + heldMsgs[0].slice(0, 220));
@@ -11706,7 +11718,8 @@ try {
       // schedule_days summary line counts the DAYS. Both are restated.
       const blockedLinesOf = (d) => { const l = liveImp[d], r = planByDay[d]; const p = (l.primary_id || null) !== (r.primary_id || null) || (l.external_cover || null) !== (r.external_cover || null); const b = (l.backup_id || null) !== (r.backup_id || null); return Math.max(1, (p ? 1 : 0) + (b ? 1 : 0)); };
       const planBlockedLines = planBlocked.reduce((n, d) => n + blockedLinesOf(d), 0);
-      const blockedSuffix = planBlockedLines ? ` (+${planBlockedLines} blocked: app-edited days kept)` : "";
+      const blockedSuffixOf = (n) => n ? ` (+${n} blocked: app-edited days kept)` : "";
+      const blockedSuffix = blockedSuffixOf(planBlockedLines); // schedule_days lines only - the legacy (period-free) leg has no offers
       // Prompt 14 IP (9/23): the app plans PERIOD-AWARE like scripts/import-seed.js and - like the CLI - passes the two
       // authenticated-read tables as unknown, so every planned call_periods / call_offers row counts as an upsert in
       // 'Total changes' (the CLI's dry run against the live project on 9/23 read 'Total changes: 80 (+30 blocked)' =
@@ -11727,6 +11740,10 @@ try {
       // table between 10/4 and 10/10, and the dry-run pins (which never counted time_off) failed on every branch.
       const toKey0 = (r) => [r.person_id, String(r.start_date).slice(0, 10), String(r.end_date).slice(0, 10)].join("|");
       const liveTo0 = fixture ? fixture.time_off : await anonRowsOf("time_off", "person_id,start_date,end_date");
+      // 11/2 (fix-check): the in-app dry run also counts each planned offer inside a live vacation in '(+N blocked)' - one line per
+      // (offer, vacation) pair (importer.js OF002: the DB would refuse it; it still counts in 'Total changes'); liveTo0 is the same
+      // time_off the page reads, a row without both dates blocks nothing
+      const offerBlockedOf = (plan) => (plan.offerRows || []).reduce((n, o) => n + (liveTo0 || []).filter(t => t && t.person_id === o.person_id && t.start_date && t.end_date && o.day >= String(t.start_date).slice(0, 10) && o.day <= String(t.end_date).slice(0, 10)).length, 0);
       const haveLiveTo = new Set(liveTo0.map(toKey0));
       const toInsOf = (plan) => plan.timeOffRows.filter(r => !haveLiveTo.has(toKey0(r))).length;
       const offerUpserts = PLAN_P.periodRows.length + PLAN_P.offerRows.length;
@@ -11747,8 +11764,8 @@ try {
       });
       const blobDelta = blobDeltaOf(PLAN_P.blob);
       const expChanges = blobDelta.length + offerUpserts + avIns0.length + avDel0.length + toInsOf(PLAN_P);
-      const expDryTotal = `Total changes: ${expChanges}` + blockedSuffix;
-      const expDryTail = `Total changes: ${expChanges}` + (avDel0.length ? ` (incl. ${avDel0.length} delete(s) of seed-owned rows)` : "") + (planBlockedLines ? ` (+${planBlockedLines} blocked)` : "");
+      const expDryTotal = `Total changes: ${expChanges}` + blockedSuffixOf(planBlockedLines + offerBlockedOf(PLAN_P));
+      const expDryTail = `Total changes: ${expChanges}` + (avDel0.length ? ` (incl. ${avDel0.length} delete(s) of seed-owned rows)` : "") + ((planBlockedLines + offerBlockedOf(PLAN_P)) ? ` (+${planBlockedLines + offerBlockedOf(PLAN_P)} blocked)` : "");
       const legs0 = await page.$eval("[data-testid=seed-period-legs]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
       const expSdLine = `schedule_days: insert ${planInserts.length}, update ${planUpdates.length}, delete 0, unchanged ${planUnchanged.length}${planBlocked.length ? ", BLOCKED " + planBlocked.length : ""}`;
       const dryLines = diffText.trim().split("\n").map(l => l.trim());
@@ -11812,10 +11829,16 @@ try {
       if (!extra) {
         const nextM = (ym) => isoPlus(ym + "-01", 32).slice(0, 7);
         const lastEnd = (seed3.offerPeriods || []).map(p => String(p.end)).sort().pop() || todayCentral;
-        let m = nextM((lastEnd > todayCentral ? lastEnd : todayCentral).slice(0, 7));
-        for (let k = 0; k < 24 && ((s2r.explicitAvailable || {})[m] || (s2r.offeredDays || {})[m] || [...s2Listed].some(d => d.slice(0, 7) === m)); k++) m = nextM(m);
-        const start = m + "-01", end = isoPlus(nextM(m) + "-01", -1);
-        for (let d = start; d <= end && !extra; d = isoPlus(d, 1)) if (freeDay(d)) extra = d;
+        // the first month after today and every seed period with no s2 list and a free day (fix-check 11/2: a month whose every
+        // day is a vacation of his moves on to the next one instead of failing)
+        let m = nextM((lastEnd > todayCentral ? lastEnd : todayCentral).slice(0, 7)), start = null, end = null;
+        for (let k = 0; k < 24 && !extra; k++) {
+          if (!((s2r.explicitAvailable || {})[m] || (s2r.offeredDays || {})[m] || [...s2Listed].some(d => d.slice(0, 7) === m))) {
+            start = m + "-01"; end = isoPlus(nextM(m) + "-01", -1);
+            for (let d = start; d <= end && !extra; d = isoPlus(d, 1)) if (freeDay(d)) extra = d;
+          }
+          if (!extra) m = nextM(m);
+        }
         if (extra) {
           extraKey = m;
           seed3.offerPeriods = (seed3.offerPeriods || []).concat([{ label: "Smoke check " + m, start, end, offersCloseAt: start, publishBy: start, status: "upcoming", rulesOnly: [], offerModes: { s2: "exhaustive" } }]);
@@ -11847,7 +11870,7 @@ try {
         const expTotal3 = blobDelta3.length + plan3P.periodRows.length + plan3P.offerRows.length + avDel0.length + toInsOf(plan3P);
         const legs3 = await page.$eval("[data-testid=seed-period-legs]", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
         if (plan3P.offerRows.length !== PLAN_P.offerRows.length + 1 || plan3P.availabilityRows.length !== PLAN_P.availabilityRows.length) fail(`Import apply dry run (extra ${extra}) premise: the period-aware plan of the seed plus one Burchett date must carry one more offer row and the same availability rows (offers ${PLAN_P.offerRows.length} -> ${plan3P.offerRows.length}, availability ${PLAN_P.availabilityRows.length} -> ${plan3P.availabilityRows.length})`);
-        else if (total3.trim() !== `Total changes: ${expTotal3}` + blockedSuffix || !/settings=update/.test(diff3) || !/surgeonRules=update/.test(diff3) || new RegExp("insert s2 available/any " + extra).test(diff3) || !new RegExp("call_offers: plan " + plan3P.offerRows.length + " row\\(s\\)").test(diff3) || !legs3.includes(`${nm("s2")} ${plan3P.stats.offersByPerson.s2}`)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: ${expTotal3}${blockedSuffix}' (surgeonRules + settings + ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts${avDel0.length ? " + " + avDel0.length + " retired-row delete(s)" : ""}, NO 'insert s2 available/any ${extra}' - the date is an offer - and the legs naming ${nm("s2")} ${plan3P.stats.offersByPerson.s2}${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules|call_offers: plan/.test(l)).join(" | ")} | legs: ${legs3.slice(0, 200)}`);
+        else if (total3.trim() !== `Total changes: ${expTotal3}` + blockedSuffixOf(planBlockedLines + offerBlockedOf(plan3P)) || !/settings=update/.test(diff3) || !/surgeonRules=update/.test(diff3) || new RegExp("insert s2 available/any " + extra).test(diff3) || !new RegExp("call_offers: plan " + plan3P.offerRows.length + " row\\(s\\)").test(diff3) || !legs3.includes(`${nm("s2")} ${plan3P.stats.offersByPerson.s2}`)) fail(`Import apply dry run (extra ${extra}): expected 'Total changes: ${expTotal3}${blockedSuffix}' (surgeonRules + settings + ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts${avDel0.length ? " + " + avDel0.length + " retired-row delete(s)" : ""}, NO 'insert s2 available/any ${extra}' - the date is an offer - and the legs naming ${nm("s2")} ${plan3P.stats.offersByPerson.s2}${planBlocked.length ? ", the same " + planBlockedLines + " blocked lines" : ""}): ${total3.trim()} | ${diff3.split("\n").filter(l => /insert|surgeonRules|call_offers: plan/.test(l)).join(" | ")} | legs: ${legs3.slice(0, 200)}`);
         else ok(`Import apply dry run: extra Burchett date ${extra} -> ${expTotal3} changes as the CLI counts them (surgeonRules=update, settings=update - the seedCoreHash stamp, ${plan3P.periodRows.length} period + ${plan3P.offerRows.length} offer upserts - the date is one more offer of ${nm("s2")}'s, not an available row; ${toInsOf(plan3P)} time_off insert(s))${planBlocked.length ? ", " + planBlockedLines + " blocked" : ""}`);
         // Prompt 14 IP (9/23): the in-app plan is period-aware, but the app has no writer for call_periods / call_offers and
         // never deletes the rows a period retires, so a seed that carries periods is dry-run only in the app - the block note
@@ -12760,9 +12783,18 @@ try {
       else if (offRing.length) fail(`month ${theme}: ${offRing.length} own-day ring(s) off THEME.${theme}.mineRim / mineRing (${wantRing}): ${JSON.stringify(offRing.slice(0, 3))}`);
       else ok(`month ${theme}: ${mP.mine.length} own-day ring(s) (s1, the scheduler as Khan) in THEME.${theme}.mineRim + ${wantRing}`);
       // OPEN pills sit from today on, so today's month has them once the served rows end before it - the past month the pill
-      // reads may move to never has one (11/2 review)
-      const openC = m.open || mP.open;
-      if (openC && openC !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill is ${openC}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (openC) ok(`month ${theme}: OPEN pill ${openC}`); else console.log(`     (month ${theme}: no OPEN pill in the shown month${pmP ? " or in " + pmP.label : ""} - the OPEN colour is not measured)`);
+      // reads may move to never has one (11/2 review). With none in either (today's month published to its end - every run until
+      // the rows end), the first month with no rows from today on is shown for the reading, then today's again (fix-check 11/2:
+      // the dark #F06060 is checked nowhere else)
+      let openC = m.open || mP.open, openAt = "";
+      if (!openC) {
+        const od = [todayCentral, isoAddDays(lastLiveDay, 1)].sort().pop();
+        await showMonth(+od.slice(0, 4), +od.slice(5, 7) - 1);
+        await page.waitForTimeout(300);
+        openC = (await monthProbe()).open; openAt = " (" + CAL_MONTHS[+od.slice(5, 7) - 1] + " " + od.slice(0, 4) + ")";
+        await showMonth(+todayCentral.slice(0, 4), +todayCentral.slice(5, 7) - 1);
+      }
+      if (openC && openC !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill${openAt} is ${openC}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (openC) ok(`month ${theme}: OPEN pill${openAt} ${openC}`); else console.log(`     (month ${theme}: no OPEN pill in the shown month${pmP ? " or in " + pmP.label : ""}${openAt ? " or in" + openAt : ""} - the OPEN colour is not measured)`);
       const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
       if (m.bodyBg !== wantBody) fail(`month ${theme}: page background ${m.bodyBg}, expected ${wantBody}`); else ok(`month ${theme}: page background ${m.bodyBg}`);
       await page.screenshot({ path: path.join(OUT, `theme-month-${theme}.png`), fullPage: true });
@@ -16439,9 +16471,9 @@ if (TT) {
   else if (!ttDocsChecked) fail("time travel: no document load was checked against Node's faked clock");
   else ok(`time travel: ${ttDocsChecked} document load(s) read Node's faked clock (within 2 s)${ttDocsSkipped ? "; " + ttDocsSkipped + " load(s) not read (not http(s), busy, or closed first)" : ""}`);
   // the live inputs a far-forward today can pass (review 11/2): a check past one of their ends has no future data to read
-  const ttLastRow = liveRowsEarly.reduce((m, r) => (r && r.day > m ? r.day : m), "");
+  const ttLastRow = liveRowsEarly.reduce((m, r) => (r && r.updated_by !== "fixture" && r.day > m ? r.day : m), ""); // not the fixture's held-day row
   const ttUnitYears = Object.keys((gcBlobEarly.holidays && gcBlobEarly.holidays.units) || {}).filter(y => /^\d{4}$/.test(y)).sort();
-  console.log(`\nTIME TRAVEL RUN - SMOKE_FAKE_NOW=${TT.fakeStartIso}, today ${todayCentral}; the served offer period ${offerPeriod ? offerPeriod.start_day + ".." + offerPeriod.end_day : "(none)"}. The ${fixture ? "fixture" : "live"} data ends: schedule_days ${ttLastRow || "(none)"}, East feed published weeks ${vacFixtureEarly.pubEnd || "(none)"}, holiday-unit years ${ttUnitYears.join(", ") || "(none)"} - a check that needs data past one of them has nothing to read, which is not a date bomb. Not a merge-gate run: diff its FAIL / 'not exercised' / 'skipped' lines against a CONTROL time-travel run (SMOKE_FAKE_NOW near the real now - the same clock machinery on today's date) before calling one a date bomb`);
+  console.log(`\nTIME TRAVEL RUN - SMOKE_FAKE_NOW=${TT.fakeStartIso}, today ${todayCentral}; the served offer period ${offerPeriod ? offerPeriod.start_day + ".." + offerPeriod.end_day : "(none)"}. Data ends: schedule_days ${ttLastRow || "(none)"} (${fixture ? "fixture" : "live"}), East feed published weeks ${vacFixtureEarly.pubEnd || (vacFixtureEarly.notes.some(n => /east_feed read failed/.test(n)) ? "unread" : "(none)")} (live), holiday-unit years ${gcBlobEarly.read ? (ttUnitYears.join(", ") || "(none)") : "unread"} (${fixture ? "the fixture blob" : "the served blob"}) - a check that needs data past one of them has nothing to read, which is not a date bomb. Not a merge-gate run: diff its FAIL / 'not exercised' / 'skipped' lines against a CONTROL time-travel run (SMOKE_FAKE_NOW near the real now - the same clock machinery on today's date) before calling one a date bomb`);
 }
 console.log(`\ncdn cache: ${cdnHits} hit(s), ${cdnMisses} miss(es) (${path.relative(ROOT, CDN_CACHE)})`);
 console.log(`writes intercepted (${writes.length}):`);
@@ -16454,5 +16486,5 @@ await browser.close();
 server.close();
 { const endCentral = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }); if (endCentral !== todayCentral) console.log(`\nNOTE: this run crossed midnight Central (started on ${todayCentral}, ended on ${endCentral}) - a check that compares with the start-of-run date can fail for that alone; rerun it`); }
 // a time-travel run never reads as the gate's (review 11/2): its verdict names the fake date, and a clean one exits 2, not 0
-console.log(failures.length ? `\nSMOKE FAILED: ${failures.length} problem(s)${TT ? " - TIME TRAVEL " + TT.fakeStartIso + ", not a merge-gate result" : ""}` : TT ? `\nSMOKE OK - TIME TRAVEL ${TT.fakeStartIso}, not a merge-gate result (exit 2)` : "\nSMOKE OK");
+console.log(failures.length ? `\nSMOKE FAILED: ${failures.length} problem(s)${TT ? " - TIME TRAVEL " + TT.fakeStartIso + " (today " + todayCentral + "), not a merge-gate result" : ""}` : TT ? `\nSMOKE OK - TIME TRAVEL ${TT.fakeStartIso} (today ${todayCentral}), not a merge-gate result (exit 2)` : "\nSMOKE OK");
 process.exit(failures.length ? 1 : TT ? 2 : 0);
