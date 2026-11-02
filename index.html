@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-K724Cu3CeYXlJst8WsKp//3iC9KEfCk2gzAcD3GrkH4=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-tVRFkRvDTm5P2p3NB20rL57gCWLa/yJ4Y5p+ljQztgk=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-esfWSnZwSS6D9FhTY9IYIoBiVLkCS6gj7yRjBMsgMtA=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-Ao8GEB9/KmFOrbOBjFbCiQsRp89EmDP/Y/iups+5WSQ=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -34,6 +34,7 @@
       #root > div > div:first-child { display: none !important; } /* hide header */
       button, select, input { display: none !important; }
       [style*="position: absolute"] { display: none !important; } /* hide notification panel */
+      .tabbar, .tabbar-spacer, .more-sheet, .sheet-backdrop, .notif-panel { display: none !important; } /* 11/1 item 6: the phone tab bar, its spacer and sheets, the phone Alerts sheet (fixed - the rule above misses them) */
       div[style*="maxWidth"] { max-width: 100% !important; padding: 0 !important; }
       @page { margin: 0.5cm; size: landscape; }
     }
@@ -54,9 +55,18 @@
       .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
       /* the header's "N errors" the same way - its 36 px do not make the status line (and the header) taller */
       .hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }
-      /* 10/30: the nav tabs take 8 px side padding on a phone - a surgeon's eight buttons fit two rows at 390 px (three before; measured with the fallback font) */
-      .navtab { padding-left: 8px !important; padding-right: 8px !important; }
     }
+    /* 11/1 item 6: the phone's bottom tab bar and its More sheet - rendered at <= 600 px only (useMediaQuery, so ONE nav is in the
+       DOM; the header nav and its 10/30 phone padding are gone at that width); these rules carry what inline styles cannot: the
+       label's ellipsis (a fifth of a 280 px screen is 56 px), the keyboard focus ring, the sheet's one slide-up (none with reduced
+       motion) and a smaller label at 340 px and under. Colours stay inline. */
+    .tabbar-btn { -webkit-tap-highlight-color: transparent; }
+    .tabbar-btn:focus-visible, .more-row:focus-visible { outline: 2px solid #FF5F05; outline-offset: -3px; }
+    .tabbar-label { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .more-sheet:not([hidden]) { animation: more-sheet-up 140ms ease-out; }
+    @keyframes more-sheet-up { from { transform: translateY(12px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .more-sheet:not([hidden]) { animation: none; } }
+    @media (max-width: 340px) { .tabbar-label { font-size: 9.5px; } }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
        inline so dark mode's selectors keep working. */
@@ -76,6 +86,11 @@
     .cal-os-short { display: none; }
     /* 10/30: the Open shifts board's role word - "Primary (TRAUMA)" on a wide screen, "Primary" on a phone (below) */
     .ob-role-short { display: none; }
+    /* item 1 (11/1, Faraz): the calendar's month controls. On a wide screen the title's wrapper and the pickers' wrapper are
+       display: contents - their children sit in the row exactly as before - and the phone's title toggle and caret are not
+       drawn; the phone block below makes prev / the title / next / Today one row of 44 px targets whose title opens the pickers. */
+    .cal-title, .cal-picks { display: contents; }
+    .cal-title-btn, .cal-caret { display: none; }
     /* 10/21 (Faraz: "put the people on vacation in the bottom of each day ... similar to how the Davenport calendar looks"):
        the vacation bar - one grey bar at the bottom of the day, the names inside (codes on a phone), joined to the next
        day's bar when the same people are off (cal-vac-l / cal-vac-r: it reaches into the cell's padding on that side). */
@@ -156,6 +171,30 @@
       .ob-role-short { display: inline; }
       /* 10/30: on a phone the scheduler's all-clear strip items (a count of 0) give way - counts above 0 and the dates stay */
       .cov-zero { display: none; }
+      /* item 1 (11/1, Faraz: "show the month on the first screen"): On call now opens the calendar card, compact on a phone -
+         "On call now:", the pills and Share on its first line ("(until 07:00 Dow)" and "today" give way: the strong's title and
+         the share text keep them), Share's 36 px tap target taking 28 px of that line (negative vertical margins, as
+         .moretoggle); the From 07:00 line, the group-call line and its rule sentence (Faraz 9/29) stay */
+      .ocn-banner { padding: 6px 8px !important; row-gap: 6px !important; }
+      .ocn-until, .ocn-share-long { display: none; }
+      .ocn-share { margin-top: -4px; margin-bottom: -4px; }
+      /* ... the month controls one row of 44 px targets - prev, the title (cal-month-toggle over it opens the month select and
+         the year field on a row of their own, cal-picks-open; a second tap closes them), next, Today - and the six code chips
+         + only OPEN one row (equal chips, 28 px at least: about 276 px, one row at 360 px) */
+      .cal-navrow, .cal-chips { flex: 1 1 100%; }
+      .cal-navbtn { min-height: 44px; min-width: 44px !important; }
+      .cal-navarrow { font-size: 18px !important; line-height: 1; }
+      .cal-title { display: flex; position: relative; flex: 1 1 0; min-width: 0; min-height: 44px; align-items: center; justify-content: center; }
+      .cal-title > :first-child { min-width: 0 !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .cal-caret { display: inline-block; flex-shrink: 0; }
+      .cal-title-btn { display: block; position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; }
+      .cal-picks { display: none; }
+      .cal-picks.cal-picks-open { display: flex; flex: 1 1 100%; gap: 6px; align-items: center; }
+      .cal-picks-open > select { flex: 1 1 auto; min-height: 44px; }
+      .cal-picks-open > input { min-height: 44px; font-size: 16px !important; }
+      .cal-chip { flex: 1 1 0; min-width: 28px; min-height: 44px; padding-left: 2px !important; padding-right: 2px !important; }
+      .cal-chip-all { min-height: 44px; }
+      .cal-onlyopen { min-height: 44px; margin-left: 0 !important; white-space: nowrap; }
       .cal-app { font-size: 9px; }
       /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
          tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
@@ -199,6 +238,13 @@
       .mine-hol-name { display: none; }
       .mine-hol-letter { display: inline; }
     }
+    /* item 1 review (11/1): at 340 px and under (an iPhone SE 1st generation, Display Zoom on the small phones) the month title
+       keeps its year - a 13 px title and a slimmer Today (its 44 px minimum stays) */
+    @media (max-width: 340px) {
+      .cal-title > :first-child { font-size: 12px !important; }
+      .cal-caret { margin-left: 3px !important; }
+      .cal-navbtn:not(.cal-navarrow) { padding-left: 4px !important; padding-right: 4px !important; }
+    }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
        ?v=APP_VERSION loader at the top of <body>; no script comes from a CDN. config.js captures the
@@ -208,7 +254,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.10.30a";
+    var APP_VERSION = "2026.11.01a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -368,6 +414,11 @@ function CallSchedule() {
     if (window.__silvisHardReset) window.__silvisHardReset();else window.location.reload();
     return true;
   };
+  const isPhone = useMediaQuery("(max-width: 600px)");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreBtnRef = useRef(null);
+  const moreSheetRef = useRef(null);
+  const notifCloseRef = useRef(null);
   const [surgeons, setSurgeons] = useState(INIT_SURGEONS);
   const [surgeonRules, setSurgeonRules] = useState(undefined);
   const [groupRules, setGroupRules] = useState(undefined);
@@ -406,6 +457,7 @@ function CallSchedule() {
   }, [calYear]);
   const [calSurgeonFilters, setCalSurgeonFilters] = useState([]);
   const [calOnlyOpen, setCalOnlyOpen] = useState(false);
+  const [calPickOpen, setCalPickOpen] = useState(false);
   const [editorDay, setEditorDay] = useState(null);
   const [editorFocus, setEditorFocus] = useState(null);
   const [eastFeedRows, setEastFeedRows] = useState([]);
@@ -430,21 +482,25 @@ function CallSchedule() {
   const [auditEntries, setAuditEntries] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [showPastVacations, setShowPastVacations] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => {
+  const [themePref, setThemePref] = useState(() => {
     try {
-      return localStorage.getItem("silvis-dark-mode") === "true";
+      return themePrefFromStorage(localStorage.getItem("silvis-theme"), localStorage.getItem("silvis-dark-mode"));
     } catch (e) {
-      console.warn("Couldn't read the dark-mode setting (light mode used):", e);
-      return false;
+      console.warn("Couldn't read the theme setting (following the device):", e);
+      return "auto";
     }
   });
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const darkMode = themeIsDark(themePref, systemDark);
   useEffect(() => {
     try {
-      localStorage.setItem("silvis-dark-mode", darkMode);
+      themeStorageWrites(themePref, darkMode).forEach(([k, v]) => {
+        if (v === null) localStorage.removeItem(k);else localStorage.setItem(k, v);
+      });
     } catch (e) {
-      console.warn("Couldn't persist dark-mode setting:", e);
+      console.warn("Couldn't persist the theme setting:", e);
     }
-  }, [darkMode]);
+  }, [themePref, darkMode]);
   const [weekStartsOn, setWeekStartsOn] = useState(() => {
     try {
       return normalizeWeekStart(localStorage.getItem("silvis-week-start"));
@@ -852,13 +908,13 @@ function CallSchedule() {
       setVacSurgeon(prev => prev || mySurgeon);
     }
   }, [mySurgeon]);
-  const myNotifications = useMemo(() => notifVisibleTo(notifications, {
+  const myNotifications = useMemo(() => userProfile ? notifVisibleTo(notifications, {
     isScheduler,
     isViewer,
     mySurgeon,
     follows: myFollows,
     clearedBefore: notifClearedBefore
-  }), [notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);
+  }) : [], [userProfile, notifications, isScheduler, isViewer, mySurgeon, myFollows, notifClearedBefore]);
   const myUnreadCount = useMemo(() => myNotifications.filter(n => n.created_at > notifLastSeen).length, [myNotifications, notifLastSeen]);
   const myTradeRequests = useMemo(() => {
     if (isScheduler || !mySurgeon) return tradeRequests;
@@ -8708,6 +8764,13 @@ function CallSchedule() {
     to: erTo,
     widened: false
   };
+  const erSixWeeks = (() => {
+    const mon = monOf(addD(parse(todayStr), 1));
+    return {
+      from: fmt(mon),
+      to: fmt(addD(mon, 41))
+    };
+  })();
   const erPanelHtml = useMemo(() => daysShown && erRangeOk ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, {
     today: todayStr
   }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr, daysShown]);
@@ -9482,6 +9545,161 @@ function CallSchedule() {
       style: css.mini(false)
     }, "Open ", fmtMD(r.day), " in the day editor")));
   };
+  const navTabs = (() => {
+    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", isApp ? "Mine" : isFollowing ? "Following" : "Mine"], ["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
+    let tabs = allTabs;
+    if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
+    if (!mySurgeon && !isFollowing && !isApp) tabs = tabs.filter(([k]) => k !== "myschedule");
+    return tabs;
+  })();
+  const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
+  const pendingTradesTitle = isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer";
+  const openSlotsTitle = boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "");
+  const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !paintSheet && !offerSheet;
+  const barTabs = ["calendar", "myschedule", "openshifts", "timeoff"].map(k => navTabs.find(([t]) => t === k)).filter(Boolean);
+  const moreTabs = navTabs.filter(([k]) => !barTabs.some(([b]) => b === k));
+  const viewInMore = moreTabs.some(([k]) => k === view);
+  const bannerLift = tabBarShown ? TABBAR_H : 0;
+  const scrollTopNow = () => {
+    try {
+      window.scrollTo(0, 0);
+    } catch (e) {
+      console.warn("tab bar: could not scroll to the top", e);
+    }
+  };
+  const focusMoreBtn = () => {
+    if (moreBtnRef.current) {
+      try {
+        moreBtnRef.current.focus();
+      } catch (e) {
+        console.warn("tab bar: could not focus More", e);
+      }
+    }
+  };
+  const closeMore = refocus => {
+    setMoreOpen(false);
+    if (refocus) focusMoreBtn();
+  };
+  const tabBarGo = k => {
+    setMoreOpen(false);
+    setShowNotifs(false);
+    if (setView(k)) scrollTopNow();
+  };
+  const openAlertsSheet = () => {
+    setMoreOpen(false);
+    setShowNotifs(true);
+    markNotifsSeen();
+  };
+  const closeAlerts = () => {
+    setShowNotifs(false);
+    if (tabBarShown) focusMoreBtn();
+  };
+  const sheetTabKeyDown = e => {
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(e.currentTarget.querySelectorAll('button:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);
+    if (next) {
+      e.preventDefault();
+      try {
+        next.focus();
+      } catch (err) {
+        console.warn("tab bar sheet: focus trap could not move focus", err);
+      }
+    }
+  };
+  useEffect(() => {
+    if (!tabBarShown) setMoreOpen(false);
+  }, [tabBarShown]);
+  useEffect(() => {
+    if (!tabBarShown || !(moreOpen || showNotifs)) return undefined;
+    const onKey = e => {
+      if (e.key !== "Escape") return;
+      if (moreOpen) closeMore(true);else closeAlerts();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tabBarShown, moreOpen, showNotifs]);
+  useEffect(() => {
+    if (!tabBarShown || !(moreOpen || showNotifs)) return undefined;
+    const id = requestAnimationFrame(() => {
+      const el = moreOpen ? moreSheetRef.current && moreSheetRef.current.querySelector("[data-more-item]") : notifCloseRef.current;
+      if (el) {
+        try {
+          el.focus();
+        } catch (e) {
+          console.warn("tab bar sheet: could not move the focus into it", e);
+        }
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [tabBarShown, moreOpen, showNotifs]);
+  useEffect(() => {
+    try {
+      document.documentElement.style.scrollPaddingBottom = tabBarShown ? TABBAR_CLEAR : "";
+    } catch (e) {
+      console.warn("tab bar: could not set the page's scroll padding", e);
+    }
+  }, [tabBarShown]);
+  const tabBtn = on => ({
+    flex: "1 1 0",
+    minWidth: 0,
+    position: "relative",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+    padding: "6px 2px 5px",
+    background: "none",
+    border: "none",
+    color: on ? T.onNavy : T.navTab,
+    fontSize: 10.5,
+    fontWeight: on ? 700 : 600,
+    lineHeight: 1.15,
+    fontFamily: font,
+    cursor: "pointer"
+  });
+  const tabMark = {
+    position: "absolute",
+    top: 0,
+    left: "50%",
+    transform: "translateX(-50%)",
+    width: 28,
+    height: 3,
+    borderRadius: "0 0 3px 3px",
+    background: T.accent
+  };
+  const tabBadge = {
+    position: "absolute",
+    top: 4,
+    left: "calc(50% + 5px)",
+    minWidth: 18,
+    height: 18,
+    padding: "0 5px",
+    borderRadius: 9,
+    fontSize: 10,
+    fontWeight: 700,
+    lineHeight: "18px",
+    textAlign: "center",
+    boxShadow: "0 0 0 2px " + T.navy
+  };
+  const moreRow = {
+    display: "flex",
+    alignItems: "center",
+    gap: 14,
+    width: "100%",
+    minHeight: 48,
+    padding: "0 18px",
+    background: "none",
+    border: "none",
+    borderTop: "1px solid " + T.border,
+    color: T.text,
+    fontSize: 15,
+    fontWeight: 600,
+    fontFamily: font,
+    textAlign: "left",
+    cursor: "pointer"
+  };
   const authBox = children => React.createElement("div", {
     style: {
       display: "flex",
@@ -9627,14 +9845,14 @@ function CallSchedule() {
     "aria-live": "polite",
     "data-testid": "toast-box",
     onClick: dismissToast,
-    style: _objectSpread(_objectSpread(_objectSpread({
+    style: _objectSpread(_objectSpread(_objectSpread(_objectSpread({
       position: "fixed",
       left: "50%"
     }, paintSheet || offerSheet ? {
       top: `calc(12px + ${SAFE_AREA.top})`
     } : {
       bottom: `calc(24px + ${SAFE_AREA.bottom})`
-    }), toastLift ? {
+    }), tabBarShown ? (moreOpen || showNotifs) && !editorDay && !claimSheet ? css.topToast : css.aboveTabBar(24) : {}), toastLift ? {
       bottom: toastLift
     } : {}), {}, {
       transform: "translateX(-50%)",
@@ -10001,7 +10219,7 @@ function CallSchedule() {
       flexWrap: "wrap",
       gap: 10,
       padding: "9px 14px"
-    }, css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0))), {}, {
+    }, css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0), bannerLift)), {}, {
       fontSize: 12.5,
       fontWeight: 600,
       fontFamily: font
@@ -10035,7 +10253,7 @@ function CallSchedule() {
       flexWrap: "wrap",
       gap: 10,
       padding: "9px 14px"
-    }, css.bottomBanner(updateAvailable ? 1 : 0)), {}, {
+    }, css.bottomBanner(updateAvailable ? 1 : 0, bannerLift)), {}, {
       fontSize: 12.5,
       fontWeight: 600,
       fontFamily: font
@@ -10069,7 +10287,7 @@ function CallSchedule() {
       flexWrap: "wrap",
       gap: 10,
       padding: "9px 14px"
-    }, css.bottomBanner(0)), {}, {
+    }, css.bottomBanner(0, bannerLift)), {}, {
       fontSize: 12.5,
       fontWeight: 600,
       fontFamily: font,
@@ -10661,62 +10879,55 @@ function CallSchedule() {
       padding: "2px 8px",
       lineHeight: "12px"
     }
-  }, errorLog.length === 1 ? "1 error" : errorLog.length + " errors"))))), !isPublicMode && React.createElement("div", {
+  }, errorLog.length === 1 ? "1 error" : errorLog.length + " errors"))))), !isPublicMode && !isPhone && React.createElement("div", {
     style: css.nav
-  }, (() => {
-    const allTabs = [["setup", "Setup"], ["calendar", "Calendar"], ["openshifts", "Open shifts"], ["myschedule", isApp ? "Mine" : isFollowing ? "Following" : "Mine"], ["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"], ["totals", "Totals"], ["settings", "Settings"]];
-    let tabs = allTabs;
-    if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
-    if (!mySurgeon && !isFollowing && !isApp) tabs = tabs.filter(([k]) => k !== "myschedule");
-    const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
-    return tabs.map(([k, l]) => React.createElement("button", {
-      key: k,
-      "data-tab": k,
-      className: "navtab",
-      style: _objectSpread(_objectSpread({}, css.tab(view === k, T.accent)), {}, {
-        position: "relative"
-      }),
-      onClick: () => setView(k)
-    }, l, k === "timeoff" && pendingTrades > 0 && React.createElement("span", {
-      "data-testid": "timeoff-badge",
-      title: isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer",
-      style: {
-        position: "absolute",
-        top: -4,
-        right: -4,
-        background: T.accent,
-        color: T.onAccent,
-        borderRadius: 10,
-        fontSize: 9,
-        fontWeight: 700,
-        minWidth: 16,
-        height: 16,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "0 4px"
-      }
-    }, pendingTrades), k === "openshifts" && boardSlots.length > 0 && React.createElement("span", {
-      "data-testid": "openshifts-badge",
-      title: boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : ""),
-      style: {
-        position: "absolute",
-        top: -4,
-        right: -4,
-        background: "#e04040",
-        color: "#fff",
-        borderRadius: 10,
-        fontSize: 9,
-        fontWeight: 700,
-        minWidth: 16,
-        height: 16,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "0 4px"
-      }
-    }, boardSlots.length)));
-  })(), React.createElement("button", {
+  }, navTabs.map(([k, l]) => React.createElement("button", {
+    key: k,
+    "data-tab": k,
+    className: "navtab",
+    style: _objectSpread(_objectSpread({}, css.tab(view === k, T.accent)), {}, {
+      position: "relative"
+    }),
+    onClick: () => setView(k)
+  }, l, k === "timeoff" && pendingTrades > 0 && React.createElement("span", {
+    "data-testid": "timeoff-badge",
+    title: pendingTradesTitle,
+    style: {
+      position: "absolute",
+      top: -4,
+      right: -4,
+      background: T.accent,
+      color: T.onAccent,
+      borderRadius: 10,
+      fontSize: 9,
+      fontWeight: 700,
+      minWidth: 16,
+      height: 16,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "0 4px"
+    }
+  }, pendingTrades), k === "openshifts" && boardSlots.length > 0 && React.createElement("span", {
+    "data-testid": "openshifts-badge",
+    title: openSlotsTitle,
+    style: {
+      position: "absolute",
+      top: -4,
+      right: -4,
+      background: "#e04040",
+      color: "#fff",
+      borderRadius: 10,
+      fontSize: 9,
+      fontWeight: 700,
+      minWidth: 16,
+      height: 16,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "0 4px"
+    }
+  }, boardSlots.length))), React.createElement("button", {
     className: "navtab",
     onClick: () => {
       setShowNotifs(p => !p);
@@ -10768,6 +10979,7 @@ function CallSchedule() {
     }),
     title: "Paint the dates you'll cover (primary / backup / either), any time ahead"
   }, "Paint offers"))), React.createElement("div", {
+    "data-testid": "app-main",
     style: {
       maxWidth: 1020,
       margin: "0 auto",
@@ -10819,9 +11031,43 @@ function CallSchedule() {
       minHeight: 40,
       opacity: daysRetrying ? 0.6 : 1
     })
-  }, daysRetrying ? "Retrying..." : "Retry")), !isPublicMode && showNotifs && React.createElement("div", {
+  }, daysRetrying ? "Retrying..." : "Retry")), !isPublicMode && showNotifs && tabBarShown && React.createElement("div", {
+    className: "sheet-backdrop",
+    "data-testid": "notif-backdrop",
+    onClick: closeAlerts,
+    style: _objectSpread(_objectSpread({
+      position: "fixed",
+      left: 0,
+      right: 0,
+      top: 0
+    }, css.aboveTabBar(0)), {}, {
+      zIndex: 9240,
+      background: "rgba(0,0,0,0.35)",
+      touchAction: "none"
+    })
+  }), !isPublicMode && showNotifs && React.createElement("div", {
     "data-testid": "notif-panel",
-    style: {
+    className: "notif-panel",
+    role: tabBarShown ? "dialog" : undefined,
+    "aria-modal": tabBarShown ? "true" : undefined,
+    "aria-label": tabBarShown ? "Alerts" : undefined,
+    onKeyDown: tabBarShown ? sheetTabKeyDown : undefined,
+    style: tabBarShown ? _objectSpread(_objectSpread({
+      position: "fixed",
+      left: 0,
+      right: 0
+    }, css.aboveTabBar(0)), {}, {
+      maxHeight: "70vh",
+      overflowY: "auto",
+      overscrollBehavior: "contain",
+      background: "#fff",
+      border: "1px solid #dce2e8",
+      borderBottom: "none",
+      borderRadius: "14px 14px 0 0",
+      boxShadow: "0 -8px 24px rgba(0,0,0,0.18)",
+      zIndex: 9250,
+      padding: "12px 14px"
+    }) : {
       position: "absolute",
       top: 0,
       right: 14,
@@ -10868,8 +11114,9 @@ function CallSchedule() {
       fontFamily: font
     }
   }, "Clear all"), React.createElement("button", {
+    ref: notifCloseRef,
     "aria-label": "Close notifications",
-    onClick: () => setShowNotifs(false),
+    onClick: closeAlerts,
     style: {
       background: "none",
       border: "none",
@@ -10920,6 +11167,7 @@ function CallSchedule() {
         if (targetTab && setView(targetTab)) {
           setShowNotifs(false);
           markNotifsSeen();
+          if (tabBarShown) scrollTopNow();
         }
       },
       style: {
@@ -11501,6 +11749,11 @@ function CallSchedule() {
       if (refuseUnreadDay()) return;
       setEditorDay(d);
     };
+    const isMine = h => !isPublicMode && !!mySurgeon && h === mySurgeon;
+    const mineRing = {
+      borderColor: T.mineRim,
+      boxShadow: "0 0 0 " + (dk ? 1.5 : 1) + "px " + T.mineRing
+    };
     const SlotLine = ({
       role,
       day,
@@ -11555,16 +11808,20 @@ function CallSchedule() {
           className: "cal-code"
         }, ext.slice(0, 3).toUpperCase()));
       } else {
-        const c = colorOf(holder);
+        const c = colorOf(holder),
+          mine = isMine(holder);
         body = React.createElement("span", {
           className: "cal-pill",
+          "data-mine": mine ? "1" : undefined,
           title: nameOf(holder),
-          style: {
+          style: _objectSpread(_objectSpread({
             background: c.tg,
             color: c.tx,
             borderColor: c.bd,
             borderStyle: c.dashed ? "dashed" : "solid"
-          }
+          }, mine ? mineRing : {}), mine && locked && isScheduler ? {
+            marginRight: 2
+          } : {})
         }, React.createElement("span", {
           className: "cal-name"
         }, nameOf(holder)), React.createElement("span", {
@@ -11635,9 +11892,130 @@ function CallSchedule() {
     const legendExt = legendExtH ? legendExtH.slice(4) : "";
     const legendHol = rulesCtx ? gridDays.map(gd => isHolidayDay(rulesCtx, gd)).filter(Boolean).map(u => u.name).filter((n, i, all) => all.indexOf(n) === i) : [];
     const legendVac = gridDays.some(gd => calVac(gd).length > 0);
+    const legendMine = gridDays.some(gd => {
+      const g = gridRow(gd);
+      return isMine(dayHolder(g, "primary")) || isMine(dayHolder(g, "backup"));
+    });
+    const myNext = !isPublicMode && mySurgeon && daysShown ? myNextCallLine(onCall, mySurgeon, upcomingDaysOf(mySurgeon, null), lastPublishedDay) : null;
     return React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "cal-card",
       style: css.card
-    }, (() => {
+    }, React.createElement("div", {
+      "data-testid": "today-banner",
+      className: "ocn-banner",
+      "data-shift-day": onCall.shiftDay,
+      "data-before-handoff": onCall.beforeHandoff ? "1" : "0",
+      style: {
+        fontSize: 12.5,
+        color: dkText,
+        background: dk ? "#13294B" : "#f8f9fb",
+        border: "1px solid " + dkCardBorder,
+        borderRadius: 6,
+        padding: "6px 10px",
+        marginBottom: 10,
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, React.createElement("strong", {
+      title: "The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"
+    }, "On call now", React.createElement("span", {
+      className: "ocn-until"
+    }, " (until 07:00 ", onCall.handoffDow, ")"), ":"), React.createElement("span", {
+      style: {
+        whiteSpace: "nowrap"
+      }
+    }, "P ", React.createElement(HolderTag, {
+      a: onCall.current,
+      role: "primary",
+      small: true
+    })), React.createElement("span", {
+      style: {
+        whiteSpace: "nowrap"
+      }
+    }, "B ", React.createElement(HolderTag, {
+      a: onCall.current,
+      role: "backup",
+      small: true
+    })), React.createElement("span", {
+      "data-testid": "today-banner-msg",
+      hidden: !isPublicMode && !shareMsgShown,
+      style: {
+        fontFamily: mono,
+        fontSize: 11,
+        color: dkSubtext
+      }
+    }, buildTonightMsg()), !isPublicMode && React.createElement("button", {
+      "data-testid": "share-today",
+      className: "ocn-share",
+      onClick: shareTonightMsg,
+      disabled: !daysShown,
+      title: daysShown ? "Shares: " + buildTonightMsg() : "The schedule has not loaded - nothing to share yet",
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "4px 10px",
+        fontSize: 11,
+        marginLeft: "auto",
+        opacity: daysShown ? 1 : 0.5,
+        cursor: daysShown ? "pointer" : "default"
+      })
+    }, copied ? "Copied" : React.createElement(React.Fragment, null, "Share", React.createElement("span", {
+      className: "ocn-share-long"
+    }, " today"))), onCall.beforeHandoff && React.createElement("div", {
+      "data-testid": "today-banner-next",
+      style: {
+        flexBasis: "100%",
+        display: "flex",
+        gap: 6,
+        alignItems: "center",
+        flexWrap: "wrap",
+        color: dkSubtext
+      }
+    }, React.createElement("span", null, "From 07:00:"), " ", React.createElement(HolderTag, {
+      a: onCall.next,
+      role: "primary",
+      small: true
+    }), " ", React.createElement("span", null, "/"), " ", React.createElement(HolderTag, {
+      a: onCall.next,
+      role: "backup",
+      small: true
+    })), myNext && React.createElement("div", {
+      "data-testid": "my-next-call",
+      "data-kind": myNext.kind,
+      "data-next-day": myNext.next ? myNext.next.day : "",
+      "data-next-role": myNext.next ? myNext.next.role : "",
+      style: {
+        flexBasis: "100%",
+        fontWeight: 600
+      }
+    }, myNext.text), groupCall && React.createElement("div", {
+      "data-testid": "group-call",
+      "data-group-mode": groupCall.mode,
+      "data-group-day": groupCall.day,
+      style: {
+        flexBasis: "100%",
+        display: "flex",
+        gap: 6,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }
+    }, groupCall.mode === "own" ? React.createElement(React.Fragment, null, React.createElement("strong", null, "Group call:"), " ", React.createElement("span", null, "own patients until ", groupCall.untilLabel, " · from ", groupCall.untilLabel, ":"), " ", React.createElement(HolderTag, {
+      a: groupCall.entry,
+      role: "primary",
+      small: true
+    })) : React.createElement(React.Fragment, null, React.createElement("strong", null, "Group call now:"), " ", React.createElement(HolderTag, {
+      a: groupCall.entry,
+      role: "primary",
+      small: true
+    }), " ", React.createElement("span", null, "(Trauma primary)"))), groupCall && React.createElement("div", {
+      "data-testid": "group-call-rule",
+      style: {
+        flexBasis: "100%",
+        fontSize: 11,
+        lineHeight: 1.4,
+        color: dkSubtext
+      }
+    }, groupCallRuleSentence(groupRules))), offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar"), (() => {
       const covItem = (key, text, days, color) => {
         const n = days.length;
         const first = n ? days[0] : null;
@@ -11758,6 +12136,7 @@ function CallSchedule() {
         marginBottom: 10
       }
     }, React.createElement("div", {
+      className: "cal-navrow",
       style: {
         display: "flex",
         alignItems: "center",
@@ -11767,12 +12146,16 @@ function CallSchedule() {
     }, React.createElement("button", {
       onClick: prevMonth,
       "aria-label": "Previous month",
+      className: "cal-navbtn cal-navarrow",
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         minWidth: 40,
         padding: "5px 10px"
       })
     }, "‹"), React.createElement("span", {
+      className: "cal-title"
+    }, React.createElement("span", {
       "data-testid": "cal-month",
+      "aria-hidden": isPhone ? "true" : undefined,
       style: {
         fontSize: 15,
         fontWeight: 700,
@@ -11780,20 +12163,51 @@ function CallSchedule() {
         minWidth: 150,
         textAlign: "center"
       }
-    }, MO[calMonth], " ", calYear), React.createElement("button", {
+    }, MO[calMonth], " ", calYear), React.createElement("span", {
+      className: "cal-caret",
+      "aria-hidden": "true",
+      style: {
+        width: 0,
+        height: 0,
+        borderLeft: "4px solid transparent",
+        borderRight: "4px solid transparent",
+        borderTop: "5px solid " + dkSubtext,
+        marginLeft: 6
+      }
+    }), React.createElement("button", {
+      type: "button",
+      "data-testid": "cal-month-toggle",
+      className: "cal-title-btn",
+      "aria-controls": "cal-picks",
+      "aria-expanded": calPickOpen,
+      "aria-label": MO[calMonth] + " " + calYear + " - choose month and year",
+      onClick: () => setCalPickOpen(o => !o),
+      style: {
+        background: "transparent",
+        border: "none",
+        padding: 0,
+        cursor: "pointer"
+      }
+    })), React.createElement("button", {
       onClick: nextMonth,
       "aria-label": "Next month",
+      className: "cal-navbtn cal-navarrow",
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         minWidth: 40,
         padding: "5px 10px"
       })
     }, "›"), React.createElement("button", {
       onClick: goToday,
+      "data-testid": "cal-today",
+      className: "cal-navbtn",
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "5px 10px",
         fontSize: 11
       })
-    }, "Today"), React.createElement("select", {
+    }, "Today"), React.createElement("div", {
+      id: "cal-picks",
+      className: "cal-picks" + (calPickOpen ? " cal-picks-open" : "")
+    }, React.createElement("select", {
       "data-testid": "cal-month-select",
       "aria-label": "Month",
       value: calMonth,
@@ -11832,7 +12246,8 @@ function CallSchedule() {
         fontSize: 12,
         padding: "4px 6px"
       })
-    })), React.createElement("div", {
+    }))), React.createElement("div", {
+      className: "cal-chips",
       style: {
         display: "flex",
         alignItems: "center",
@@ -11844,18 +12259,21 @@ function CallSchedule() {
       return React.createElement("button", {
         key: s.id,
         "data-filter": s.code,
+        className: "cal-chip",
         "aria-pressed": on,
         title: "Show " + s.name + (on ? " (on)" : ""),
         onClick: () => toggleCalFilter(s.id),
         style: chipStyle(on, colorOf(s.id))
       }, s.code);
     }), calSurgeonFilters.length > 0 && React.createElement("button", {
+      className: "cal-chip-all",
       onClick: () => setCalSurgeonFilters([]),
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "3px 8px",
         fontSize: 11
       })
     }, "All"), React.createElement("label", {
+      className: "cal-onlyopen",
       style: {
         display: "flex",
         alignItems: "center",
@@ -11870,107 +12288,7 @@ function CallSchedule() {
       "data-testid": "cal-only-open",
       checked: calOnlyOpen,
       onChange: e => setCalOnlyOpen(e.target.checked)
-    }), " only OPEN"))), React.createElement("div", {
-      "data-testid": "today-banner",
-      "data-shift-day": onCall.shiftDay,
-      "data-before-handoff": onCall.beforeHandoff ? "1" : "0",
-      style: {
-        fontSize: 12.5,
-        color: dkText,
-        background: dk ? "#13294B" : "#f8f9fb",
-        border: "1px solid " + dkCardBorder,
-        borderRadius: 6,
-        padding: "6px 10px",
-        marginBottom: 10,
-        display: "flex",
-        gap: 8,
-        alignItems: "center",
-        flexWrap: "wrap"
-      }
-    }, React.createElement("strong", {
-      title: "The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"
-    }, "On call now (until 07:00 ", onCall.handoffDow, "):"), React.createElement("span", {
-      style: {
-        whiteSpace: "nowrap"
-      }
-    }, "P ", React.createElement(HolderTag, {
-      a: onCall.current,
-      role: "primary",
-      small: true
-    })), React.createElement("span", {
-      style: {
-        whiteSpace: "nowrap"
-      }
-    }, "B ", React.createElement(HolderTag, {
-      a: onCall.current,
-      role: "backup",
-      small: true
-    })), React.createElement("span", {
-      "data-testid": "today-banner-msg",
-      hidden: !isPublicMode && !shareMsgShown,
-      style: {
-        fontFamily: mono,
-        fontSize: 11,
-        color: dkSubtext
-      }
-    }, buildTonightMsg()), !isPublicMode && React.createElement("button", {
-      "data-testid": "share-today",
-      onClick: shareTonightMsg,
-      disabled: !daysShown,
-      title: daysShown ? "Shares: " + buildTonightMsg() : "The schedule has not loaded - nothing to share yet",
-      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-        padding: "4px 10px",
-        fontSize: 11,
-        marginLeft: "auto",
-        opacity: daysShown ? 1 : 0.5,
-        cursor: daysShown ? "pointer" : "default"
-      })
-    }, copied ? "Copied" : "Share today"), onCall.beforeHandoff && React.createElement("div", {
-      "data-testid": "today-banner-next",
-      style: {
-        flexBasis: "100%",
-        display: "flex",
-        gap: 6,
-        alignItems: "center",
-        flexWrap: "wrap",
-        color: dkSubtext
-      }
-    }, React.createElement("span", null, "From 07:00:"), " ", React.createElement(HolderTag, {
-      a: onCall.next,
-      role: "primary",
-      small: true
-    }), " ", React.createElement("span", null, "/"), " ", React.createElement(HolderTag, {
-      a: onCall.next,
-      role: "backup",
-      small: true
-    })), groupCall && React.createElement("div", {
-      "data-testid": "group-call",
-      "data-group-mode": groupCall.mode,
-      "data-group-day": groupCall.day,
-      style: {
-        flexBasis: "100%",
-        display: "flex",
-        gap: 6,
-        alignItems: "center",
-        flexWrap: "wrap"
-      }
-    }, groupCall.mode === "own" ? React.createElement(React.Fragment, null, React.createElement("strong", null, "Group call:"), " ", React.createElement("span", null, "own patients until ", groupCall.untilLabel, " · from ", groupCall.untilLabel, ":"), " ", React.createElement(HolderTag, {
-      a: groupCall.entry,
-      role: "primary",
-      small: true
-    })) : React.createElement(React.Fragment, null, React.createElement("strong", null, "Group call now:"), " ", React.createElement(HolderTag, {
-      a: groupCall.entry,
-      role: "primary",
-      small: true
-    }), " ", React.createElement("span", null, "(Trauma primary)"))), groupCall && React.createElement("div", {
-      "data-testid": "group-call-rule",
-      style: {
-        flexBasis: "100%",
-        fontSize: 11,
-        lineHeight: 1.4,
-        color: dkSubtext
-      }
-    }, groupCallRuleSentence(groupRules))), offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar"), !loaded && React.createElement("p", {
+    }), " only OPEN"))), !loaded && React.createElement("p", {
       style: muted
     }, "Loading schedule"), loaded && !daysReadOk && React.createElement("p", {
       "data-testid": "cal-days-unread",
@@ -12249,7 +12567,28 @@ function CallSchedule() {
         color: T.open,
         fontWeight: 800
       }
-    }, "OPEN"), " = nobody assigned (today onward)"), legendExt && React.createElement("span", {
+    }, "OPEN"), " = nobody assigned (today onward)"), legendMine && (() => {
+      const c = colorOf(mySurgeon);
+      return React.createElement("span", {
+        "data-testid": "legend-mine",
+        style: {
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4
+        }
+      }, React.createElement("span", {
+        className: "cal-pill",
+        style: _objectSpread({
+          background: c.tg,
+          color: c.tx,
+          borderStyle: c.dashed ? "dashed" : "solid"
+        }, mineRing)
+      }, React.createElement("span", {
+        className: "cal-name"
+      }, nameOf(mySurgeon)), React.createElement("span", {
+        className: "cal-code"
+      }, codeOf(mySurgeon))), " = you on call");
+    })(), legendExt && React.createElement("span", {
       "data-testid": "legend-ext"
     }, React.createElement("span", {
       style: {
@@ -12577,16 +12916,14 @@ function CallSchedule() {
         padding: "4px 6px"
       })
     })), React.createElement("button", {
-      "data-testid": "er-preset-1213",
-      onClick: () => setErRange({
-        from: "2026-11-02",
-        to: "2026-12-13"
-      }),
+      "data-testid": "er-preset-6w",
+      onClick: () => setErRange(erSixWeeks),
+      title: "Six Mon-Sun weeks: " + fmtMD(erSixWeeks.from) + " - " + fmtMD(erSixWeeks.to),
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
         padding: "4px 10px",
         fontSize: 11
       })
-    }, "11/2 through 12/13"), React.createElement("button", {
+    }, "Next 6 weeks"), React.createElement("button", {
       "data-testid": "er-reset",
       onClick: () => setErRange(null),
       style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
@@ -13386,7 +13723,7 @@ function CallSchedule() {
           marginTop: 4,
           opacity: 0.95
         }
-      }, next.role === "primary" ? "Backup" : "Primary", ": ", holderLabel(next.other, nameOf), " - 07:00 to 07:00 next day", next.locked ? " - locked" : "", badgesFor(next.day, who).map(b => " - " + b.title).join("")))), React.createElement("div", {
+      }, next.role === "primary" ? "Backup" : "Primary", ": ", holderLabel(next.other, nameOf), " - 07:00 to 07:00 next day", next.locked && isScheduler ? " - locked" : "", badgesFor(next.day, who).map(b => " - " + b.title).join("")))), React.createElement("div", {
         style: {
           display: "flex",
           alignItems: "baseline",
@@ -13443,7 +13780,7 @@ function CallSchedule() {
           gap: 4,
           whiteSpace: "nowrap"
         }
-      }, dowShort(x.day), " ", fmtMD(x.day), x.locked && React.createElement(Padlock, {
+      }, dowShort(x.day), " ", fmtMD(x.day), x.locked && isScheduler && React.createElement(Padlock, {
         title: "locked",
         size: 9
       })), React.createElement("span", {
@@ -13545,6 +13882,25 @@ function CallSchedule() {
       }
     }), followingCards());
     if (following.length) return React.createElement(React.Fragment, null, followingCards());
+    const mineCalButtons = React.createElement(React.Fragment, null, React.createElement("button", {
+      "data-testid": "download-my-calendar",
+      onClick: () => downloadMyCal(pid),
+      disabled: !daysShown,
+      title: !daysShown ? EXPORT_UNREAD_TITLE : "One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars",
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "5px 12px",
+        fontSize: 11,
+        opacity: daysShown ? 1 : 0.5
+      })
+    }, "Download my calendar"), React.createElement("button", {
+      "data-testid": "copy-sync-url",
+      onClick: () => copyText(syncUrl, "mine-sync"),
+      title: "Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl,
+      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+        padding: "5px 12px",
+        fontSize: 11
+      })
+    }, copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"));
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: css.card,
       "data-testid": "mine-card"
@@ -13590,25 +13946,16 @@ function CallSchedule() {
         padding: "5px 12px",
         fontSize: 11
       })
-    }, pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)), React.createElement("button", {
-      "data-testid": "download-my-calendar",
-      onClick: () => downloadMyCal(pid),
-      disabled: !daysShown,
-      title: !daysShown ? EXPORT_UNREAD_TITLE : "One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars",
-      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-        padding: "5px 12px",
-        fontSize: 11,
-        opacity: daysShown ? 1 : 0.5
-      })
-    }, "Download my calendar"), React.createElement("button", {
-      "data-testid": "copy-sync-url",
-      onClick: () => copyText(syncUrl, "mine-sync"),
-      title: "Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl,
-      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-        padding: "5px 12px",
-        fontSize: 11
-      })
-    }, copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"))), daysBlock(pid, true)), payVisible && !isCoordinator && !payMyCardHidden && (pid === mySurgeon || isScheduler) && pid && React.createElement(PayCard, {
+    }, pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)), !isPhone && mineCalButtons)), daysBlock(pid, true), isPhone && React.createElement("div", {
+      "data-testid": "mine-cal-actions",
+      style: {
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        justifyContent: "flex-end",
+        marginTop: 12
+      }
+    }, mineCalButtons)), payVisible && !isCoordinator && !payMyCardHidden && (pid === mySurgeon || isScheduler) && pid && React.createElement(PayCard, {
       key: pid,
       css: css,
       dk: dk,
@@ -14263,10 +14610,14 @@ function CallSchedule() {
   }, React.createElement("div", {
     style: css.cardT
   }, "Appearance"), React.createElement("div", {
+    "data-testid": "theme-choice",
+    role: "group",
+    "aria-label": "Theme",
     style: {
       display: "flex",
       alignItems: "center",
-      gap: 12
+      gap: 12,
+      flexWrap: "wrap"
     }
   }, React.createElement("span", {
     style: {
@@ -14274,18 +14625,37 @@ function CallSchedule() {
       color: "#5B6B82"
     }
   }, "Theme"), React.createElement("button", {
-    onClick: () => setDarkMode(false),
-    style: _objectSpread(_objectSpread({}, css.btn(!darkMode)), {}, {
+    "data-testid": "theme-light",
+    "aria-pressed": themePref === "light",
+    onClick: () => setThemePref("light"),
+    style: _objectSpread(_objectSpread({}, css.btn(themePref === "light")), {}, {
       padding: "6px 16px",
       fontSize: 12
     })
   }, "Light"), React.createElement("button", {
-    onClick: () => setDarkMode(true),
-    style: _objectSpread(_objectSpread({}, css.btn(darkMode)), {}, {
+    "data-testid": "theme-dark",
+    "aria-pressed": themePref === "dark",
+    onClick: () => setThemePref("dark"),
+    style: _objectSpread(_objectSpread({}, css.btn(themePref === "dark")), {}, {
       padding: "6px 16px",
       fontSize: 12
     })
-  }, "Dark")), React.createElement("div", {
+  }, "Dark"), React.createElement("button", {
+    "data-testid": "theme-auto",
+    "aria-pressed": themePref === "auto",
+    onClick: () => setThemePref("auto"),
+    style: _objectSpread(_objectSpread({}, css.btn(themePref === "auto")), {}, {
+      padding: "6px 16px",
+      fontSize: 12
+    })
+  }, "Auto"), React.createElement("span", {
+    "data-testid": "theme-auto-note",
+    style: {
+      fontSize: 11,
+      color: T.muted,
+      flexBasis: "100%"
+    }
+  }, "Auto follows this device's light or dark setting.")), React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -15627,7 +15997,284 @@ function CallSchedule() {
       padding: "8px 0 0",
       fontWeight: 600
     }
-  }, "Refresh list")))))));
+  }, "Refresh list"))))), isPhone && !isPublicMode && React.createElement("div", {
+    className: "tabbar-spacer",
+    "aria-hidden": "true",
+    style: css.tabBarSpacer
+  }), tabBarShown && React.createElement("nav", {
+    "data-testid": "tabbar",
+    className: "tabbar",
+    "aria-label": "Main",
+    style: _objectSpread(_objectSpread({}, css.tabBar), {}, {
+      background: dkHdr,
+      borderTop: `1px solid ${dk ? T.border : T.navy}`,
+      boxShadow: "0 -2px 10px rgba(0,0,0,0.12)"
+    })
+  }, barTabs.map(([k, l]) => {
+    const here = view === k;
+    return React.createElement("button", {
+      key: k,
+      type: "button",
+      "data-tab": k,
+      className: "tabbar-btn",
+      "aria-current": here ? "page" : undefined,
+      onClick: () => tabBarGo(k),
+      style: tabBtn(here)
+    }, here && React.createElement("span", {
+      "aria-hidden": "true",
+      style: tabMark
+    }), React.createElement(NavIcon, {
+      name: l === "Following" ? "following" : k
+    }), React.createElement("span", {
+      className: "tabbar-label"
+    }, k === "timeoff" ? "Time off" : l), k === "timeoff" && pendingTrades > 0 && React.createElement("span", {
+      "data-testid": "timeoff-badge",
+      title: pendingTradesTitle,
+      style: _objectSpread(_objectSpread({}, tabBadge), {}, {
+        background: T.accent,
+        color: T.onAccent
+      })
+    }, pendingTrades), k === "openshifts" && boardSlots.length > 0 && React.createElement("span", {
+      "data-testid": "openshifts-badge",
+      title: openSlotsTitle,
+      style: _objectSpread(_objectSpread({}, tabBadge), {}, {
+        background: T.open,
+        color: T.onOpen
+      })
+    }, boardSlots.length));
+  }), React.createElement("button", {
+    ref: moreBtnRef,
+    type: "button",
+    "data-testid": "tabbar-more",
+    className: "tabbar-btn",
+    "aria-haspopup": "dialog",
+    "aria-expanded": moreOpen,
+    "aria-controls": "more-sheet",
+    onClick: () => {
+      setShowNotifs(false);
+      setMoreOpen(o => !o);
+    },
+    style: _objectSpread(_objectSpread({}, tabBtn(viewInMore)), moreOpen || showNotifs ? {
+      background: "rgba(255,255,255,0.10)"
+    } : {})
+  }, viewInMore && React.createElement("span", {
+    "aria-hidden": "true",
+    style: tabMark
+  }), React.createElement("span", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 3,
+      minWidth: 0,
+      maxWidth: "100%",
+      color: viewInMore ? T.onNavy : T.navTab
+    }
+  }, React.createElement(NavIcon, {
+    name: "more"
+  }), React.createElement("span", {
+    className: "tabbar-label"
+  }, "More")), myUnreadCount > 0 && React.createElement("span", {
+    "data-testid": "more-badge",
+    title: myUnreadCount + " unread alert(s) - More > Alerts",
+    style: _objectSpread(_objectSpread({}, tabBadge), {}, {
+      background: T.accent,
+      color: T.onAccent
+    })
+  }, myUnreadCount))), tabBarShown && moreOpen && React.createElement("div", {
+    className: "sheet-backdrop",
+    "data-testid": "more-backdrop",
+    onClick: () => closeMore(true),
+    style: _objectSpread(_objectSpread({
+      position: "fixed",
+      left: 0,
+      right: 0,
+      top: 0
+    }, css.aboveTabBar(0)), {}, {
+      zIndex: 9240,
+      background: "rgba(0,0,0,0.35)",
+      touchAction: "none"
+    })
+  }), tabBarShown && React.createElement("div", {
+    id: "more-sheet",
+    ref: moreSheetRef,
+    "data-testid": "more-sheet",
+    className: "more-sheet",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "more-sheet-title",
+    hidden: !moreOpen,
+    onKeyDown: sheetTabKeyDown,
+    style: _objectSpread(_objectSpread({
+      position: "fixed",
+      left: 0,
+      right: 0
+    }, css.aboveTabBar(0)), {}, {
+      zIndex: 9250,
+      maxHeight: "70vh",
+      overflowY: "auto",
+      overscrollBehavior: "contain",
+      background: T.surface,
+      color: T.text,
+      borderTop: "1px solid " + T.border,
+      borderRadius: "14px 14px 0 0",
+      boxShadow: "0 -8px 24px rgba(0,0,0,0.18)",
+      padding: "4px 0 6px",
+      fontFamily: font
+    })
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "2px 4px 2px 18px"
+    }
+  }, React.createElement("span", {
+    id: "more-sheet-title",
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      letterSpacing: 1.2,
+      textTransform: "uppercase",
+      color: T.muted
+    }
+  }, "More"), React.createElement("button", {
+    type: "button",
+    "aria-label": "Close More",
+    onClick: () => closeMore(true),
+    style: {
+      background: "none",
+      border: "none",
+      color: T.muted,
+      fontSize: 20,
+      cursor: "pointer",
+      fontFamily: font,
+      minWidth: 44,
+      minHeight: 44
+    }
+  }, "x")), moreTabs.filter(([k]) => k === "totals").map(([k, l]) => React.createElement("button", {
+    key: k,
+    type: "button",
+    "data-more-item": "",
+    "data-tab": k,
+    className: "more-row",
+    "aria-current": view === k ? "page" : undefined,
+    onClick: () => {
+      closeMore(true);
+      tabBarGo(k);
+    },
+    style: _objectSpread(_objectSpread({}, moreRow), view === k ? {
+      color: T.accentText
+    } : {})
+  }, React.createElement(NavIcon, {
+    name: k
+  }), l)), mySurgeon && React.createElement("button", {
+    type: "button",
+    "data-more-item": "",
+    "data-testid": "nav-paint-offers",
+    className: "more-row",
+    title: "Paint the dates you'll cover (primary / backup / either), any time ahead",
+    onClick: () => {
+      setMoreOpen(false);
+      setOfferSheet({
+        personId: mySurgeon
+      });
+    },
+    style: moreRow
+  }, React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 14,
+      color: T.text
+    }
+  }, React.createElement(NavIcon, {
+    name: "paint"
+  }), "Paint offers")), moreTabs.filter(([k]) => k === "settings").map(([k, l]) => React.createElement("button", {
+    key: k,
+    type: "button",
+    "data-more-item": "",
+    "data-tab": k,
+    className: "more-row",
+    "aria-current": view === k ? "page" : undefined,
+    onClick: () => {
+      closeMore(true);
+      tabBarGo(k);
+    },
+    style: _objectSpread(_objectSpread({}, moreRow), view === k ? {
+      color: T.accentText
+    } : {})
+  }, React.createElement(NavIcon, {
+    name: k
+  }), l)), React.createElement("button", {
+    type: "button",
+    "data-more-item": "",
+    "data-alerts": "",
+    className: "more-row",
+    "aria-label": "Alerts" + (myUnreadCount > 0 ? ", " + myUnreadCount + " unread" : ""),
+    onClick: openAlertsSheet,
+    style: moreRow
+  }, myUnreadCount > 0 && React.createElement("span", {
+    style: {
+      order: 2,
+      marginLeft: "auto",
+      minWidth: 20,
+      height: 20,
+      padding: "0 6px",
+      borderRadius: 10,
+      background: T.accent,
+      color: T.onAccent,
+      fontSize: 11,
+      fontWeight: 700,
+      lineHeight: "20px",
+      textAlign: "center"
+    }
+  }, myUnreadCount), React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 14,
+      color: T.text
+    }
+  }, React.createElement(NavIcon, {
+    name: "alerts"
+  }), "Alerts")), moreTabs.filter(([k]) => k === "setup").map(([k, l]) => React.createElement("button", {
+    key: k,
+    type: "button",
+    "data-more-item": "",
+    "data-tab": k,
+    className: "more-row",
+    "aria-current": view === k ? "page" : undefined,
+    onClick: () => {
+      closeMore(true);
+      tabBarGo(k);
+    },
+    style: _objectSpread(_objectSpread({}, moreRow), view === k ? {
+      color: T.accentText
+    } : {})
+  }, React.createElement(NavIcon, {
+    name: k
+  }), l)), isScheduler && scheduleHistory.length > 0 && React.createElement("button", {
+    type: "button",
+    "data-more-item": "",
+    "data-testid": "undo-btn",
+    className: "more-row",
+    title: `Undo (${scheduleHistory.length} steps)`,
+    onClick: () => {
+      closeMore(true);
+      undoLastChange();
+    },
+    style: moreRow
+  }, React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 14,
+      color: T.text
+    }
+  }, React.createElement(NavIcon, {
+    name: "undo"
+  }), "Undo the last change")))));
 }
 const thS = {
   textAlign: "left",
@@ -17902,6 +18549,154 @@ function cvAccountLabel(row, profiles) {
     id: ""
   };
 }
+function useMediaQuery(query) {
+  const read = () => {
+    try {
+      return !!(window.matchMedia && window.matchMedia(query).matches);
+    } catch (e) {
+      console.warn("Couldn't read the media query " + query + " (treated as not matching):", e);
+      return false;
+    }
+  };
+  const [on, setOn] = useState(read);
+  useEffect(() => {
+    let mq = null;
+    try {
+      mq = window.matchMedia ? window.matchMedia(query) : null;
+    } catch (e) {
+      console.warn("Couldn't watch the media query " + query + " (its first reading stays):", e);
+    }
+    if (!mq) return undefined;
+    const onChange = () => setOn(!!mq.matches);
+    const onMediaVisible = () => {
+      if (document.visibilityState === "visible") onChange();
+    };
+    onChange();
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onChange);else if (typeof mq.addListener === "function") mq.addListener(onChange);
+    document.addEventListener("visibilitychange", onMediaVisible);
+    return () => {
+      if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onChange);else if (typeof mq.removeListener === "function") mq.removeListener(onChange);
+      document.removeEventListener("visibilitychange", onMediaVisible);
+    };
+  }, [query]);
+  return on;
+}
+function NavIcon({
+  name,
+  size
+}) {
+  const s = size || 22;
+  let g = null;
+  if (name === "calendar") g = React.createElement(React.Fragment, null, React.createElement("rect", {
+    x: "3.5",
+    y: "5",
+    width: "17",
+    height: "15.5",
+    rx: "2"
+  }), React.createElement("path", {
+    d: "M3.5 10h17M8 3v4M16 3v4"
+  }));else if (name === "myschedule") g = React.createElement(React.Fragment, null, React.createElement("circle", {
+    cx: "12",
+    cy: "8",
+    r: "3.6"
+  }), React.createElement("path", {
+    d: "M4.5 20.5c.8-4 3.8-6.3 7.5-6.3s6.7 2.3 7.5 6.3"
+  }));else if (name === "following") g = React.createElement(React.Fragment, null, React.createElement("circle", {
+    cx: "9",
+    cy: "8.5",
+    r: "3.2"
+  }), React.createElement("path", {
+    d: "M2.8 20c.6-3.5 3.1-5.6 6.2-5.6s5.6 2.1 6.2 5.6M15.5 5.6a3 3 0 0 1 0 5.8M17.6 14.6c1.9.6 3.2 2.5 3.6 5.4"
+  }));else if (name === "openshifts") g = React.createElement(React.Fragment, null, React.createElement("circle", {
+    cx: "12",
+    cy: "12",
+    r: "8.5"
+  }), React.createElement("path", {
+    d: "M12 8v8M8 12h8"
+  }));else if (name === "timeoff") g = React.createElement(React.Fragment, null, React.createElement("circle", {
+    cx: "12",
+    cy: "12",
+    r: "3.8"
+  }), React.createElement("path", {
+    d: "M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"
+  }));else if (name === "totals") g = React.createElement("path", {
+    d: "M3.5 20.5h17M7 20.5v-7M12 20.5v-15M17 20.5v-4.5"
+  });else if (name === "settings") g = React.createElement(React.Fragment, null, React.createElement("path", {
+    d: "M4 7h9M17 7h3M4 17h3M11 17h9"
+  }), React.createElement("circle", {
+    cx: "15",
+    cy: "7",
+    r: "2"
+  }), React.createElement("circle", {
+    cx: "9",
+    cy: "17",
+    r: "2"
+  }));else if (name === "setup") g = React.createElement(React.Fragment, null, React.createElement("rect", {
+    x: "3.5",
+    y: "3.5",
+    width: "7",
+    height: "7",
+    rx: "1.5"
+  }), React.createElement("rect", {
+    x: "13.5",
+    y: "3.5",
+    width: "7",
+    height: "7",
+    rx: "1.5"
+  }), React.createElement("rect", {
+    x: "3.5",
+    y: "13.5",
+    width: "7",
+    height: "7",
+    rx: "1.5"
+  }), React.createElement("rect", {
+    x: "13.5",
+    y: "13.5",
+    width: "7",
+    height: "7",
+    rx: "1.5"
+  }));else if (name === "alerts") g = React.createElement("path", {
+    d: "M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"
+  });else if (name === "paint") g = React.createElement("path", {
+    d: "M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 3L8 18.5zM13.5 7l3 3"
+  });else if (name === "undo") g = React.createElement("path", {
+    d: "M9 7l-4.5 4.5L9 16M4.5 11.5H15a4.5 4.5 0 0 1 0 9h-3"
+  });else if (name === "more") g = React.createElement(React.Fragment, null, React.createElement("circle", {
+    cx: "5.5",
+    cy: "12",
+    r: "1.7",
+    fill: "currentColor",
+    stroke: "none"
+  }), React.createElement("circle", {
+    cx: "12",
+    cy: "12",
+    r: "1.7",
+    fill: "currentColor",
+    stroke: "none"
+  }), React.createElement("circle", {
+    cx: "18.5",
+    cy: "12",
+    r: "1.7",
+    fill: "currentColor",
+    stroke: "none"
+  }));
+  return React.createElement("svg", {
+    "aria-hidden": "true",
+    focusable: "false",
+    width: s,
+    height: s,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.8",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    style: {
+      flexShrink: 0,
+      display: "block"
+    }
+  }, g);
+}
 function offerCandidateWords(st, role) {
   if (!st || typeof st !== "object") return null;
   var modeWords = st.mode === "exhaustive" ? "only these days: ineligible" : "preferred days: penalty";
@@ -19431,7 +20226,7 @@ function DayEditor(props) {
     style: {
       display: "flex",
       alignItems: "center",
-      gap: 6,
+      gap: 4,
       marginBottom: 8
     }
   }, React.createElement("button", {
@@ -19465,6 +20260,7 @@ function DayEditor(props) {
     })
   }, "›"), React.createElement("button", {
     type: "button",
+    "data-testid": "editor-x",
     "aria-label": "Close",
     onClick: requestClose,
     style: {
@@ -19473,8 +20269,11 @@ function DayEditor(props) {
       color: sub,
       fontSize: 20,
       cursor: "pointer",
-      padding: "0 4px",
-      marginLeft: 4
+      padding: "6px 10px",
+      minWidth: 44,
+      minHeight: 44,
+      margin: "-10px -18px -10px 0",
+      outlineOffset: -4
     }
   }, "x")), React.createElement("div", {
     style: {
