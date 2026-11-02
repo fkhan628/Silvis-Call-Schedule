@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-esfWSnZwSS6D9FhTY9IYIoBiVLkCS6gj7yRjBMsgMtA=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-Ao8GEB9/KmFOrbOBjFbCiQsRp89EmDP/Y/iups+5WSQ=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-EMEOoGg12M5J2GTU0+NfAPj7IIqMVplDdUVpZQIwFIE=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-sjUZJbyM+tJWWrIMXzPaoc4e7HrED3zRHH+dKfBSTPo=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -239,11 +239,14 @@
       .mine-hol-letter { display: inline; }
     }
     /* item 1 review (11/1): at 340 px and under (an iPhone SE 1st generation, Display Zoom on the small phones) the month title
-       keeps its year - a 13 px title and a slimmer Today (its 44 px minimum stays) */
+       keeps its year - a 12 px title, a 3 px caret margin, a slimmer Today (its 44 px minimum stays) and 4 px gaps in the row
+       (review 11/1: in Outfit, with 6 px gaps, 'September 2026' had 1 px to spare at 320 px and 'September 2030' would not fit;
+       the 4 px gaps give 6 px more) */
     @media (max-width: 340px) {
       .cal-title > :first-child { font-size: 12px !important; }
       .cal-caret { margin-left: 3px !important; }
       .cal-navbtn:not(.cal-navarrow) { padding-left: 4px !important; padding-right: 4px !important; }
+      .cal-navrow { gap: 4px !important; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -254,7 +257,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.11.01a";
+    var APP_VERSION = "2026.11.02a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -419,6 +422,7 @@ function CallSchedule() {
   const moreBtnRef = useRef(null);
   const moreSheetRef = useRef(null);
   const notifCloseRef = useRef(null);
+  const tabBarShownRef = useRef(false);
   const [surgeons, setSurgeons] = useState(INIT_SURGEONS);
   const [surgeonRules, setSurgeonRules] = useState(undefined);
   const [groupRules, setGroupRules] = useState(undefined);
@@ -4701,6 +4705,9 @@ function CallSchedule() {
     const d = parse(day);
     setCalMonth(d.getMonth());
     setCalYear(d.getFullYear());
+    setMoreOpen(false);
+    if (tabBarShownRef.current) setShowNotifs(false);
+    setShowErrorLog(false);
     setEditorDay(day);
   };
   const genToday = todayCentral();
@@ -7406,6 +7413,9 @@ function CallSchedule() {
       if (pushTapKeepsDraft(r)) return;
       if (!setView(r.tab)) return;
       pushTapDropDraft(r);
+      setMoreOpen(false);
+      setShowNotifs(false);
+      if (tabBarShownRef.current) scrollTopNow();
       if (r.day) setPushDay({
         day: r.day,
         at: Date.now()
@@ -8180,6 +8190,13 @@ function CallSchedule() {
   const [claimBusy, setClaimBusy] = useState(false);
   const [obNotice, setObNotice] = useState(null);
   const [obNoticeBusy, setObNoticeBusy] = useState(false);
+  useEffect(() => {
+    if (view === "openshifts") return;
+    if (!claimBusy) setClaimSheet(null);
+    if (!obNoticeBusy) setObNotice(null);
+  }, [view, claimBusy, obNoticeBusy]);
+  const editorUp = (view === "calendar" || view === "openshifts") && !!editorDay && (!loaded || daysReadOk);
+  const claimSheetUp = view === "openshifts" && !!claimSheet;
   const obCancelRef = useRef(null);
   const obEmailBtnRef = useRef(null);
   const claimCancelRef = useRef(null);
@@ -9556,6 +9573,7 @@ function CallSchedule() {
   const pendingTradesTitle = isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer";
   const openSlotsTitle = boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "");
   const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !paintSheet && !offerSheet;
+  tabBarShownRef.current = tabBarShown;
   const barTabs = ["calendar", "myschedule", "openshifts", "timeoff"].map(k => navTabs.find(([t]) => t === k)).filter(Boolean);
   const moreTabs = navTabs.filter(([k]) => !barTabs.some(([b]) => b === k));
   const viewInMore = moreTabs.some(([k]) => k === view);
@@ -9852,7 +9870,7 @@ function CallSchedule() {
       top: `calc(12px + ${SAFE_AREA.top})`
     } : {
       bottom: `calc(24px + ${SAFE_AREA.bottom})`
-    }), tabBarShown ? (moreOpen || showNotifs) && !editorDay && !claimSheet ? css.topToast : css.aboveTabBar(24) : {}), toastLift ? {
+    }), tabBarShown ? (moreOpen || showNotifs) && !editorUp && !claimSheetUp ? css.topToast : css.aboveTabBar(24) : {}), toastLift ? {
       bottom: toastLift
     } : {}), {}, {
       transform: "translateX(-50%)",
