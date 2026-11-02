@@ -2813,7 +2813,10 @@ try {
     if (!liveRows.some(r => r.day >= "2026-10-01" && r.day <= "2026-10-31" && (r.primary_id || r.backup_id))) throw new Error("no October 2026 assignments in the live rows - the recount has nothing to compare");
   } catch (e) { fail("live schedule_days rows: could not read them for the pins and the recount: " + String(e && e.message || e).split("\n")[0]); }
   const liveByDay = {}; liveRows.forEach(r => { liveByDay[r.day] = r; });
-  const lastLiveDay = liveRows.length ? liveRows[liveRows.length - 1].day : todayIso; // the row-less day scans below are bounded from here, not from today (SM2 review)
+  // the LATEST row's day (11/2: the fixture's rows are not sorted - its own held-day row comes last - so the last element read 11/19,
+  // not 11/29, and the outside-surgeon scan below ran out before the run's last edited day); the row-less day scans below are bounded
+  // from here, not from today (SM2 review)
+  const lastLiveDay = liveRows.reduce((m, r) => (r && r.day > m ? r.day : m), "") || todayIso;
   // The live blob (call_schedule_data.data), one anon read like the app's, or the fixture's: the coverage
   // strip's lastPublished and - SM2 review - the holiday-unit days (data in the blob, editable in Setup)
   // that the row-less Fri-Sun triples below must not overlap (a Sat inside a unit is 'holiday-unit',
@@ -2834,7 +2837,7 @@ try {
   // An open slot per the live rows (the app's rule): primary is open with no holder and no external
   // cover (a cover stands in for the primary), backup with no holder; a row-less day is open in both.
   const liveOpen = (d, role) => { const r = liveByDay[d]; return role === "primary" ? !(r && (r.primary_id || r.external_cover)) : !(r && r.backup_id); };
-  console.log(`     (${liveRows.length} ${fixture ? "fixture" : "live"} schedule_days rows ${liveRows[0] ? liveRows[0].day + ".." + liveRows[liveRows.length - 1].day : "(none)"}; open slots on/after today ${todayIso}: ${liveRows.filter(r => r.day >= todayIso && (liveOpen(r.day, "primary") || liveOpen(r.day, "backup"))).map(r => r.day).join(", ") || "none inside the rows"})`);
+  console.log(`     (${liveRows.length} ${fixture ? "fixture" : "live"} schedule_days rows ${liveRows[0] ? liveRows[0].day + ".." + lastLiveDay : "(none)"}; open slots on/after today ${todayIso}: ${liveRows.filter(r => r.day >= todayIso && (liveOpen(r.day, "primary") || liveOpen(r.day, "backup"))).map(r => r.day).join(", ") || "none inside the rows"})`);
 
   // ---- Slice B: October 2026 grid on the imported data ----
   await showMonth(2026, 9);
@@ -11616,7 +11619,7 @@ try {
         // 2027-03-01), so the Totals month below holds exactly this one outside-surgeon day.
         const extDay = (() => {
           const touched = Object.keys(harnessDays).concat([day || todayIso, todayIso]).sort();
-          const scanEnd = isoAddDays(lastLiveDay > todayIso ? lastLiveDay : todayIso, 400);
+          const scanEnd = isoAddDays([lastLiveDay, todayIso, touched[touched.length - 1]].sort().pop(), 400); // past the run's own last edit too (the holiday plan's units reach 1/1/2028)
           for (let d = isoAddDays(touched[touched.length - 1], 1); d <= scanEnd; d = isoAddDays(d, 1)) {
             const dow = new Date(d + "T12:00:00Z").getUTCDay();
             if (dow >= 1 && dow <= 5 && !fixtureHasDay(d) && !liveByDay[d] && !harnessDays[d] && d !== day) return d;
