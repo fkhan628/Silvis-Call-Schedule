@@ -239,11 +239,13 @@
       .mine-hol-letter { display: inline; }
     }
     /* item 1 review (11/1): at 340 px and under (an iPhone SE 1st generation, Display Zoom on the small phones) the month title
-       keeps its year - a 13 px title and a slimmer Today (its 44 px minimum stays) */
+       keeps its year - a 12 px title, a 3 px caret margin, a slimmer Today (its 44 px minimum stays) and 4 px gaps in the row
+       (review 11/1: in Outfit 'September 2026' had 1 px to spare at 320 px and 'September 2030' none; the gaps give 6 more) */
     @media (max-width: 340px) {
       .cal-title > :first-child { font-size: 12px !important; }
       .cal-caret { margin-left: 3px !important; }
       .cal-navbtn:not(.cal-navarrow) { padding-left: 4px !important; padding-right: 4px !important; }
+      .cal-navrow { gap: 4px !important; }
     }
   </style>
   <!-- React, ReactDOM and supabase-js are served from vendor/ (pinned bytes, vendor/README.md) by the
@@ -471,6 +473,7 @@ function CallSchedule() {
   const moreBtnRef = useRef(null);
   const moreSheetRef = useRef(null);
   const notifCloseRef = useRef(null);
+  const tabBarShownRef = useRef(false); // tabBarShown (set where it is computed) for the sw message handler - an old render's closure
 
   // --- Roster / rules / settings (the call_schedule_data blob, id=main) ---
   // roster: { id, name (last name), code, fullName, active, roles }. The
@@ -4150,6 +4153,9 @@ function CallSchedule() {
     if (!setView("calendar")) return; // spec F review: Cancel on the unsaved-APP-days question opens nothing
     const d = parse(day);
     setCalMonth(d.getMonth()); setCalYear(d.getFullYear());
+    // 11/1: the editor never opens over a phone sheet (More, Alerts) or Recent errors - a day a notification queued opens once
+    // the data loaded, maybe after one was opened; no other caller is reachable while one is up (their backdrops cover the page)
+    setMoreOpen(false); setShowNotifs(false); setShowErrorLog(false);
     setEditorDay(day);
   };
   // --- Generate (preview -> Accept & Publish) ---
@@ -5974,7 +5980,8 @@ function CallSchedule() {
   // An app window that is already open: sw.js focuses it and posts { type: "silvis-push-open", tab, day } - switched in place,
   // no reload; a dirty day edit is kept unless the person confirms discarding it (pushTapKeepsDraft), and unsaved My APP day
   // taps unless the APP confirms leaving Mine (setView answers false on Cancel: nothing moves, no day is queued). Once the view
-  // has moved, the phone's More / Alerts sheet (and the wide Alerts panel) closes - 11/1: it stayed open behind the day editor.
+  // has moved, the phone's More / Alerts sheet (and the wide Alerts panel) closes - 11/1: it stayed open behind the day editor -
+  // and a phone shows the target from its top, as a bar tap does (review 11/1).
   useEffect(() => {
     if (isPublicMode || !pushUid) return;
     const sw = typeof navigator !== "undefined" ? navigator.serviceWorker : null;
@@ -5986,6 +5993,7 @@ function CallSchedule() {
       if (!setView(r.tab)) return; // spec F: Cancel on the unsaved-APP-days question - no day queued, the day draft untouched
       pushTapDropDraft(r);
       setMoreOpen(false); setShowNotifs(false); // state setters: safe in this once-per-account closure
+      if (tabBarShownRef.current) scrollTopNow(); // the ref, not tabBarShown: this closure is an old render's
       if (r.day) setPushDay({ day: r.day, at: Date.now() });
     };
     sw.addEventListener("message", onMsg);
@@ -6607,6 +6615,10 @@ function CallSchedule() {
   const [claimBusy, setClaimBusy] = useState(false);
   const [obNotice, setObNotice] = useState(null);      // the composed notice { subject, message, detail, slots, count, through } while the Email-the-group preview dialog is open (part 5b)
   const [obNoticeBusy, setObNoticeBusy] = useState(false);
+  // Both dialogs render inside the Open shifts view and their backdrops cover both navs, so only a notification tap moves the
+  // view while one is up: their state goes with the view (review 11/1 - a stale claim sheet came back on the next visit, and
+  // the toast read it as a dialog over the phone sheets). A claim or a send in flight keeps its own copy and closes itself.
+  useEffect(() => { if (view !== "openshifts") { setClaimSheet(null); setObNotice(null); } }, [view]);
   const obCancelRef = useRef(null);                    // the preview dialog's Cancel button - focused when the dialog opens
   const obEmailBtnRef = useRef(null);                  // the 'Email the group now' button - focus goes back to it when the dialog closes
   const claimCancelRef = useRef(null);                 // the sheet's Cancel button - focused when the sheet opens
@@ -7322,6 +7334,7 @@ function CallSchedule() {
   // backdrop. Slots (Faraz 11/1): Calendar, Mine (Following), Open shifts, Time off - each where the role has it - then More:
   // Totals, Paint offers, Settings, Alerts, and Setup and Undo for the scheduler.
   const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !paintSheet && !offerSheet;
+  tabBarShownRef.current = tabBarShown;
   const barTabs = ["calendar", "myschedule", "openshifts", "timeoff"].map(k => navTabs.find(([t]) => t === k)).filter(Boolean);
   const moreTabs = navTabs.filter(([k]) => !barTabs.some(([b]) => b === k));
   const viewInMore = moreTabs.some(([k]) => k === view);

@@ -723,7 +723,11 @@ buttons, the notification center, the refresh/version banner, and Settings → D
     text keep them; the group-call rule sentence stays, Faraz 9/29), prev / the month title / next / Today are one row of 44 px
     targets (`.cal-navbtn`) whose title opens the month select and the year field (`cal-month-toggle` over the title, `calPickOpen`,
     `#cal-picks`; a wide screen keeps them in the row - the wrappers are `display: contents` there), and the six code chips + only
-    OPEN are one row of 44 px (`.cal-chip`). The smoke reaches the pickers through `openCalPicks` / `closeCalPicks`.
+    OPEN are one row of 44 px (`.cal-chip`). At 340 px and under (an iPhone SE 1st generation, Display Zoom on the small phones)
+    the title is 12 px with a 3 px caret margin, Today slimmer (its 44 px minimum stays) and the row's gaps 4 px, so "Month Year"
+    keeps its year: at 320 px the title has 99 px of room and "September 2026", the longest, is 92 px in Outfit (measured on the
+    live page 11/1; with 6 px gaps it had 1 px to spare and "September 2030" would not fit). The smoke reaches the pickers through
+    `openCalPicks` / `closeCalPicks`.
   - **2 - your own days stand out.** For a signed-in surgeon (`mySurgeon`, so the scheduler too as Khan; never the office, a
     viewer, a follower, an APP or `?public=1`) the grid rings his own P / B pills (`SlotLine`: `data-mine="1"`, the pill's own border
     recoloured + a box shadow in `THEME.mineRim` / `THEME.mineRing` - one ink in light, a light ring around a dark rim in dark;
@@ -752,15 +756,22 @@ buttons, the notification center, the refresh/version banner, and Settings → D
     bottom banners stand on it (`css.bottomBanner(n, bannerLift)`), the toast sits 24 px above it (`css.aboveTabBar(24)`; at the top -
     `css.topToast` - while More or the phone Alerts sheet is open, so it never covers their rows), the page's
     scroll padding and an in-flow spacer keep content above it; More and the phone Alerts sheet are modal sheets on the bar (Escape,
-    the Tab trap, focus back on More), and a notification tap that moves the view closes them (the wide Alerts panel too - the sw
-    message handler `onMsg`, after spec F's `setView`), so the day editor never opens over one; a bar tap or a More pick shows the
-    page from its top. The bar is absent on `?public=1`, the
+    the Tab trap, focus back on More). A notification tap that spec F lets through (`setView` answered true) closes them - the
+    wide Alerts panel too - and on a phone shows the target from its top (the sw message handler `onMsg`; it reads
+    `tabBarShownRef`, as its closure is an old render's); `goToDay` closes them and Recent errors as it opens the day editor (a day
+    a notification queued opens once the data loaded, maybe after one was opened), so the editor never opens over one. The claim
+    sheet and the open-shifts e-mail preview render inside Open shifts, so their state goes when the view leaves it (only a
+    notification tap can move the view while one is up). A bar tap or a More pick shows the page from its top. The bar is absent
+    on `?public=1`, the
     sign-in cards and under the painter sheets. Icons are inline SVG (`NavIcon`, hidden from assistive tech). The smoke reaches More
     destinations through `clickTab` / `clickNav` and reads a role's phone nav with `phoneNavModel`.
-  Proof: `test/data-layer.test.js` item 1, [I2], [PP34], [N6], the Item 5 pins, "PD F x P30" (d) - the open sheet closes only
-  once the view moved, three mutants; `test/exports.test.js` Item 5 helpers; `test/ui/contrast.mjs` own-day ring / rim rows and
-  the tab bar's count digits; the smoke's item 1 to 6 checks, the 320 px title (November and September, the longest name), the
-  toast over an open sheet ("11/1 toast over a phone sheet") and a tap over one ("P30 x 11/1").
+  Proof: `test/data-layer.test.js` item 1, [I2], [PP34], [N6], the Item 5 pins, "PD F x P30" (d) - an open sheet closes only once
+  spec F let the tap through, (d2) one opened before the queued day opens closes with goToDay, (d3) the phone's scroll to the top,
+  with seven mutants - and "review 11/1" (the claim sheet / e-mail preview state goes with the view; the 340 px gaps);
+  `test/exports.test.js` Item 5 helpers; `test/ui/contrast.mjs` own-day ring / rim rows and the tab bar's count digits; the
+  smoke's item 1 to 6 checks, "item 1 (surgeon, 320)" (November and September keep their year with 2 px or more to spare,
+  measured fractionally in the smoke's fallback font - Google Fonts are stubbed), "11/1 toast over a phone sheet" and "P30 x
+  11/1" (a tap over More / Alerts at 390 px, the scroll to the top, the wide panel at 1180).
 - **Week rows list:** the same rows as the ER-panel author's Word document (MON/SUN DATES | TRAUMA | TRAUMA BACKUP — the primary column is headed TRAUMA since 9/22, Prompt 12 P) with ranges collapsed (`9/15–9/18 Philip`) — this is also the export format (§9).
 - **Day editor** (click a cell): set primary/backup from a dropdown that shows eligibility — eligible names first, ineligible greyed with the reason; lock toggle; note. Backup lists everyone (9/22: backup is open unless `backupOptOut`). Outside surgeons (M) sit under their own "Outside surgeons" heading for both roles; picking one locks the role and saves `source: "manual-external"`. A Fri/Sat/Sun candidate who already holds the other two block days is judged as a block member (small items 9/22 — Fierce can complete a Fri–Sun block by hand); the same holds for a block-style receiver of a whole Fri–Sun block in the trade path. The editor **fails closed**: a thrown eligibility check makes the option ineligible with the error as its reason and disables Save until the rules evaluate again. **Overrides (Item E3, Faraz 9/25):** an override assigns anyway and its reasons go to the audit log only - `schedule.day_edit` (`detail.overrides`) and `schedule.override` ("Override on M/D: <Name> <role> despite <reasons>"); `saveDayEdit` no longer puts an `[override: ...]` tag in front of the day's note (`schedule_days` is anon-readable). The audit rows being the only copy of the reasons now, `logAudit` answers true / false (every other caller still ignores it) and when BOTH rows of an override are refused / fail the scheduler gets an error toast with the reasons - also while the session has expired, since audit rows are never re-sent after the sign-in (one written row still keeps them; a console line names it); as before E3, the audit rows go out before the autosave's CAS sync, so a sync conflict leaves them standing for an override that did not land (accepted). An old tag is still stripped on the day's next save (and `awaitingConfirmation` still skips one); the one live tag (10/15, written by the app 9/25 15:24 CDT) waits for Faraz's go: a snapshot-first compare-and-swap that removes only the tag.
 - **Open shifts** (board, self-claim, weekly reminders): §16.

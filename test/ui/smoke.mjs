@@ -3430,22 +3430,46 @@ try {
             const f4 = await firstScreen();
             if (f4.row.length !== 7 || !oneRow(f4.row) || !oneRow(f4.nav) || f4.pageW > 362) fail("item 1 (surgeon, 360): the chips + only OPEN or the month controls left one row: " + JSON.stringify({ row: f4.row, nav: f4.nav, pageW: f4.pageW }));
             else ok("item 1 (surgeon, 360): the six chips + only OPEN and the month controls each stay one row");
-            // the 320 px title (fix check 11/1): the 340 px rule's 12 px title keeps "Month Year" whole - November and September,
-            // the longest name (1 px to spare at 320 px, measured 11/1) - the month controls one 44 px row, no sideways scroll
-            await sp.setViewportSize({ width: 320, height: 640 });
-            await sp.waitForTimeout(250);
-            const title320 = () => sp.evaluate(() => { const el = document.querySelector("[data-testid=cal-month]"); return { text: el.textContent.trim(), sw: el.scrollWidth, cw: el.clientWidth, fs: getComputedStyle(el).fontSize }; });
-            const goMonth = async (label, want) => { await sp.click(`button[aria-label='${label}']`); await sp.waitForFunction((w) => document.querySelector("[data-testid=cal-month]").textContent.trim() === w, want, { timeout: 5000 }); };
-            const n320 = await title320(), f5 = await firstScreen();
-            await goMonth("Previous month", "October 2026"); await goMonth("Previous month", "September 2026");
-            const s320 = await title320();
-            await goMonth("Next month", "October 2026"); await goMonth("Next month", "November 2026");
-            const whole = (t) => /^[A-Z][a-z]+ \d{4}$/.test(t.text) && t.sw <= t.cw;
-            if (n320.text !== "November 2026" || s320.text !== "September 2026" || !whole(n320) || !whole(s320) || !oneRow(f5.nav) || f5.nav.some(b => b.h < 44 || b.w < 44) || f5.pageW > 322) fail("item 1 (surgeon, 320): the month title is cut or the month controls left one 44 px row: " + JSON.stringify({ n320, s320, nav: f5.nav, pageW: f5.pageW }));
-            else ok(`item 1 (surgeon, 320): the ${n320.fs} title keeps its year - 'November 2026' (${n320.sw} of ${n320.cw} px) and 'September 2026', the longest month (${s320.sw} of ${s320.cw} px); the month controls one 44 px row; no sideways scroll`);
-            await sp.setViewportSize({ width: 390, height: 844 });
-            await sp.waitForTimeout(250);
+            // the 320 px title (fix check + review 11/1): under the 340 px rule (a 12 px title, 4 px gaps) "Month Year" keeps its year
+            // with room to spare - November and September, the longest name. The room is the title box less the caret; the text
+            // is measured fractionally (canvas, the element's own font) - scrollWidth only snaps to whole px. The smoke stubs
+            // Google Fonts, so this is the fallback sans (Arial here); in Outfit, on the live page (11/1), 'September 2026' was
+            // 92.00 px of 99. Its own label; the page goes back to 390 x 844 on November 2026 in the finally below.
+            try {
+              await sp.setViewportSize({ width: 320, height: 640 });
+              await sp.waitForTimeout(250);
+              const title320 = () => sp.evaluate(() => {
+                const el = document.querySelector("[data-testid=cal-month]"), title = el && el.parentElement, caret = title && title.querySelector(".cal-caret");
+                if (!el || !caret) return null;
+                const cs = getComputedStyle(el), ctx = document.createElement("canvas").getContext("2d");
+                ctx.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
+                const text = el.textContent.trim(), room = title.getBoundingClientRect().width - caret.getBoundingClientRect().width - parseFloat(getComputedStyle(caret).marginLeft);
+                return { text, fs: cs.fontSize, sw: el.scrollWidth, cw: el.clientWidth, room: Math.round(room * 10) / 10, spare: Math.round((room - ctx.measureText(text).width) * 10) / 10 };
+              });
+              const goMonth = async (label, want) => { await sp.click(`button[aria-label='${label}']`); await sp.waitForFunction((w) => document.querySelector("[data-testid=cal-month]").textContent.trim() === w, want, { timeout: 5000 }); };
+              const n320 = await title320(), f5 = await firstScreen();
+              await goMonth("Previous month", "October 2026"); await goMonth("Previous month", "September 2026");
+              const s320 = await title320();
+              const whole = (t) => !!t && /^[A-Z][a-z]+ \d{4}$/.test(t.text) && t.sw <= t.cw && t.spare >= 2;
+              if (!n320 || !s320 || n320.text !== "November 2026" || s320.text !== "September 2026" || !whole(n320) || !whole(s320) || !oneRow(f5.nav) || f5.nav.some(b => b.h < 44 || b.w < 44) || f5.pageW > 322) fail("item 1 (surgeon, 320): the month title is cut or has under 2 px to spare, or the month controls left one 44 px row: " + JSON.stringify({ n320, s320, nav: f5.nav, pageW: f5.pageW }));
+              else ok(`item 1 (surgeon, 320): the ${n320.fs} title keeps its year with room to spare in ${n320.room} px - 'November 2026' ${n320.spare} px, 'September 2026' (the longest month) ${s320.spare} px (the smoke's fallback font); the month controls one 44 px row; no sideways scroll`);
+            } catch (e) { fail("item 1 (surgeon, 320): " + String(e && e.message || e).split("\n")[0]); }
           } catch (e) { fail("item 1 (surgeon, 390): " + String(e && e.message || e).split("\n")[0]); }
+          finally {
+            // review 11/1: whatever threw above, the checks after this one read November 2026 at 390 x 844
+            try {
+              await sp.setViewportSize({ width: 390, height: 844 });
+              await sp.waitForTimeout(250);
+              if ((await sp.$eval("[data-testid=cal-month]", el => el.textContent.trim())) !== "November 2026") {
+                const opened = await openCalPicks(sp);
+                await sp.selectOption("[data-testid=cal-month-select]", "10");
+                await sp.fill("[data-testid=cal-year-input]", "2026");
+                await sp.keyboard.press("Enter");
+                await closeCalPicks(sp, opened);
+                await sp.waitForFunction(() => document.querySelector("[data-testid=cal-month]").textContent.trim() === "November 2026", null, { timeout: 5000 });
+              }
+            } catch (e) { fail("item 1 (surgeon): could not put the page back at 390 x 844 on November 2026 - " + String(e && e.message || e).split("\n")[0]); }
+          }
         }
         // Item 2 (Faraz 11/1) on Burchett's page (s2), 390 px, this theme: the ring on his own P / B pills and no other, in THEME
         // tokens, inside its cell (nothing clipped, no pill grows - vis-001); the legend line with it; "Your next call" =
@@ -14282,9 +14306,12 @@ try {
       if (sctx) await sctx.close();
     }
     // (8c) 11/1 fix check: a tap that moves the view closes the phone's open sheet - More or Alerts (it stayed open behind the
-    // day editor) - and, on a wide screen, the Alerts panel. The scheduler session (8b's profile) at 390 x 844, then 1180 x 900.
+    // day editor) - shows the target from its top on a phone (review 11/1) and, on a wide screen, closes the Alerts panel. The
+    // scheduler session (8b's profile) at 390 x 844, then a fresh load at 1180 x 900. Each step reports on its own and clears
+    // whatever a regression left open before the next (review 11/1: a sheet left open made the wide step time out instead).
     {
       let cctx = null, cp = null;
+      const TS = "P30 x 11/1 a tap over an open sheet";
       try {
         p30.errors = [];
         p30.profile = { ...P30_PROFILE, person_id: "s1", role: "scheduler" };
@@ -14296,46 +14323,54 @@ try {
         await cp.waitForSelector("[data-testid=tabbar]", { timeout: 20000 });
         const post = (data) => cp.evaluate((data) => { navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data })); }, data);
         const sheets = () => cp.evaluate(() => ({ more: !!document.querySelector("[data-testid=more-sheet]:not([hidden])"), moreBackdrop: !!document.querySelector("[data-testid=more-backdrop]"), alerts: !!document.querySelector("[data-testid=notif-panel]"), alertsBackdrop: !!document.querySelector("[data-testid=notif-backdrop]"), editor: !!document.querySelector("[data-testid=day-editor]") }));
+        const clearSheets = async () => { for (let i = 0; i < 3 && ((await cp.isVisible(MORE_SHEET)) || (await cp.isVisible("[data-testid=notif-panel]"))); i++) { await cp.keyboard.press("Escape"); await cp.waitForTimeout(200); } };
         const dX = isoPlus(todayCentral, 3);
-        // More open, a tap to a day: the day editor opens and More is gone
+        // (1) More open, a tap to a day: the day editor opens and More is gone
         await openMoreSheet(cp);
         const s0 = await sheets();
         await post({ type: "silvis-push-open", tab: "calendar", day: dX });
-        await cp.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
+        const ed = await cp.waitForSelector("[data-testid=day-editor]", { timeout: 8000 }).then(() => true).catch(() => false);
         await cp.waitForTimeout(200);
         const s1 = await sheets();
-        await cp.click("[data-testid=editor-x]");
-        await cp.waitForSelector("[data-testid=day-editor]", { state: "hidden", timeout: 5000 });
-        // Alerts open (More > Alerts), a tap to Time off: the sheet goes with the move
+        if (!s0.more || !s0.moreBackdrop) fail(`${TS} (More): More did not open - not exercised: ` + JSON.stringify(s0));
+        else if (!ed || s1.more || s1.moreBackdrop) fail(`${TS} (More): a tap to ${dX} should open the day editor with More closed: ` + JSON.stringify({ editorOpened: ed, ...s1 }));
+        else ok(`${TS} (More): at 390 px a tap to ${dX} closed More and opened the day editor alone`);
+        if (ed) { await cp.click("[data-testid=editor-x]"); await cp.waitForSelector("[data-testid=day-editor]", { state: "hidden", timeout: 5000 }); }
+        await clearSheets();
+        // (2) the calendar scrolled to its end, Alerts open (More > Alerts), a tap to Settings (a long page): the sheet goes and
+        //     Settings shows from its top, as a bar tap would show it
+        const y0 = await cp.evaluate(() => { window.scrollTo(0, document.documentElement.scrollHeight); return Math.round(window.scrollY); });
         await openMoreSheet(cp);
         await cp.click("button[data-alerts]");
         await cp.waitForSelector("[data-testid=notif-panel]", { state: "visible", timeout: 5000 });
         const s2 = await sheets();
-        await post({ type: "silvis-push-open", tab: "timeoff", day: null });
-        await waitFor(async () => (await viewNow(cp)) === "timeoff", 8000, 200);
-        await cp.waitForTimeout(200);
+        await post({ type: "silvis-push-open", tab: "settings", day: null });
+        await waitFor(async () => (await viewNow(cp)) === "settings", 8000, 200);
+        await cp.waitForTimeout(300);
         const s3 = await sheets(), v3 = await viewNow(cp);
-        // a wide screen: the header's Alerts panel closes the same way
+        const sc = await cp.evaluate(() => ({ y: Math.round(window.scrollY), max: Math.round(document.documentElement.scrollHeight - window.innerHeight) }));
+        if (!s2.alerts || !s2.alertsBackdrop) fail(`${TS} (Alerts): the Alerts sheet did not open - not exercised: ` + JSON.stringify(s2));
+        else if (s3.alerts || s3.alertsBackdrop || v3 !== "settings") fail(`${TS} (Alerts): a tap to Settings should close the Alerts sheet: ` + JSON.stringify({ ...s3, view: v3 }));
+        else ok(`${TS} (Alerts): a tap to Settings closed the Alerts sheet`);
+        if (y0 < 50 || sc.max < 50) console.log(`     (${TS}: the calendar scrolled ${y0} px and Settings can scroll ${sc.max} px - the phone's scroll to the top is not exercised)`);
+        else if (sc.y !== 0) fail(`${TS} (scroll): Settings should show from its top after the tap - the calendar was scrolled ${y0} px, Settings at ${sc.y} of ${sc.max}`);
+        else ok(`${TS} (scroll): the tap showed Settings from its top (the calendar was scrolled ${y0} px; Settings can scroll ${sc.max})`);
+        await clearSheets();
+        // (3) a wide screen, loaded fresh at 1180 x 900 (the listener born wide): the header's Alerts panel closes the same way
         await cp.setViewportSize({ width: 1180, height: 900 });
+        await loadApp(cp, P30_BASE);
         await settleNav(cp);
-        await cp.click('button[aria-label="Notifications"]');
-        await cp.waitForSelector("[data-testid=notif-panel]", { state: "visible", timeout: 5000 });
-        const s4 = await sheets();
+        if (!(await cp.isVisible("[data-testid=notif-panel]"))) await cp.click('button[aria-label="Notifications"]');
+        const s4 = await cp.waitForSelector("[data-testid=notif-panel]", { state: "visible", timeout: 5000 }).then(() => true).catch(() => false);
         await post({ type: "silvis-push-open", tab: "openshifts", day: null });
         await waitFor(async () => (await viewNow(cp)) === "openshifts", 8000, 200);
         await cp.waitForTimeout(200);
         const s5 = await sheets(), v5 = await viewNow(cp);
-        const bad = [];
-        if (!s0.more || !s0.moreBackdrop) bad.push("More did not open: " + JSON.stringify(s0));
-        if (s1.more || s1.moreBackdrop || !s1.editor) bad.push(`a tap to ${dX} with More open: ` + JSON.stringify(s1));
-        if (!s2.alerts || !s2.alertsBackdrop) bad.push("the Alerts sheet did not open: " + JSON.stringify(s2));
-        if (s3.alerts || s3.alertsBackdrop || v3 !== "timeoff") bad.push("a tap to Time off with the Alerts sheet open: " + JSON.stringify({ s3, v3 }));
-        if (!s4.alerts) bad.push("the wide Alerts panel did not open: " + JSON.stringify(s4));
-        if (s5.alerts || v5 !== "openshifts") bad.push("a tap to Open shifts with the wide Alerts panel open: " + JSON.stringify({ s5, v5 }));
-        if (bad.length) fail("P30 x 11/1 a tap over an open sheet: " + bad.join(" | "));
-        else ok(`P30 x 11/1 a tap over an open sheet: at 390 px a tap to ${dX} closed More and opened the day editor alone; a tap to Time off closed the Alerts sheet; at 1180 px a tap to Open shifts closed the Alerts panel`);
-        if (p30.errors.length) fail("P30 x 11/1 sheet step errors: " + p30.errors.slice(0, 5).join(" | "));
-      } catch (e) { fail("P30 x 11/1 a tap over an open sheet: " + errLine(e)); try { if (cp) await cp.screenshot({ path: path.join(OUT, "failure-p30-sheets.png"), fullPage: false }); } catch (e2) {} }
+        if (!s4) fail(`${TS} (wide): the header's Alerts panel did not open at 1180 px - not exercised`);
+        else if (s5.alerts || v5 !== "openshifts") fail(`${TS} (wide): a tap to Open shifts should close the Alerts panel at 1180 px: ` + JSON.stringify({ ...s5, view: v5 }));
+        else ok(`${TS} (wide): at 1180 px a tap to Open shifts closed the Alerts panel`);
+        if (p30.errors.length) fail(`${TS}: page errors: ` + p30.errors.slice(0, 5).join(" | "));
+      } catch (e) { fail(`${TS}: ` + errLine(e)); try { if (cp) await cp.screenshot({ path: path.join(OUT, "failure-p30-sheets.png"), fullPage: false }); } catch (e2) {} }
       p30.profile = null;
       if (cctx) await cctx.close();
     }

@@ -1061,6 +1061,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
       const log = [];
       const scope = {
         editorDayRef: { current: editorDay }, editorDirtyRef: { current: dirty }, pushTapLeavesDraft: H.pushTapLeavesDraft, pushOpenMessage: H.pushOpenMessage, console: quiet,
+        tabBarShownRef: { current: false }, scrollTopNow: () => log.push("scrollTopNow"), // 11/1: a wide window - no scroll (data-layer PD F x P30 (d3) runs the phone)
         confirm: (m) => { log.push("confirm " + m); return answer; }, showToast: (m, k) => log.push("toast " + k),
         setEditorDay: (v) => log.push("setEditorDay " + v), setView: (v) => log.push("setView " + v), setPushDay: (v) => log.push("setPushDay " + (v && v.day)),
       };
