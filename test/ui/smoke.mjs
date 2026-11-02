@@ -926,6 +926,11 @@ const PLAN_P = IMP.importPlan(JSON.parse(fs.readFileSync(SEED_PATH, "utf8")), { 
 // 11/2 (date bombs, N1): the fixture's held-but-unlocked backup (RF2's Accept confirm) - the first day on/after today the seed plan has
 // no row for (it was 2026-11-19); always inside the smoke's Generate range (the first open slot on/after today through its month's end - not the app's default)
 const FIX_HELD_DAY = (() => { const have = new Set(PLAN.scheduleDayRows.map(r => r.day)); let d = todayCentral; while (have.has(d)) d = new Date(Date.parse(d + "T12:00:00Z") + 86400000).toISOString().slice(0, 10); return d; })();
+// 11/2 (fix-check 2): the board claim's own fixture-only rows - the first two plan-less Mondays / Wednesdays after FIX_HELD_DAY (Khan's
+// weekday-pattern days), at least a week apart, each an open primary over a generated, unlocked Acton backup. The claim takes one of
+// these and never FIX_HELD_DAY: a claimed day is person-held (Generate keeps both roles), and FIX's open primary must stay open for
+// Generate's default range (it starts at the first open slot) and for the RF2 Accept confirm (its held backup regenerated)
+const FIX_CLAIM_DAYS = (() => { const have = new Set(PLAN.scheduleDayRows.map(r => r.day)), out = []; let d = FIX_HELD_DAY; for (let i = 0; i < 120 && out.length < 2; i++) { d = new Date(Date.parse(d + "T12:00:00Z") + 86400000).toISOString().slice(0, 10); const dow = new Date(d + "T12:00:00Z").getUTCDay(); if (!have.has(d) && (dow === 1 || dow === 3) && (!out.length || Date.parse(d) - Date.parse(out[0]) >= 7 * 86400000)) out.push(d); } return out; })();
 const fixture = await (async () => {
   let liveCount = null;
   try {
@@ -944,7 +949,7 @@ const fixture = await (async () => {
     // inside the smoke's Generate range, so the Accept confirm's POSITIVE branch runs under the fixture: the default
     // run (fill-open-only OFF) regenerates that backup and Accept must name it. The importer ignores an app-generated
     // row the seed lacks (planDiff: source != import and not in the plan), so the Import pins are unaffected.
-    schedule_days: plan.scheduleDayRows.map(r => ({ ...r, version: 1, updated_at: ts })).concat([{ day: FIX_HELD_DAY, primary_id: null, backup_id: "s2", primary_locked: false, backup_locked: false, source: "generated", external_cover: null, note: null, version: 1, updated_by: "fixture", updated_at: ts }]),
+    schedule_days: plan.scheduleDayRows.map(r => ({ ...r, version: 1, updated_at: ts })).concat([{ day: FIX_HELD_DAY, primary_id: null, backup_id: "s2", primary_locked: false, backup_locked: false, source: "generated", external_cover: null, note: null, version: 1, updated_by: "fixture", updated_at: ts }]).concat(FIX_CLAIM_DAYS.map(d => ({ day: d, primary_id: null, backup_id: "s3", primary_locked: false, backup_locked: false, source: "generated", external_cover: null, note: null, version: 1, updated_by: "fixture", updated_at: ts }))),
     call_schedule_data: [{ id: "main", data: plan.blob, updated_by: "seed", updated_at: ts }],
     time_off: plan.timeOffRows.map((r, i) => ({ id: "fixture-timeoff-" + (i + 1), ...r, created_at: ts })),
     availability: plan.availabilityRows.map((r, i) => ({ id: "fixture-avail-" + (i + 1), ...r, created_at: ts })),
@@ -5863,15 +5868,15 @@ try {
       if (!writes.slice(beforeMail).every(w => noAddr(w.body))) fail("Open shifts: a notice write body carries an email address");
     };
     // Take this shift as s1 on the first row where s1 is eligible.
-    // 11/2 (fix-checks 1 + 2): in fixture mode a row other than FIX_HELD_DAY first - a claimed day is person-held (the generator
-    // keeps both roles) and the RF2 Accept confirm needs FIX's held backup regenerated; FIX's open primary only when it is the one
-    // row s1 may take (from 11/24 in the seed fixture), so the claim flow always runs and RF2 says when it lost its day
-    const target = all.rows.find(r => r.take === "enabled" && !(fixture && r.slot.split("|")[0] === FIX_HELD_DAY)) || all.rows.find(r => r.take === "enabled");
+    // 11/2 (fix-checks 1 + 2): never FIX_HELD_DAY in fixture mode - a claimed day is person-held (Generate keeps both roles), FIX's
+    // open primary starts Generate's default range and the RF2 Accept confirm needs its held backup regenerated; the fixture's own
+    // claim rows (FIX_CLAIM_DAYS) are there for the claim (taking FIX instead left Accept & Publish nothing to write on 11/30)
+    const target = all.rows.find(r => r.take === "enabled" && !(fixture && r.slot.split("|")[0] === FIX_HELD_DAY));
     // the claim would take the board's only open slot (LIVE mode since 10/15 was filled 9/25): announce while it is listed
     const emailBeforeClaim = !!target && all.rows.length === 1;
     if (emailBeforeClaim) await emailGroupNow("before the claim, which takes the board's only open slot");
     let claimExercised = false;
-    if (!target) console.log("     (no row where s1 is eligible under the current rules - the claim flow is not exercised)");
+    if (!target) console.log(`     (no row where s1 is eligible under the current rules${fixture ? " (FIX_HELD_DAY " + FIX_HELD_DAY + " kept for Generate and the RF2 Accept confirm; the claim rows " + FIX_CLAIM_DAYS.join(", ") + ")" : ""} - the claim flow is not exercised)`);
     else {
       claimExercised = true;
       const [cDay, cRole] = target.slot.split("|");
@@ -11413,7 +11418,7 @@ try {
       // 11/2 (review + fix-check): a preview that keeps s2 there passes when the confirm names OTHER held slots (the checks below
       // run the positive branch on them); else the page's own rules decide - s2 refused there (11/19 read 'whitelist-month')
       // and kept = FAIL; s2 allowed there (a later FIX_HELD_DAY: Generate may keep a held holder the rules allow) = not exercised,
-      // said. The board claim takes FIX_HELD_DAY only when it is the one row s1 may take - then
+      // said. The board claim never takes FIX_HELD_DAY (it has rows of its own); if it ever did,
       // the day is person-held (Generate keeps both roles) and RF2 says so.
       if (fixture && !heldUnlocked.some(s => s.startsWith(mdOf(FIX_HELD_DAY) + " B "))) {
         const pvFix = previewGrid.find(c => c.day === FIX_HELD_DAY);
