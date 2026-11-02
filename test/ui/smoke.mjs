@@ -716,6 +716,20 @@ const failures = [];
 const fail = (m) => { failures.push(m); console.log("FAIL " + m); };
 const ok = (m) => console.log("ok   " + m);
 const failedRequests = [];
+// 11/2 (review): a run takes ~16-17 min and keeps ONE date (below), so a run that crosses midnight Central (06:00Z under CST,
+// 05:00Z under CDT) fails whichever date checks run after it. A run that would start within SMOKE_MIDNIGHT_MARGIN_MIN (default
+// 35) minutes of midnight Central waits for it to pass first - SMOKE_MIDNIGHT_WAIT=0 runs at once; the end of the run says so
+// if the date still changed.
+{
+  const margin = Number(process.env.SMOKE_MIDNIGHT_MARGIN_MIN || 35);
+  const hms = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date()).filter(p => p.type !== "literal").map(p => [p.type, Number(p.value)]));
+  const toMidnight = (86400 - (hms.hour * 3600 + hms.minute * 60 + hms.second)) * 1000;
+  if (process.env.SMOKE_MIDNIGHT_WAIT !== "0" && toMidnight <= margin * 60000) {
+    const wait = toMidnight + 30000;
+    console.log(`(midnight Central is ${Math.ceil(toMidnight / 60000)} min away and a run takes ~17 - waiting ${Math.ceil(wait / 60000)} min for it to pass, so the whole run keeps one date; SMOKE_MIDNIGHT_WAIT=0 skips the wait)`);
+    await new Promise(r => setTimeout(r, wait));
+  }
+}
 // ONE notion of today for the whole run: the Central date, the same expression
 // the app uses (helpers.js todayCentral). Item Q (Faraz 9/22): an unassigned
 // slot is OPEN only from today forward, so every pin on a specific OPEN day is
@@ -7191,9 +7205,13 @@ try {
           const brushes = ["primary", "backup", "either", "noprimary", "clear"].map(k => { const b = document.querySelector(`[data-testid=ofp-brush-${k}]`); const cs = getComputedStyle(b); return { k, armed: b.getAttribute("data-armed"), border: cs.borderTopColor, ratio: ratio(parse(cs.borderTopColor), panel) }; });
           return { wkDay: wk ? wk.getAttribute("data-day") : null, wkBg: wk ? getComputedStyle(wk).backgroundColor : null, wkSurface: wk ? wk.getAttribute("data-surface") : null, weDay: we ? we.getAttribute("data-day") : null, weBg: we ? getComputedStyle(we).backgroundColor : null, panel: "rgb(" + panel.join(", ") + ")", brushes };
         });
-        const m1 = await pdMeasure();
+        // review 11/2: on a month-end weekend (Sat 1/30/2027 next) the painter's own month has no weekday left that is not
+        // greyed 'past' - step ahead to the first month with a free weekday row, as the paintable-rows step above does
+        let m1 = await pdMeasure(), pdAhead = 0;
+        while (!m1.wkDay && pdAhead < 6 && !(await page.$eval("[data-testid=ofp-next]", el => el.disabled))) { await page.click("[data-testid=ofp-next]"); await page.waitForTimeout(200); pdAhead++; m1 = await pdMeasure(); }
+        if (pdAhead && m1.wkDay) console.log(`     (${PDK}: the painter's month had no free weekday row left - measured ${pdAhead} month(s) ahead)`);
         const SURF = pdRgb(pdTheme.THEME.dark.surface), WKND = pdRgb(pdTheme.THEME.dark.weekend);
-        if (!m1.wkDay) fail(`${PDK}: no free weekday row in the painter's month to measure`);
+        if (!m1.wkDay) console.log(`     (${PDK}: no free weekday row in the painter's month or ${pdAhead} ahead - the B / D checks are not exercised)`);
         else if (m1.wkBg === "rgb(46, 80, 144)" || m1.wkBg !== SURF || m1.wkSurface !== "1") fail(`${PDK} B: the free weekday row ${m1.wkDay} should be the dark surface ${SURF} (data-surface), got ${m1.wkBg} (data-surface ${m1.wkSurface})`);
         else ok(`${PDK} B: free weekday row ${m1.wkDay} = ${m1.wkBg} (the dark surface, not rgb(46, 80, 144))`);
         if (!m1.weDay) console.log(`     (${PDK}: no plain weekend row in the painter's month - the weekend check is skipped)`);
@@ -14270,8 +14288,12 @@ try {
         await sp.waitForSelector("button[data-tab=setup]", { timeout: 20000 });
         await sp.click("button[data-tab=calendar]");
         const today = await sp.evaluate(() => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }));
-        const d0 = await sp.evaluate((t) => (Array.from(document.querySelectorAll(".cal-cell[data-day]")).map(c => c.getAttribute("data-day")).filter(d => d > t)[0] || null), today);
-        if (!d0) throw new Error("no future day cell on the calendar");
+        const laterCell = () => sp.evaluate((t) => (Array.from(document.querySelectorAll(".cal-cell[data-day]")).map(c => c.getAttribute("data-day")).filter(d => d > t)[0] || null), today);
+        let d0 = await laterCell();
+        // review 11/2: on the last day of a month that ends on a Saturday (7/31/2027 next) the grid has no later cell - the
+        // next month's grid has
+        if (!d0) { await sp.click("button[aria-label='Next month']"); await sp.waitForTimeout(250); d0 = await laterCell(); }
+        if (!d0) throw new Error("no future day cell on the calendar (this month or the next)");
         await sp.click(`.cal-cell[data-day="${d0}"]`);
         await sp.waitForSelector("[data-testid=day-editor] [data-testid=editor-note]", { timeout: 8000 });
         await sp.fill("[data-testid=editor-note]", "UNSAVED DRAFT NOTE");
@@ -16011,5 +16033,6 @@ if (failures.length || failedRequests.length) {
 }
 await browser.close();
 server.close();
+{ const endCentral = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }); if (endCentral !== todayCentral) console.log(`\nNOTE: this run crossed midnight Central (started on ${todayCentral}, ended on ${endCentral}) - a check that compares with the start-of-run date can fail for that alone; rerun it`); }
 console.log(failures.length ? `\nSMOKE FAILED: ${failures.length} problem(s)` : "\nSMOKE OK");
 process.exit(failures.length ? 1 : 0);

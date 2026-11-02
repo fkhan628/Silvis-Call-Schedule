@@ -3324,7 +3324,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual(r.status, 0, r.stderr);
     const out = JSON.parse(r.stdout.trim());
     assert.notStrictEqual(out.device, chicago, "fixture: the device date under TZ=" + zone + " should differ from Chicago's");
-    assert.strictEqual(out.start, chicago, "rangePresets(null).start under TZ=" + zone + ": expected the Central date " + chicago + ", got " + out.start + " (device date " + out.device + ")");
+    // 11/2 (review): the child reads the clock after the parent did - across Central midnight it is the next day (either is right)
+    const chicagoAfter = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    assert.ok(out.start === chicago || out.start === chicagoAfter, "rangePresets(null).start under TZ=" + zone + ": expected the Central date " + chicago + (chicagoAfter !== chicago ? " or " + chicagoAfter : "") + ", got " + out.start + " (device date " + out.device + ")");
   });
   check("the calendar's default month/year and 'Today' come from todayCentral(), not the device clock", () => {
     assert.ok(src.includes("const [calMonth, setCalMonth] = useState(() => parse(todayCentral()).getMonth());"), "calMonth initialiser");

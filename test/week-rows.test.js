@@ -112,14 +112,17 @@ check("slotIsOpen: an empty holder is open today (inclusive) and later, never be
 });
 check("todayCentral: 'YYYY-MM-DD' in America/Chicago (the bump-version.js expression); slotIsOpen falls back to it when today is missing or malformed", () => {
   assert.strictEqual(typeof H.todayCentral, "function", "helpers.js must export todayCentral");
-  const t = H.todayCentral();
+  // 11/2 (review): the Central date can change between two reads (midnight Central) - t is checked against the date read on
+  // either side of it, and 'today is open' below allows a t that midnight has just made yesterday
+  const central = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  const before = central(), t = H.todayCentral(), after = central();
   assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(t), "not an ISO day: " + t);
-  assert.strictEqual(t, new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }));
+  assert.ok(t === before || t === after, "todayCentral() " + t + " is neither " + before + " nor " + after + " (the Central date read around it)");
   assert.strictEqual(H.slotIsOpen("2020-01-06", null), false, "2020 is in the past under the default today");
   assert.strictEqual(H.slotIsOpen("2099-01-05", null), true, "2099 is in the future under the default today");
   assert.strictEqual(H.slotIsOpen("2020-01-06", null, "nope"), false, "a malformed today falls back to todayCentral()");
   assert.strictEqual(H.slotIsOpen("2099-01-05", null, "nope"), true);
-  assert.strictEqual(H.slotIsOpen(t, null), true, "today itself is open under the default");
+  assert.strictEqual(H.slotIsOpen(t, null) || H.todayCentral() !== t, true, "today itself is open under the default (unless the Central date moved on since t was read)");
 });
 check("buildWeekRows opts.today: a past unassigned day produces NO entry; today and later stay 'M/D OPEN'; assigned past days stay listed; a same-surgeon run across the boundary stays collapsed (week of 10/5, today 10/10)", () => {
   const r = H.buildWeekRows(schedule, roster, "2026-10-05", "2026-10-11", { today: "2026-10-10" })[0];

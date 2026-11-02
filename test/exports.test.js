@@ -877,6 +877,9 @@ check("M: an outside surgeon's id that is NOT in the roster list still renders (
 const GC_RULE = "Group call: weekdays until 5 PM, each provider takes their own patients' calls. Weeknights from 5 PM, weekends and holidays, the Trauma primary takes group call.";
 const gcOn = { groupCall: { enabled: true, ownPatientsUntil: "17:00", holidayUnitDaysAllDay: true } }, gcOff = { groupCall: { enabled: false } };
 const gcShare = (g) => H.generateShareHTML(schedule, roster, { months: ["2026-11"], holidays, vacations, generatedAt: new Date(2026, 8, 22, 9, 5), today: TODAY_NOV, groupRules: g });
+// 11/2 (review): every printable month page stamps 'Printed M/D/YYYY' from its own clock - two builds that straddle local
+// midnight differ there alone, so the byte-for-byte compares below read past it
+const noPrinted = (h) => h.replace(/Printed \d{1,2}\/\d{1,2}\/\d{4}/g, "Printed X");
 const gcPrint = (g, n) => H.buildPrintableCalendarHTML({ startYear: 2026, startMonth: 10, numMonths: n || 1, schedule, roster, holidays, vacations, today: TODAY_NOV, groupRules: g });
 check("Group call: the share page carries the rule sentence under its title (text only, no names); disabled = the page as it was", () => {
   const on = gcShare(gcOn), off = gcShare(gcOff);
@@ -900,7 +903,7 @@ check("Group call: the printable month carries the rule sentence under every pag
   assert.ok(on.includes('<div class="month-title">November 2026</div><div class="group-call-rule">' + esc + "</div>") && on.includes('<div class="month-title">December 2026</div><div class="group-call-rule">' + esc + "</div>"), "directly under each month title");
   assert.ok(on.includes(".group-call-rule {"), "its style");
   assert.ok(!/group-call-rule|Group call/.test(off), "disabled: no sentence, no style");
-  assert.strictEqual(on.split('<div class="group-call-rule">' + esc + "</div>").join("").replace(H.GROUP_CALL_PRINT_CSS, ""), off, "disabled leaves the printable byte-for-byte as it was");
+  assert.strictEqual(noPrinted(on.split('<div class="group-call-rule">' + esc + "</div>").join("").replace(H.GROUP_CALL_PRINT_CSS, "")), noPrinted(off), "disabled leaves the printable byte-for-byte as it was");
   assert.ok(gcPrint(undefined).includes('<div class="group-call-rule">'), "no groupRules = the code defaults (enabled)");
 });
 check("Group call: the ER Call Panels export and the .ics builders do not change (no sentence, no group-call read)", () => {
@@ -923,8 +926,8 @@ check("Prompt 32 step 1: no export others see reads the shift weights or prints 
   const wOdd = { groupCall: gcOn.groupCall, shiftAccounting: { weights: { primary: 3, backup: 2 } } };
   assert.strictEqual(gcShare(wOn), gcShare(gcOn), "share page: the weights change nothing");
   assert.strictEqual(gcShare(wOdd), gcShare(gcOn), "share page: other weights change nothing");
-  assert.strictEqual(gcPrint(wOn, 2), gcPrint(gcOn, 2), "printable: the weights change nothing");
-  assert.strictEqual(gcPrint(wOdd, 2), gcPrint(gcOn, 2), "printable: other weights change nothing");
+  assert.strictEqual(noPrinted(gcPrint(wOn, 2)), noPrinted(gcPrint(gcOn, 2)), "printable: the weights change nothing");
+  assert.strictEqual(noPrinted(gcPrint(wOdd, 2)), noPrinted(gcPrint(gcOn, 2)), "printable: other weights change nothing");
   const docs = [gcShare(wOn), gcPrint(wOn, 2), H.buildErCallPanelsHTML(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_NOV }), H.buildErCallPanelsText(schedule, roster, "2026-11-02", "2026-11-15", { today: TODAY_NOV }), H.generateICS(H.buildICSEvents(schedule, null, roster, {}), "x")];
   docs.forEach((d, i) => assert.ok(!/\bweighted\b/i.test(d), "document #" + i + " names a weighted figure"));
   for (const f of ["generateShareHTML", "buildPrintableCalendarHTML", "buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildICSEvents", "generateICS"]) {
