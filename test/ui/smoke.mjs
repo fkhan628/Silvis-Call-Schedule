@@ -3434,7 +3434,8 @@ try {
             // with room to spare - November and September, the longest name. The room is the title box less the caret; the text
             // is measured fractionally (canvas, the element's own font) - scrollWidth only snaps to whole px. The smoke stubs
             // Google Fonts, so this is the fallback sans (Arial here); in Outfit, on the live page (11/1), 'September 2026' was
-            // 92.00 px of 99. Its own label; the page goes back to 390 x 844 on November 2026 in the finally below.
+            // 92.00 px - in 93 px of room with the old 6 px gaps, 99 with these 4 px ones. Its own label; the page goes back to
+            // 390 x 844 on November 2026 in the finally below.
             try {
               await sp.setViewportSize({ width: 320, height: 640 });
               await sp.waitForTimeout(250);

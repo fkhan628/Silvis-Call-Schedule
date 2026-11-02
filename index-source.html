@@ -240,7 +240,8 @@
     }
     /* item 1 review (11/1): at 340 px and under (an iPhone SE 1st generation, Display Zoom on the small phones) the month title
        keeps its year - a 12 px title, a 3 px caret margin, a slimmer Today (its 44 px minimum stays) and 4 px gaps in the row
-       (review 11/1: in Outfit 'September 2026' had 1 px to spare at 320 px and 'September 2030' none; the gaps give 6 more) */
+       (review 11/1: in Outfit, with 6 px gaps, 'September 2026' had 1 px to spare at 320 px and 'September 2030' would not fit;
+       the 4 px gaps give 6 px more) */
     @media (max-width: 340px) {
       .cal-title > :first-child { font-size: 12px !important; }
       .cal-caret { margin-left: 3px !important; }
@@ -473,7 +474,7 @@ function CallSchedule() {
   const moreBtnRef = useRef(null);
   const moreSheetRef = useRef(null);
   const notifCloseRef = useRef(null);
-  const tabBarShownRef = useRef(false); // tabBarShown (set where it is computed) for the sw message handler - an old render's closure
+  const tabBarShownRef = useRef(false); // tabBarShown (set where it is computed) for the sw message handler (an old render's closure) and goToDay
 
   // --- Roster / rules / settings (the call_schedule_data blob, id=main) ---
   // roster: { id, name (last name), code, fullName, active, roles }. The
@@ -6621,7 +6622,9 @@ function CallSchedule() {
   // the toast read it as a dialog over the phone sheets) - unless a claim or a send is in flight: that dialog stays (busy) for
   // a return to the board, so no second one opens under its unconditional close (fix check 11/1), and closes itself.
   useEffect(() => { if (view === "openshifts") return; if (!claimBusy) setClaimSheet(null); if (!obNoticeBusy) setObNotice(null); }, [view, claimBusy, obNoticeBusy]);
-  // The claim sheet on screen - its state outlives the view while a claim is in flight; the toast rule reads this (11/2 re-check)
+  // The day editor and the claim sheet ON SCREEN - their state can outlive the view (a tap leaves a clean editor's day set; a
+  // claim in flight keeps its sheet) and the toast rule reads these, as the DayEditor's mount does (11/2 re-check)
+  const editorUp = (view === "calendar" || view === "openshifts") && !!editorDay && (!loaded || daysReadOk);
   const claimSheetUp = view === "openshifts" && !!claimSheet;
   const obCancelRef = useRef(null);                    // the preview dialog's Cancel button - focused when the dialog opens
   const obEmailBtnRef = useRef(null);                  // the 'Email the group now' button - focus goes back to it when the dialog closes
@@ -7466,9 +7469,10 @@ function CallSchedule() {
           the day editor / claim sheet it lifts above their action row (toastLift). 11/1 item 6: while the phone tab bar shows it
           sits 24 px above the bar (css.aboveTabBar), and at the top while a phone sheet (More, Alerts) stands on the bar
           (css.topToast - review 11/1: it covered the sheet's bottom rows) unless a centred dialog (the day editor, the claim
-          sheet) is up - then toastLift places it above the dialog's action row, never both top and bottom. */}
+          sheet) is on screen (editorUp / claimSheetUp - 11/2) - then toastLift places it above the dialog's action row, never
+          both top and bottom. */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(tabBarShown ? ((moreOpen || showNotifs) && !editorDay && !claimSheetUp ? css.topToast : css.aboveTabBar(24)) : {}),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(tabBarShown ? ((moreOpen || showNotifs) && !editorUp && !claimSheetUp ? css.topToast : css.aboveTabBar(24)) : {}),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           <span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>
           {toast.count > 1 && <span data-testid="toast-count" title={"Shown " + toast.count + " times"} style={{flexShrink:0,background:"rgba(255,255,255,0.22)",borderRadius:8,padding:"1px 7px",fontSize:11,fontWeight:700}}>{"x" + toast.count}</span>}
           {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-10px -12px -10px 0",minWidth:36,minHeight:36,lineHeight:1,fontFamily:font}}>x</button>}

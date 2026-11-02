@@ -7198,9 +7198,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(n6c(", bannerLift),fontSize:12.5"), 3);
       const line = N6SRC.split("\n").find(l => l.includes('data-testid="toast-box"')) || "";
       // review 11/1: while a phone sheet (More, Alerts) stands on the bar the toast sits at the top (css.topToast), never over the sheet's rows
-      // pin moved deliberately 11/2 (re-check): the rule reads the claim sheet ON SCREEN (claimSheetUp) - its state outlives the
-      // view while a claim is in flight
-      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? ((moreOpen || showNotifs) && !editorDay && !claimSheetUp ? css.topToast : css.aboveTabBar(24)) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
+      // pin moved deliberately 11/2 (re-check): the rule reads the day editor and the claim sheet ON SCREEN (editorUp /
+      // claimSheetUp) - their state can outlive the view (a clean editor's day after a tap; a claim in flight)
+      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? ((moreOpen || showNotifs) && !editorUp && !claimSheetUp ? css.topToast : css.aboveTabBar(24)) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
       assert.deepStrictEqual(st6.css.topToast, { top: "calc(12px + env(safe-area-inset-top, 0px))", bottom: "auto" }, "the top placement, from app-styles (no new inset reader in index-source.html)");
       assert.ok(a > 0 && b > a && c > b);
       assert.ok(N6SRC.includes('document.documentElement.style.scrollPaddingBottom = tabBarShown ? TABBAR_CLEAR : "";'));
@@ -13887,12 +13887,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     // review 11/1: the claim sheet and the e-mail preview render inside the Open shifts view and their backdrops cover both navs,
     // so only a notification tap moves the view while one is up - their state goes with the view (the effect lifted and run), so
-    // no stale sheet comes back on the next visit and the toast never reads one as a dialog over the phone sheets; the claim
-    // sheet's one opener is the board's Take. Fix check 11/1: a dialog whose claim / send is in flight stays (busy) for a return
+    // no stale sheet comes back on the next visit; the claim sheet's one opener is the board's Take. 11/2 re-check: the toast rule
+    // reads the day editor and the claim sheet ON SCREEN (editorUp / claimSheetUp), so state that outlives its view never puts
+    // the toast over the phone sheets. Fix check 11/1: a dialog whose claim / send is in flight stays (busy) for a return
     // to the board - its flight's unconditional close would otherwise shut a second one opened meanwhile. The 340 px month row
     // keeps 4 px gaps (the 320 px title's room - the smoke measures it); every render mirrors tabBarShown into the ref the sw
-    // message handler reads.
-    check("review 11/1 (BEHAVIOUR): the claim sheet / e-mail preview state goes with the Open shifts view unless its claim / send is in flight; the 340 px row's 4 px gaps; tabBarShownRef mirrored every render", () => {
+    // message handler and goToDay read.
+    check("review 11/1 (BEHAVIOUR): the claim sheet / e-mail preview state goes with the Open shifts view unless its claim / send is in flight; the toast rule reads editorUp / claimSheetUp; the 340 px row's 4 px gaps; tabBarShownRef mirrored every render", () => {
       const line = '  useEffect(() => { if (view === "openshifts") return; if (!claimBusy) setClaimSheet(null); if (!obNoticeBusy) setObNotice(null); }, [view, claimBusy, obNoticeBusy]);';
       assert.strictEqual(cntP(PSRC, line), 1, "one effect, keyed on the view and both busy flags");
       assert.ok(PSRC.indexOf(line) > PSRC.indexOf("  const [obNoticeBusy, setObNoticeBusy] = useState(false);"), "after the states and the busy flags");
@@ -13913,7 +13914,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // 11/2 re-check: the toast rule reads the claim sheet ON SCREEN - a claim in flight keeps claimSheet off the board, where no
       // sheet shows, and the toast must still go to the top over More / Alerts
       assert.strictEqual(cntP(PSRC, '  const claimSheetUp = view === "openshifts" && !!claimSheet;'), 1, "claimSheetUp, once");
-      assert.ok(PSRC.includes("(moreOpen || showNotifs) && !editorDay && !claimSheetUp ? css.topToast : css.aboveTabBar(24)") && !PSRC.includes("!claimSheet ? css.topToast"), "the toast rule reads claimSheetUp");
+      assert.strictEqual(cntP(PSRC, '  const editorUp = (view === "calendar" || view === "openshifts") && !!editorDay && (!loaded || daysReadOk);'), 1, "editorUp, once");
+      assert.ok(PSRC.includes('{(view==="calendar" || view==="openshifts") && editorDay && (!loaded || daysReadOk) && ('), "editorUp is the DayEditor's own mount condition");
+      assert.ok(PSRC.includes("(moreOpen || showNotifs) && !editorUp && !claimSheetUp ? css.topToast : css.aboveTabBar(24)") && !PSRC.includes("!claimSheet ? css.topToast") && !PSRC.includes("!editorDay && !claimSheetUp"), "the toast rule reads editorUp / claimSheetUp");
+      const eu = new Function("view", "editorDay", "loaded", "daysReadOk", 'return (view === "calendar" || view === "openshifts") && !!editorDay && (!loaded || daysReadOk);');
+      assert.deepStrictEqual([eu("calendar", "2026-11-04", true, true), eu("openshifts", "2026-11-04", true, true), eu("timeoff", "2026-11-04", true, true), eu("settings", "2026-11-04", true, true), eu("calendar", null, true, true), eu("calendar", "2026-11-04", true, false)], [true, true, false, false, false, false], "the editor is on screen only on its two views, with the schedule read");
       const up = new Function("view", "claimSheet", 'return view === "openshifts" && !!claimSheet;');
       assert.deepStrictEqual([up("openshifts", { day: "x" }), up("timeoff", { day: "x" }), up("calendar", { day: "x" }), up("openshifts", null)], [true, false, false, false], "on screen only on the board");
       const r340 = sliceP("    @media (max-width: 340px) {\n      .cal-title > :first-child", "\n    }\n"); // (the tab bar's own 340 px line comes first)
