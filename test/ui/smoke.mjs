@@ -403,6 +403,8 @@
 //       SMOKE_NO_CACHE=1 bypass the CDN cache for this run
 //       SMOKE_FIXTURE=1 force the seed fixtures even when live data exists
 //       SMOKE_LIVE=1    forbid the fixture fallback (an empty live table then fails)
+//       SMOKE_FAKE_NOW=<ISO date-time with a zone>  time travel: the whole run on another date (never the gate's run)
+//       SMOKE_MIDNIGHT_WAIT=0  do not wait out midnight Central; SMOKE_MIDNIGHT_MARGIN_MIN=<min> its margin (35)
 // LIVE mode (P13R-2, 9/23): every OPEN expectation derives from an up-front anon read of the live rows (never a
 // dated constant), and when the live board has no open slot s1 may take, the harness OPENS ONE backup slot in what
 // it serves (a Mon/Wed 'generated' row after the seed's range, chosen by asking the app's own board) so the claim
@@ -423,22 +425,26 @@ import { contrastTable, formatTable, regionTable, formatRegionTable, loadTheme, 
 // route-handler timestamp and every toast wait share one timeline. Every BrowserContext gets the same clock (the newContext
 // wrapper after chromium.launch) and so does the Generate worker (TT_WORKER_PRELUDE). Unset: TT is null and nothing below
 // changes. A time-travel run is NEVER the merge gate's run (it also overwrites test/ui/out screenshots).
+// Not faked in Node: an Intl format() / formatToParts() with no date (it reads the real clock) - nothing here calls one.
 const TT = (() => {
   const raw = process.env.SMOKE_FAKE_NOW;
   if (!raw) return null;
   const RealDate = globalThis.Date;
   const fakeStart = RealDate.parse(raw);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(raw) || !Number.isFinite(fakeStart)) {
-    console.error(`FAIL: SMOKE_FAKE_NOW=${raw} is not an ISO date-time with a zone (e.g. 2027-01-04T18:00:00Z)`);
+  const [vy, vm, vd] = raw.slice(0, 10).split("-").map(Number), vh = Number(raw.slice(11, 13)), vmi = Number(raw.slice(14, 16));
+  const realDay = vm >= 1 && vm <= 12 && vd >= 1 && new RealDate(RealDate.UTC(vy, vm - 1, vd)).getUTCDate() === vd && vh <= 23 && vmi <= 59; // V8 rolls 2027-02-30 / T24:00 over (review 11/2)
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(raw) || !Number.isFinite(fakeStart) || !realDay) {
+    console.error(`FAIL: SMOKE_FAKE_NOW=${raw} is not a real ISO date-time with a zone (e.g. 2027-01-04T18:00:00Z)`);
     process.exit(1);
   }
   const offsetMs = fakeStart - RealDate.now();
   const now = () => RealDate.now() + offsetMs;
   function FakeDate(...a) {
     if (!new.target) return new RealDate(now()).toString(); // Date() called as a function
-    return a.length ? new RealDate(...a) : new RealDate(now());
+    return Reflect.construct(RealDate, a.length ? a : [now()], new.target); // new.target: a subclass keeps its prototype
   }
   FakeDate.prototype = RealDate.prototype; // instanceof Date, every method and toJSON stay the real ones
+  RealDate.prototype.constructor = FakeDate; // d.constructor === Date, and new d.constructor() reads the faked clock too
   FakeDate.now = now;
   FakeDate.parse = RealDate.parse;
   FakeDate.UTC = RealDate.UTC;
@@ -720,7 +726,7 @@ const XR_WORKER_JS = "// smoke harness: a do-nothing service worker (no fetch ha
 // date while the page measures from the faked one. helpers.js - the page's own script and the worker's first importScripts, one
 // URL - is served with this one-line prelude in front (helpers.js keeps its line numbers): in a worker scope it installs the faked
 // Date; in a window it returns at once.
-const TT_WORKER_PRELUDE = TT ? `/* smoke time travel */(function (off) { if (typeof WorkerGlobalScope === "undefined" || !(self instanceof WorkerGlobalScope) || self.Date.__smokeTT) return; var R = self.Date; function D() { if (!new.target) return new R(R.now() + off).toString(); return arguments.length ? new R(...arguments) : new R(R.now() + off); } D.prototype = R.prototype; D.now = function () { return R.now() + off; }; D.parse = R.parse; D.UTC = R.UTC; D.__smokeTT = true; self.Date = D; })(${TT.offsetMs});` : "";
+const TT_WORKER_PRELUDE = TT ? `/* smoke time travel */(function (off) { if (typeof WorkerGlobalScope === "undefined" || !(self instanceof WorkerGlobalScope) || self.Date.__smokeTT) return; var R = self.Date; function D() { if (!new.target) return new R(R.now() + off).toString(); return Reflect.construct(R, arguments.length ? Array.prototype.slice.call(arguments) : [R.now() + off], new.target); } D.prototype = R.prototype; R.prototype.constructor = D; D.now = function () { return R.now() + off; }; D.parse = R.parse; D.UTC = R.UTC; D.__smokeTT = true; self.Date = D; })(${TT.offsetMs});` : "";
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
   if (/\/(xr-sw|OneSignalSDKWorker)\.js$/.test(urlPath)) { res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" }); res.end(XR_WORKER_JS); return; }
@@ -916,7 +922,7 @@ const PLAN_P = IMP.importPlan(JSON.parse(fs.readFileSync(SEED_PATH, "utf8")), { 
 
 // ---- Seed fixture fallback (see the header) ----
 // 11/2 (date bombs, N1): the fixture's held-but-unlocked backup (RF2's Accept confirm) - the first day on/after today the seed plan has
-// no row for (it was 2026-11-19); always in the default Generate range (the first open slot on/after today through its month's end)
+// no row for (it was 2026-11-19); always inside the smoke's Generate range (the first open slot on/after today through its month's end - not the app's default)
 const FIX_HELD_DAY = (() => { const have = new Set(PLAN.scheduleDayRows.map(r => r.day)); let d = todayCentral; while (have.has(d)) d = new Date(Date.parse(d + "T12:00:00Z") + 86400000).toISOString().slice(0, 10); return d; })();
 const fixture = await (async () => {
   let liveCount = null;
@@ -933,7 +939,7 @@ const fixture = await (async () => {
   const ts = PLAN_TS, plan = PLAN;
   return {
     // RF2 review fix: one HELD but UNLOCKED day (FIX_HELD_DAY, 11/2) (an app-generated backup, the shape the published rows have)
-    // inside the default Generate range, so the Accept confirm's POSITIVE branch runs under the fixture: the default
+    // inside the smoke's Generate range, so the Accept confirm's POSITIVE branch runs under the fixture: the default
     // run (fill-open-only OFF) regenerates that backup and Accept must name it. The importer ignores an app-generated
     // row the seed lacks (planDiff: source != import and not in the plan), so the Import pins are unaffected.
     schedule_days: plan.scheduleDayRows.map(r => ({ ...r, version: 1, updated_at: ts })).concat([{ day: FIX_HELD_DAY, primary_id: null, backup_id: "s2", primary_locked: false, backup_locked: false, source: "generated", external_cover: null, note: null, version: 1, updated_by: "fixture", updated_at: ts }]),
@@ -1115,18 +1121,18 @@ const browser = await chromium.launch({ headless: !process.env.HEADFUL });
 // resume() re-anchors every document at the browser's real clock + TT.offsetMs, the value Node's Date.now() reads; ttCheckDoc
 // reads Date.now() on every http(s) document load and the end of the run fails on a skew over 2 s.
 const ttSkews = [];
-let ttDocsChecked = 0;
+let ttDocsChecked = 0, ttDocsSkipped = 0; // skipped: not http(s), a busy page, or closed before the reading (review 11/2)
 const ttCheckDoc = (p) => {
   let where;
-  try { const u = new URL(p.url()); if (!/^https?:$/.test(u.protocol)) return; where = u.pathname; } catch (e) { return; }
+  try { const u = new URL(p.url()); if (!/^https?:$/.test(u.protocol)) { ttDocsSkipped++; return; } where = u.pathname; } catch (e) { ttDocsSkipped++; return; }
   const t0 = Date.now();
   p.evaluate(() => Date.now()).then((pt) => {
     const t1 = Date.now();
-    if (t1 - t0 > 1000) return; // a busy page (a dialog, a long task): no reading for this load
+    if (t1 - t0 > 1000) { ttDocsSkipped++; return; } // a busy page (a dialog, a long task): no reading for this load
     ttDocsChecked++;
     const skew = pt - (t0 + t1) / 2;
     if (Math.abs(skew) > 2000) ttSkews.push(`${where} ${(skew / 1000).toFixed(1)} s`);
-  }).catch(() => {});
+  }).catch(() => { ttDocsSkipped++; });
 };
 if (TT) {
   const newContextReal = browser.newContext.bind(browser);
@@ -2392,7 +2398,7 @@ try {
       const wk = await page.evaluate(async (v) => {
         const src = "importScripts(" + JSON.stringify(new URL("helpers.js?v=" + v, location.href).href) + "); postMessage({ now: Date.now(), today: todayCentral() });";
         const u = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
-        try { return await new Promise((res, rej) => { const w = new Worker(u); w.onmessage = (e) => { w.terminate(); res(e.data); }; w.onerror = (e) => { w.terminate(); rej(new Error((e && e.message) || "worker error")); }; }); }
+        try { return await new Promise((res, rej) => { const w = new Worker(u); const t = setTimeout(() => { w.terminate(); rej(new Error("no message from the worker in 10 s")); }, 10000); w.onmessage = (e) => { clearTimeout(t); w.terminate(); res(e.data); }; w.onerror = (e) => { clearTimeout(t); w.terminate(); rej(new Error((e && e.message) || "worker error")); }; }); }
         finally { URL.revokeObjectURL(u); }
       }, APP_VERSION);
       const skew = wk.now - Date.now();
@@ -2470,10 +2476,12 @@ try {
       const wd = (d) => new Date(d + "T12:00:00Z").getUTCDay();
       // 11/2 (date bombs, #14): the Mon-Sun weeks around every holiday-unit day of the served blob - over the rows published 9/23 (to
       // 1/3) exactly the old literal (11/23-29, and everything from 12/21, which also shut out every later row)
-      const unitWeeks = new Set(Object.values((gcBlobEarly.holidays && gcBlobEarly.holidays.units) || {}).flat().flatMap(u => (u && Array.isArray(u.days)) ? u.days : []).flatMap(d => { const mon = isoPlus(d, -((wd(d) + 6) % 7)); return [0, 1, 2, 3, 4, 5, 6].map(k => isoPlus(mon, k)); }));
+      // the served blob's units; when the up-front read failed (or the blob carries none), the seed's - logged (11/2 review)
+      const unitsSrc = (gcBlobEarly.read && gcBlobEarly.holidays && gcBlobEarly.holidays.units) || (() => { console.log(`     (claim slot: ${gcBlobEarly.read ? "the served blob carries no holidays.units" : "the up-front blob read failed"} - the holiday weeks come from the seed's units)`); try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).holidays.units || null; } catch (e) { return null; } })();
+      const unitWeeks = new Set(Object.values(unitsSrc || {}).flat().flatMap(u => (u && Array.isArray(u.days)) ? u.days : []).flatMap(d => { const mon = isoPlus(d, -((wd(d) + 6) % 7)); return [0, 1, 2, 3, 4, 5, 6].map(k => isoPlus(mon, k)); }));
       const inUnit = (d) => unitWeeks.has(d);
-      if (!gcBlobEarly.read) console.log("     (LIVE mode: the served blob was not read up front - the holiday weeks are unknown, so no slot is harness-opened and the claim flow is not exercised this run)");
-      const cands = !gcBlobEarly.read ? [] : liveRowsEarly.filter(r => r.day >= isoPlus(todayCentral, 3) && (wd(r.day) === 1 || wd(r.day) === 3) && !inUnit(r.day) && r.source === "generated" && r.backup_id && !r.backup_locked && r.primary_id && r.primary_id !== "s1" && r.backup_id !== "s1" && !r.external_cover).map(r => r.day).slice(0, 6);
+      if (!unitsSrc) console.log("     (claim slot: no holiday units could be read (blob or seed) - the holiday weeks are unknown, so no slot is harness-opened and the claim flow is not exercised this run)");
+      const cands = !unitsSrc ? [] : liveRowsEarly.filter(r => r.day >= isoPlus(todayCentral, 3) && (wd(r.day) === 1 || wd(r.day) === 3) && !inUnit(r.day) && r.source === "generated" && r.backup_id && !r.backup_locked && r.primary_id && r.primary_id !== "s1" && r.backup_id !== "s1" && !r.external_cover).map(r => r.day).slice(0, 6);
       const reload = async () => { await loadWithRetry(page, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "reload (harness-opened slot)"); await page.waitForSelector("text=Synced", { timeout: 30000 }).catch(() => {}); };
       let chosen = null;
       for (const d of cands) {
@@ -3785,9 +3793,9 @@ try {
     const E3_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     // 11/2 (date bombs, #18a): the Totals month - November 2026 while the year picker offers 2026 (Central year - 1 .. + 2, so until
     // 1/1/2028); after that the latest month on or before this one, inside the offered years, in which Fierce has East P-week days
-    // (the ' + N East P-week' check needs some) - read from the scheduler page's rules context
+    // (the ' + N East P-week' check needs some) - read from the scheduler page's rules context; with none, today's month (the fairness P-week check then skipped, logged)
     const E3_CY = Number(todayCentral.slice(0, 4)), e3TotOffered = (y) => y >= E3_CY - 1 && y <= E3_CY + 2;
-    let E3_TOT = e3TotOffered(2026) ? "2026-11" : null;
+    let E3_TOT = e3TotOffered(2026) ? "2026-11" : null, E3_TOT_NO_P = false;
     const e3TotLabel = () => E3_TOT ? E3_MONTHS[+E3_TOT.slice(5, 7) - 1].slice(0, 3) + " " + E3_TOT.slice(0, 4) : "(none)";
     const E3_VAC_DAY = EASTVAC_RANGES[0].start;          // unreviewed (no review row in the harness store)
     const E3_LOCK_DAY = "2026-10-15";
@@ -3969,22 +3977,22 @@ try {
         if (eS.source !== "Source: east-derived") fail(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): the served row's source must read 'Source: east-derived' to the scheduler, got '${eS.source}'`);
         else ok(`Item E3 (scheduler, day editor ${E3_SRC_DAY}): '${eS.source}' (the served row's own source)`);
       }
+      // 11/2 (date bombs, #18a + review): from 1/1/2028 the latest offered month with Fierce East P-week days; with none, today's
+      // month - every Totals check runs there except the fairness ' + N East P-week' one (logged)
       if (!E3_TOT) E3_TOT = (factsS.eastPMonthsS5 || []).filter(ym => e3TotOffered(+ym.slice(0, 4)) && ym <= todayCentral.slice(0, 7)).pop() || null;
-      const tS = E3_TOT ? await e3Totals(page, "e3-scheduler-totals.png") : null;
-      if (!tS) console.log("     (Item E3 (scheduler): no month the Totals picker offers holds Fierce East P-week days - the Totals checks are not exercised this run)");
-      else {
-        // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 22 -> 23 fields for the scheduler
-        const badS = tS.csvRows.filter(r => r.length !== 23);
-        if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 23 || tS.csvHeader[22] !== "Weighted") fail(`Item E3 (scheduler, Totals ${e3TotLabel()}): the East days column must stay on screen and in the CSV (23 columns, Weighted the last): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
-        else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 23 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
-        else if (!/East days: days on Davenport call/.test(tS.monthText)) fail(`Item E3 (scheduler, Totals ${e3TotLabel()}): the 'East days: days on Davenport call ...' footnote is gone`);
-        else ok(`Item E3 (scheduler, Totals ${e3TotLabel()}): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 23 fields each - the 22 older columns unchanged, Weighted appended)`);
-        sched.fierceEastP = /East P-week/.test(tS.fierce);
-        if (factsS.countsEast.includes("s5")) {
-          if (!sched.fierceEastP) fail(`Item E3 (scheduler, fairness ${e3TotLabel()}): Fierce's cap counts East days, so his row must read ' + N East P-week': '${tS.fierce.slice(0, 160)}'`);
-          else ok(`Item E3 (scheduler, fairness ${e3TotLabel()}): Fierce's row keeps ' + N East P-week' - '${tS.fierce.slice(0, 120)}'`);
-        } else console.log(`     (Item E3: Fierce's cap does not count East days in this rules context (countsEastDays: ${factsS.countsEast.join(",") || "none"}) - the fairness ' + N East P-week' check is vacuous this run)`);
-      }
+      if (!E3_TOT) { E3_TOT = todayCentral.slice(0, 7); E3_TOT_NO_P = true; console.log(`     (Item E3 (scheduler): no month the Totals picker offers holds Fierce East P-week days - Totals reads ${e3TotLabel()} (today's month); the fairness ' + N East P-week' check is not exercised this run)`); }
+      const tS = await e3Totals(page, "e3-scheduler-totals.png");
+      // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 22 -> 23 fields for the scheduler
+      const badS = tS.csvRows.filter(r => r.length !== 23);
+      if (!tS.hdr.includes("East days") || !tS.csvHeader.includes("East days") || !tS.csvHeader.includes("Counted vs cap (P + East P-week days)") || tS.csvHeader.length !== 23 || tS.csvHeader[22] !== "Weighted") fail(`Item E3 (scheduler, Totals ${e3TotLabel()}): the East days column must stay on screen and in the CSV (23 columns, Weighted the last): screen ${tS.hdr.join(" | ")}; CSV ${tS.csvHeader.join(" | ")}`);
+      else if (tS.csvRows.length < 6 || badS.length) fail(`Item E3 (scheduler, Totals CSV): every line must carry the header's 23 fields - ${tS.csvRows.length} row(s), ${badS.length} with another count: ${badS.slice(0, 2).map(r => r.length + ": " + r.join(",")).join(" / ")}`);
+      else if (!/East days: days on Davenport call/.test(tS.monthText)) fail(`Item E3 (scheduler, Totals ${e3TotLabel()}): the 'East days: days on Davenport call ...' footnote is gone`);
+      else ok(`Item E3 (scheduler, Totals ${e3TotLabel()}): 'East days' on screen, its footnote, and in the CSV (header + ${tS.csvRows.length} line(s), 23 fields each - the 22 older columns unchanged, Weighted appended)`);
+      sched.fierceEastP = /East P-week/.test(tS.fierce);
+      if (!E3_TOT_NO_P && factsS.countsEast.includes("s5")) {
+        if (!sched.fierceEastP) fail(`Item E3 (scheduler, fairness ${e3TotLabel()}): Fierce's cap counts East days, so his row must read ' + N East P-week': '${tS.fierce.slice(0, 160)}'`);
+        else ok(`Item E3 (scheduler, fairness ${e3TotLabel()}): Fierce's row keeps ' + N East P-week' - '${tS.fierce.slice(0, 120)}'`);
+      } else if (!E3_TOT_NO_P) console.log(`     (Item E3: Fierce's cap does not count East days in this rules context (countsEastDays: ${factsS.countsEast.join(",") || "none"}) - the fairness ' + N East P-week' check is vacuous this run)`);
     } catch (e) {
       fail("Item E3 (scheduler): the scheduler pass threw: " + errLine(e));
       if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
@@ -4213,7 +4221,7 @@ try {
               if (!ownPast) ownPast = mine.find(c => c.day < tday) || null;
               if (own) break;
             }
-            if (!own) own = ownPast;
+            if (!own && ownPast) { own = ownPast; await e3Month(rp, +own.day.slice(0, 4), +own.day.slice(5, 7) - 1); } // the loop leaves the grid on the last month scanned
             if (!own) console.log(`     (${DS}: no day of ${pid} in ${e3ScanLabel} on this page - the own-day summary is not exercised)`);
             else {
               const role = own.p === pid ? "primary" : "backup";
@@ -4320,8 +4328,8 @@ try {
           await rp.click('button[data-tab="calendar"]').catch(() => {});
         }
         // Totals (signed-in roles): screen, fairness and EVERY CSV line
-        if (R.totals && !E3_TOT) console.log(`     (${T}: no month the Totals picker offers holds Fierce East P-week days - the Totals checks are not exercised this run)`);
-        else if (R.totals) {
+        if (R.totals) {
+          if (!E3_TOT) { E3_TOT = todayCentral.slice(0, 7); E3_TOT_NO_P = true; } // the scheduler pass threw before choosing a month (11/2 review)
           const tt = await e3Totals(rp, "e3-" + R.file + "-totals.png");
           // pin moved deliberately 10/11: Prompt 32 step 1 appends a "Weighted" column (the last) - 21 -> 22 fields for everyone else
           const badRows = tt.csvRows.filter(r => r.length !== 22);
@@ -4520,7 +4528,9 @@ try {
         const rows = Object.keys(ctx.schedule).sort().filter(d => { const e = ctx.schedule[d] || {}; return plain(d) && !!e.primary && e.primary !== "s1" && e.backup !== "s1" && !e.primaryLocked && !e.externalCover; });
         const softRows = rank(rows, { claim: true }, SOFT_OK), soft = softRows[0] || null;
         const busyRows = rank(rows.filter(d => d !== soft), { claim: true }, BUSY_OK), busy = busyRows[0] || null;
-        const tDays = args.values.map(v => v.split("|")).filter(([d, role]) => role === "primary" && plain(d) && d !== busy && d !== soft).map(([d]) => d);
+        // Khan not the backup (11/2, time travel 11/23): eligibility() returns at the first failed pattern rule, so a
+        // 'hard-never-weekday' day hid 'holds-other-role' until the overlay's home day lifted the pattern
+        const tDays = args.values.map(v => v.split("|")).filter(([d, role]) => role === "primary" && plain(d) && d !== busy && d !== soft && (ctx.schedule[d] || {}).backup !== "s1").map(([d]) => d);
         const tSoftList = rank(tDays.filter(d => !near(d, soft)), { ignoreLocks: true, claim: true }, SOFT_OK), tSoft = tSoftList[0] || null;
         const tHardList = rank(tDays.filter(d => d !== tSoft), { ignoreLocks: true, claim: true }, BUSY_OK), tHard = tHardList[0] || null;
         const w = (d) => d ? d + " (" + why[d] + ")" : "none";
@@ -5956,23 +5966,25 @@ try {
   await page.setViewportSize({ width: 1180, height: 900 });
 
   // The edit day: the first row-less day on/after today (Central) whose month keeps three more row-less days after it (the B1
-  // undo step's two spare days and Do first 2's), so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett';
+  // undo step's two spare days and Do first 2's) and four besides it (the realtime / keepalive steps' other .. fifth, which take
+  // the month's first non-fixture days), so the editor save is a POST v1 and the publish diff reads 'OPEN -> Burchett';
   // scanning forward up to 400 days once the rest of the current month is published.
   // 11/2 (date bombs, critic): the scan started at the first of the machine's LOCAL month - once the served rows end before
-  // today the edit day was a past day, and the B1 undo, the publish arrow and the realtime race ran on a past slot.
+  // today the edit day was a past day, and the B1 undo, the publish arrow and the realtime race ran on a past slot. Review 11/2:
+  // the 'four besides it' - in fixture mode on 11/2-11/19 November held only three, and keepalive-busy failed (before this too).
   const rowlessDay = (d) => !fixtureHasDay(d) && !liveByDay[d];
   const day = (() => {
     for (let i = 0; i < 400; i++) {
       const d = isoPlus(todayCentral, i);
       if (!rowlessDay(d)) continue;
-      const dim = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).getUTCDate();
-      let after = 0;
-      for (let k = +d.slice(8, 10) + 1; k <= dim; k++) if (rowlessDay(d.slice(0, 8) + String(k).padStart(2, "0"))) after++;
-      if (after >= 3) return d;
+      const dim = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 0)).getUTCDate(), dd = +d.slice(8, 10);
+      let after = 0, others = 0;
+      for (let k = 1; k <= dim; k++) if (k !== dd && rowlessDay(d.slice(0, 8) + String(k).padStart(2, "0"))) { others++; if (k > dd) after++; }
+      if (after >= 3 && others >= 4) return d;
     }
     return null;
   })();
-  if (!day) fail("no row-less day (with three more after it in its month) within 400 days of today for the day-editor edit");
+  if (!day) fail("no row-less day (with three more after it and four besides it in its month) within 400 days of today for the day-editor edit");
   else if (day.slice(0, 7) !== todayCentral.slice(0, 7)) console.log(`     (edit day ${day}: the rest of the current month is published)`);
   if (day) {
     // Prompt 16 B1 review: the edit below, the B1 undo step and the realtime race that follows all read `day` as
@@ -9836,14 +9848,15 @@ try {
     //     Every non-GET request the page sent to the Supabase host during the step was answered by this harness (counted
     //     against the recorded writes): nothing reaches the live database.
     {
-      // 11/2 (date bombs, #16): the plan year is the first served year whose units all start on/after today (Accept skips a started unit) -
+      // 11/2 (date bombs, #16): the plan year is the first served year whose units all start AFTER today - Accept leaves a unit that
+      // starts today or earlier as on file (helpers.holidayPlanAcceptRows: days[0] <= today; review 11/2: the start day itself counts) -
       // 2027 until its first unit (5/29/2027) starts; then the next year the blob carries (units are data: Setup > Holidays > Add year)
       const hpUnitsOf = (y) => (gcBlobEarly.read && gcBlobEarly.holidays && gcBlobEarly.holidays.units && Array.isArray(gcBlobEarly.holidays.units[String(y)])) ? gcBlobEarly.holidays.units[String(y)].filter(u => u && typeof u.name === "string" && Array.isArray(u.days) && u.days.length).map(u => ({ name: u.name, tier: u.tier, days: u.days.slice().sort() })).sort((a, b) => a.days[0] < b.days[0] ? -1 : 1) : [];
       const hpYearsServed = Object.keys((gcBlobEarly.read && gcBlobEarly.holidays && gcBlobEarly.holidays.units) || {}).filter(y => /^\d{4}$/.test(y)).map(Number).sort((a, b) => a - b);
-      const HP_Y = hpYearsServed.find(y => { const us = hpUnitsOf(y); return us.length && us[0].days[0] >= todayCentral; }) || null;
+      const HP_Y = hpYearsServed.find(y => { const us = hpUnitsOf(y); return us.length && us[0].days[0] > todayCentral; }) || null;
       const HP_SRC = HP_Y ? "holiday-plan-" + HP_Y : null;
       const hpUnits = HP_Y ? hpUnitsOf(HP_Y) : [];
-      if (!hpUnits.length) console.log(`     (holiday plan: ${gcBlobEarly.read ? "no served year whose units all start on/after today " + todayCentral + " (years " + (hpYearsServed.join(", ") || "none") + "; the next year's units are data - Setup > Holidays)" : "the blob was not read up front"} - the Plan / swap / Accept / Re-check checks are skipped this run)`);
+      if (!hpUnits.length) console.log(`     (holiday plan: ${gcBlobEarly.read ? "no served year whose units all start after today " + todayCentral + " (years " + (hpYearsServed.join(", ") || "none") + "; the next year's units are data - Setup > Holidays)" : "the blob was not read up front"} - the Plan / swap / Accept / Re-check checks are skipped this run)`);
       else {
         const hpDays = [...new Set(hpUnits.flatMap(u => u.days))].sort();
         const hpUnitOfDay = {}; hpUnits.forEach(u => u.days.forEach(d => { hpUnitOfDay[d] = u.name; }));
@@ -10354,7 +10367,7 @@ try {
         // (the served time_off) - the derived check above holds every join to the drawn people, so here: Khan? on each day, and at
         // least one join in the month (the check above is never vacuous)
         else if (fx.length !== 4 || !fx.every(c => /(^|,)s1\?(,|$)/.test(c.key || "")) || !joins.length) fail(`calendar vacation bar: the fixture's unreviewed run ${mdOf(EASTVAC_RANGES[0].start)}-${mdOf(EASTVAC_RANGES[0].end)} should show 'Khan?' (s1?) in each day's bar, and ${EV0_MONTH} should have a join: ` + JSON.stringify(fx) + " joins " + joins.length);
-        else ok(`calendar vacation bar: ${EV0_MONTH}'s ${jn.filter(c => c.key).length} bar(s) join exactly where the same people are off inside a week row (${joins.length} join(s); the fixture's 4/6-4/9 run ${fx.map(c => c.day.slice(5) + (c.l ? "<" : "") + (c.r ? ">" : "")).join(" ")})`);
+        else ok(`calendar vacation bar: ${EV0_MONTH}'s ${jn.filter(c => c.key).length} bar(s) join exactly where the same people are off inside a week row (${joins.length} join(s); the fixture's ${mdOf(EASTVAC_RANGES[0].start)}-${mdOf(EASTVAC_RANGES[0].end)} run ${fx.map(c => c.day.slice(5) + (c.l ? "<" : "") + (c.r ? ">" : "")).join(" ")})`);
         // the bar's colours are the theme's tokens, light then dark (the fixture day, so the check never depends on live rows)
         const barColours = () => page.$eval(`[data-day="${EV[0].start}"] [data-testid=cal-vac]`, el => ({ bg: getComputedStyle(el).backgroundColor, fg: getComputedStyle(el).color }));
         const lightC = await barColours();
@@ -10786,7 +10799,7 @@ try {
     // Remind on one of them = exactly ONE POST functions/v1/send-notification { type offers_reminder, targetIds [id],
     // data.subject / message = the heads-up's words (the label, the freeze as 'Mon 11/23') } and nothing else; New period -> a start inside the seed period is refused with
     // zero writes; the 3-month preset fills end / close / publish / label = the harness's own date maths (last day
-    // of the 3rd calendar month, Fri/Sat -> the following Sunday; start - 42 / - 28 days); Create = ONE POST
+    // of the 3rd calendar month, Fri/Sat -> the following Sunday; start - 7 x the rules' close / publish weeks: 42 / 28 days today); Create = ONE POST
     // call_periods (return=representation) + ONE audit period.create and nothing else, the new box renders all six
     // not_started; Close now dismissed = zero writes, confirmed = ONE compare-and-swap PATCH
     // ?id=eq.<id>&status=eq.upcoming { status closed } + ONE audit period.close, the box reads closed with no Remind
@@ -10932,7 +10945,7 @@ try {
         const expClose = isoAddDays(expDefaultStart, -OFFER_LEAD_DAYS), expPublish = isoAddDays(expDefaultStart, -OFFER_PUBLISH_LEAD_DAYS); // 11/2: the served rules' leads (42 / 28 today)
         const expLabel = `${MON[sm - 1]} ${sy} - ${MON[+expEnd.slice(5, 7) - 1]} ${expEnd.slice(0, 4)}`;
         if (f.start !== expDefaultStart || f.end !== expEnd || f.close !== expClose || f.publish !== expPublish || f.label !== expLabel) fail(`Periods form (3-month preset from ${expDefaultStart}): expected end ${expEnd}, close ${expClose}, publish ${expPublish}, label '${expLabel}'; got ${JSON.stringify(f)}`);
-        else ok(`Periods form: 3-month preset from ${expDefaultStart} -> end ${f.end}, offers close ${f.close} (start - 6 weeks), publish by ${f.publish} (start - 4 weeks), label '${f.label}'`);
+        else ok(`Periods form: 3-month preset from ${expDefaultStart} -> end ${f.end}, offers close ${f.close} (start - ${OFFER_LEAD_DAYS / 7} weeks), publish by ${f.publish} (start - ${OFFER_PUBLISH_LEAD_DAYS / 7} weeks), label '${f.label}'`);
         // (c2) a hand-set close date survives a nudged Start (only untouched fields re-derive); the draft survives the
         // card being collapsed and reopened (it is CallSchedule state, not the section's); a preset click resets all
         const readForm = () => page.evaluate(() => ({ label: document.querySelector("[data-testid=prd-label]").value, start: document.querySelector("[data-testid=prd-start]").value, end: document.querySelector("[data-testid=prd-end]").value, close: document.querySelector("[data-testid=prd-close]").value, publish: document.querySelector("[data-testid=prd-publish]").value }));
@@ -10955,20 +10968,20 @@ try {
         else if (!formGone || !f3 || f3.close !== handClose || f3.start !== nudged || writesSince(bCol).length) fail(`Periods form: collapsing the Generate card must keep the draft (form hidden while closed, back with close ${handClose} / start ${nudged} when reopened, zero writes); got hidden=${formGone}, ${JSON.stringify(f3)}, writes ${writesSince(bCol).length}`);
         else if (f4.close !== isoAddDays(nudged, -OFFER_LEAD_DAYS) || f4.start !== nudged || f4.publish !== isoAddDays(nudged, -OFFER_PUBLISH_LEAD_DAYS)) fail(`Periods form: a preset click must refill every date from the rules (close ${isoAddDays(nudged, -OFFER_LEAD_DAYS)}), got ${JSON.stringify(f4)}`);
         else ok(`Periods form: hand-set close ${handClose} survived Start -> ${nudged} (publish re-derived ${f2.publish}); the draft survived the card collapsing / reopening; the 3-month preset refilled every date`);
-        // (c3) 9/27: the draft's short-lead warning is STRICT - the preset's start - 42 (f4) reads no "Offers close only";
-        // start - 41 does (only while that close is still after today: the "close has passed" warning outranks it)
+        // (c3) 9/27: the draft's short-lead warning is STRICT - the preset's start - lead (f4; 42 days with the 6-week rule) reads no
+        // "Offers close only"; start - (lead - 1) does (only while that close is still after today: the "close has passed" warning outranks it)
         try {
           const warnNow = () => page.$eval("[data-testid=prd-form-warn]", el => el.textContent.trim()).catch(() => "");
           const w42 = await warnNow();
-          const c41 = isoAddDays(nudged, -41);
-          if (/Offers close only/.test(w42)) fail(`Periods form (c3): close exactly start - 42 (${f4.close}) must not warn short lead (strict >), got '${w42.slice(0, 120)}'`);
-          else if (c41 <= todayCentral) ok(`Periods form (c3): start - 42 reads no short-lead warning; start - 41 not exercised (${c41} is not after today ${todayCentral})`);
+          const c41 = isoAddDays(nudged, -(OFFER_LEAD_DAYS - 1)); // start - (lead - 1): 41 with the 6-week rule (review 11/2: the rules' lead)
+          if (/Offers close only/.test(w42)) fail(`Periods form (c3): close exactly start - ${OFFER_LEAD_DAYS} (${f4.close}) must not warn short lead (strict >), got '${w42.slice(0, 120)}'`);
+          else if (c41 <= todayCentral) ok(`Periods form (c3): start - ${OFFER_LEAD_DAYS} reads no short-lead warning; start - ${OFFER_LEAD_DAYS - 1} not exercised (${c41} is not after today ${todayCentral})`);
           else {
             await page.fill("[data-testid=prd-close]", c41);
             await page.waitForTimeout(150);
             const w41 = await warnNow();
-            if (!/^Offers close only 41 days before the start/.test(w41)) fail(`Periods form (c3): close ${c41} (start - 41) must warn 'Offers close only 41 days before the start ...', got '${w41.slice(0, 120)}'`);
-            else ok(`Periods form (c3): start - 42 quiet, start - 41 warns '${w41.slice(0, 90)}'`);
+            if (!new RegExp("^Offers close only " + (OFFER_LEAD_DAYS - 1) + " days before the start").test(w41)) fail(`Periods form (c3): close ${c41} (start - ${OFFER_LEAD_DAYS - 1}) must warn 'Offers close only ${OFFER_LEAD_DAYS - 1} days before the start ...', got '${w41.slice(0, 120)}'`);
+            else ok(`Periods form (c3): start - ${OFFER_LEAD_DAYS} quiet, start - ${OFFER_LEAD_DAYS - 1} warns '${w41.slice(0, 90)}'`);
           }
         } catch (e) { fail("Periods form (c3): " + String(e && e.message || e).split("\n")[0]); }
         await page.fill("[data-testid=prd-start]", expDefaultStart);
@@ -11006,11 +11019,11 @@ try {
           else if (wordsWrong1.length || box1.summary.trim() !== summaryOf(box1.rows)) fail(`Periods create (Prompt 26): the new box's roll call words are off: ${JSON.stringify({ wrong: wordsWrong1, summary: box1.summary, expSummary: summaryOf(box1.rows) }).slice(0, 500)}`);
           else ok(`Periods create: ONE POST call_periods + ONE audit period.create ("${cAud[0].detail.summary}"); '${expLabel}' renders upcoming with six rows (${rollWords1(box1.rows)}) reading '${box1.summary.trim()}' and Remind on each`);
           if (!expRemind.length && box1.rows.every(r => r.status === "not_started")) console.log("     (Periods (Prompt 26): the served period is frozen and every row of the new box is not_started - 'Remind on every status' and the 'painted' roll call are not exercised this run)");
-          // 9/27: the new period closes exactly start - 6 weeks - no short-lead line (strict); the next-period line follows the new last end
+          // 9/27: the new period closes exactly start - the rules' lead - no short-lead line (strict); the next-period line follows the new last end
           try {
             const lk1 = await leadKinds(created.id);
             const nx1 = expNextLine(), nt1 = await nextLine();
-            if (lk1.some(w => w.kind === "short-lead")) fail(`Periods lead (create): '${expLabel}' closes exactly start - 42 - no short-lead line expected, got ${JSON.stringify(lk1)}`);
+            if (lk1.some(w => w.kind === "short-lead")) fail(`Periods lead (create): '${expLabel}' closes exactly start - ${OFFER_LEAD_DAYS} - no short-lead line expected, got ${JSON.stringify(lk1)}`);
             else if (nx1 ? !(nt1 && nt1.includes(`from ${mdOf(nx1.from)}`)) : nt1 !== null) fail(`Periods lead (create): 'Create the next period' should be ${nx1 ? "shown from " + mdOf(nx1.from) : "absent (a period now follows)"}, got ${JSON.stringify(nt1)}`);
             else ok(`Periods lead (create): '${expLabel}' has no short-lead line; 'Create the next period' ${nx1 ? "moved to " + mdOf(nx1.from) : "absent"}`);
           } catch (e) { fail("Periods lead (create): " + String(e && e.message || e).split("\n")[0]); }
@@ -11316,11 +11329,13 @@ try {
       const otherMsgs = acceptDialogs.filter(m => !/held but unlocked assignment\(s\) will be replaced: /.test(m));
       if (otherMsgs.length) fail("RF2 Accept confirm: an unexpected dialog on Accept (respect locks ON, no locked change expected): " + JSON.stringify(otherMsgs.map(m => m.slice(0, 160))));
       // RF2 review fix: under the fixture the positive branch is REQUIRED - the injected unlocked generated backup
-      // (2026-11-19 B s2, see the fixture) must be regenerated to another holder (or cleared) and named by the app.
-      if (fixture) {
+      // (FIX_HELD_DAY B s2, see the fixture) must be regenerated to another holder (or cleared) and named by the app.
+      // 11/2 (review): a preview that keeps s2 there passes only when the confirm names OTHER held slots (the checks below then
+      // run the positive branch on them) - the seed plan holds none of its own, so with none it FAILs as before
+      if (fixture && !heldUnlocked.some(s => s.startsWith(mdOf(FIX_HELD_DAY) + " B "))) {
         const pvFix = previewGrid.find(c => c.day === FIX_HELD_DAY);
-        if (pvFix && (pvFix.b || null) === "s2") console.log(`     (RF2 Accept confirm (fixture): the preview kept s2 as the ${FIX_HELD_DAY} backup - the injected slot was not regenerated this run; the positive branch rests on the other held slots)`);
-        else if (!heldUnlocked.some(s => s.startsWith(mdOf(FIX_HELD_DAY) + " B "))) fail("RF2 Accept confirm (fixture): the injected held but unlocked " + FIX_HELD_DAY + " backup (s2) was not regenerated - the positive branch did not run; grid cell: " + JSON.stringify(pvFix) + ", derived: " + JSON.stringify(heldUnlocked));
+        if (pvFix && (pvFix.b || null) === "s2" && heldUnlocked.length) console.log(`     (RF2 Accept confirm (fixture): the preview kept s2 as the ${FIX_HELD_DAY} backup - the positive branch runs on the other held slot(s): ${heldUnlocked.slice(0, 4).join(", ")})`);
+        else fail("RF2 Accept confirm (fixture): the injected held but unlocked " + FIX_HELD_DAY + " backup (s2) was not regenerated and no other held slot is replaced - the positive branch did not run; grid cell: " + JSON.stringify(pvFix) + ", derived: " + JSON.stringify(heldUnlocked));
       }
       if (heldUnlocked.length === 0) {
         if (heldMsgs.length) fail("RF2 Accept confirm: the harness derived no held but unlocked slot in the preview range, yet the app asked: " + heldMsgs[0].slice(0, 220));
@@ -11729,13 +11744,14 @@ try {
       const seed3 = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
       // 11/2 (date bombs, #4 + critic): the extra date is DERIVED - the period-aware plan never offers a day before today (importer OF001),
       // so the fixed first isolated December 2026 day (12/03) stopped planning an offer from 12/4. Tier 1: the first day on/after today,
-      // inside a period s2 is submitted in, in the month of one of his plain tagged lists, free (no list names it, not in his seed
+      // inside a period s2 is submitted in, in the month of one of his plain tagged lists, free (no list names it, not in his seed or live
       // time_off - OF002) and with no listed neighbour in that list (the legacy plan collapses a list's consecutive days). Tier 2 (from
       // 12/18 with today's seed): a one-month period of the harness's own after today and after every seed period (periods never
       // overlap), s2 exhaustive, with a new tagged plain list there. Both legs - period-aware and legacy - read the list that got it.
       const s2r = seed3.surgeonRules.s2;
       const s2Listed = new Set(IMP.impOfferSources(seed3, "s2").flatMap(s => s.days.map(x => x.day)));
-      const s2Vac = (s2r.timeOff || []).map(t => [t.start, t.end || t.start]);
+      // his seed vacations (OF002) and the live table's - the in-app dry run marks an offer inside a live vacation BLOCKED (review 11/2)
+      const s2Vac = (s2r.timeOff || []).map(t => [t.start, t.end || t.start]).concat((liveTo0 || []).filter(r => r && r.person_id === "s2").map(r => [String(r.start_date).slice(0, 10), String(r.end_date || r.start_date).slice(0, 10)]));
       const freeDay = (d) => !s2Listed.has(d) && !s2Vac.some(v => d >= v[0] && d <= v[1]);
       const s2Cov = IMP.impSeedOffers(seed3, { today: "2000-01-01" }).covered.s2 || [];
       let extra = null, extraKey = null;
@@ -12696,7 +12712,10 @@ try {
       if (!mP.mine.length) console.log(`     (month ${theme}: no pill of s1 in the shown month - the own-day ring is not measured)`);
       else if (offRing.length) fail(`month ${theme}: ${offRing.length} own-day ring(s) off THEME.${theme}.mineRim / mineRing (${wantRing}): ${JSON.stringify(offRing.slice(0, 3))}`);
       else ok(`month ${theme}: ${mP.mine.length} own-day ring(s) (s1, the scheduler as Khan) in THEME.${theme}.mineRim + ${wantRing}`);
-      if (mP.open && mP.open !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill is ${mP.open}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (mP.open) ok(`month ${theme}: OPEN pill ${mP.open}`);
+      // OPEN pills sit from today on, so today's month has them once the served rows end before it - the past month the pill
+      // reads may move to never has one (11/2 review)
+      const openC = m.open || mP.open;
+      if (openC && openC !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill is ${openC}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (openC) ok(`month ${theme}: OPEN pill ${openC}`); else console.log(`     (month ${theme}: no OPEN pill in the shown month${pmP ? " or in " + pmP.label : ""} - the OPEN colour is not measured)`);
       const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
       if (m.bodyBg !== wantBody) fail(`month ${theme}: page background ${m.bodyBg}, expected ${wantBody}`); else ok(`month ${theme}: page background ${m.bodyBg}`);
       await page.screenshot({ path: path.join(OUT, `theme-month-${theme}.png`), fullPage: true });
@@ -16371,8 +16390,11 @@ if (cdnRequests.length) fail(`${cdnRequests.length} request(s) went to a CDN hos
 if (TT) {
   if (ttSkews.length) fail(`time travel: ${ttSkews.length} document load(s) read a clock more than 2 s off Node's faked one - the per-document re-anchor did not take (a Playwright upgrade?): ${ttSkews.slice(0, 5).join("; ")}`);
   else if (!ttDocsChecked) fail("time travel: no document load was checked against Node's faked clock");
-  else ok(`time travel: ${ttDocsChecked} document load(s) read Node's faked clock (within 2 s)`);
-  console.log(`\nTIME TRAVEL RUN - SMOKE_FAKE_NOW=${TT.fakeStartIso}, today ${todayCentral}; the served offer period ${offerPeriod ? offerPeriod.start_day + ".." + offerPeriod.end_day : "(none)"}. Not a merge-gate run: diff its FAIL / 'not exercised' / 'skipped' lines against a control run inside the published range before calling one a date bomb`);
+  else ok(`time travel: ${ttDocsChecked} document load(s) read Node's faked clock (within 2 s)${ttDocsSkipped ? "; " + ttDocsSkipped + " load(s) not read (not http(s), busy, or closed first)" : ""}`);
+  // the live inputs a far-forward today can pass (review 11/2): a check past one of their ends has no future data to read
+  const ttLastRow = liveRowsEarly.reduce((m, r) => (r && r.day > m ? r.day : m), "");
+  const ttUnitYears = Object.keys((gcBlobEarly.holidays && gcBlobEarly.holidays.units) || {}).filter(y => /^\d{4}$/.test(y)).sort();
+  console.log(`\nTIME TRAVEL RUN - SMOKE_FAKE_NOW=${TT.fakeStartIso}, today ${todayCentral}; the served offer period ${offerPeriod ? offerPeriod.start_day + ".." + offerPeriod.end_day : "(none)"}. The ${fixture ? "fixture" : "live"} data ends: schedule_days ${ttLastRow || "(none)"}, East feed published weeks ${vacFixtureEarly.pubEnd || "(none)"}, holiday-unit years ${ttUnitYears.join(", ") || "(none)"} - a check that needs data past one of them has nothing to read, which is not a date bomb. Not a merge-gate run: diff its FAIL / 'not exercised' / 'skipped' lines against a CONTROL time-travel run (SMOKE_FAKE_NOW near the real now - the same clock machinery on today's date) before calling one a date bomb`);
 }
 console.log(`\ncdn cache: ${cdnHits} hit(s), ${cdnMisses} miss(es) (${path.relative(ROOT, CDN_CACHE)})`);
 console.log(`writes intercepted (${writes.length}):`);
@@ -16384,5 +16406,6 @@ if (failures.length || failedRequests.length) {
 await browser.close();
 server.close();
 { const endCentral = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }); if (endCentral !== todayCentral) console.log(`\nNOTE: this run crossed midnight Central (started on ${todayCentral}, ended on ${endCentral}) - a check that compares with the start-of-run date can fail for that alone; rerun it`); }
-console.log(failures.length ? `\nSMOKE FAILED: ${failures.length} problem(s)` : "\nSMOKE OK");
-process.exit(failures.length ? 1 : 0);
+// a time-travel run never reads as the gate's (review 11/2): its verdict names the fake date, and a clean one exits 2, not 0
+console.log(failures.length ? `\nSMOKE FAILED: ${failures.length} problem(s)${TT ? " - TIME TRAVEL " + TT.fakeStartIso + ", not a merge-gate result" : ""}` : TT ? `\nSMOKE OK - TIME TRAVEL ${TT.fakeStartIso}, not a merge-gate result (exit 2)` : "\nSMOKE OK");
+process.exit(failures.length ? 1 : TT ? 2 : 0);
