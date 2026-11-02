@@ -268,6 +268,28 @@ check("Item A helpers: monthGridDays is Sunday-first by default (first cell a Su
   assert.strictEqual(H.fmt(H.monOf(H.parse("2026-11-01"))), "2026-10-26");
   assert.strictEqual(H.fmt(H.getMondays(2026, 10, 1)[0]), "2026-11-02");
 });
+/* ---------------- Item 5 (Faraz 11/1): the theme is Light / Dark / Auto, per device ----------------
+   helpers.themePrefFromStorage / themeIsDark / themeStorageWrites are the storage contract: 'silvis-dark-mode' ("true" = this
+   device shows dark) is all an older cached build reads and is the Light / Dark choice; 'silvis-theme' = "auto" marks Auto. */
+check("Item 5 helpers: the Auto mark wins, else the flag is a saved Light / Dark, else (nothing stored) Auto; themeIsDark follows the device only in Auto; themeStorageWrites round-trips every choice and leaves the flag saying what the device shows (an older build reads === 'true')", () => {
+  for (const f of ["themePrefFromStorage", "themeIsDark", "themeStorageWrites"]) assert.strictEqual(typeof H[f], "function", "helpers." + f + " is missing");
+  assert.deepStrictEqual(H.THEME_PREFS, ["light", "dark", "auto"]);
+  assert.strictEqual(H.themePrefFromStorage(null, null), "auto", "a device that never ran the app follows the device");
+  assert.strictEqual(H.themePrefFromStorage(null, "false"), "light", "a device that ran an older build keeps Light (those builds stored the flag on every start)");
+  assert.strictEqual(H.themePrefFromStorage(null, "true"), "dark", "... or Dark - also when an older build flipped it");
+  assert.deepStrictEqual(["true", "false", null].map(f => H.themePrefFromStorage("auto", f)), ["auto", "auto", "auto"], "the Auto mark wins over the flag beside it (only what the device last showed)");
+  assert.deepStrictEqual([["light", "true"], ["dark", "false"], ["AUTO", null], ["", "TRUE"], [undefined, "1"]].map(([m, f]) => H.themePrefFromStorage(m, f)), ["dark", "light", "auto", "auto", "auto"], 'only "auto" is a mark; only "true" / "false" is a flag');
+  assert.deepStrictEqual([["light", false], ["light", true], ["dark", false], ["dark", true], ["auto", false], ["auto", true]].map(([p, s]) => H.themeIsDark(p, s)), [false, false, true, true, false, true]);
+  for (const pref of H.THEME_PREFS) for (const sys of [false, true]) {
+    const ls = new Map([["silvis-theme", "stale"], ["silvis-dark-mode", "stale"]]);
+    const get = (k) => (ls.has(k) ? ls.get(k) : null);
+    const dark = H.themeIsDark(pref, sys), tag = `${pref} on a ${sys ? "dark" : "light"} device`;
+    H.themeStorageWrites(pref, dark).forEach(([k, v]) => { if (v === null) ls.delete(k); else ls.set(k, v); });
+    assert.strictEqual(H.themePrefFromStorage(get("silvis-theme"), get("silvis-dark-mode")), pref, tag + ": reads back");
+    assert.strictEqual(get("silvis-dark-mode") === "true", dark, tag + ': an older build (=== "true") opens in the theme shown');
+    assert.strictEqual(ls.has("silvis-theme"), pref === "auto", tag + ": the Auto mark only for Auto");
+  }
+});
 check("Item A share page: the grid header reads Sun..Sat with the wk class on Sun, Fri and Sat by default (the first cell of November 2026 is Sun 11/1, 35 cells); weekStartsOn 'mon' gives Mon..Sun with wk on Fri-Sun (10/26 first, 42 cells); the week rows are Mon-Sun either way", () => {
   const hdrs = (html, month) => { const g = html.slice(html.indexOf(`data-month="${month}">`)); return Array.from(g.slice(0, g.indexOf("</h3>")).matchAll(/<div class="ch( wk)?">([A-Za-z]+)<\/div>/g)).map(m => m[2] + (m[1] ? "*" : "")); };
   const cells = (html, month) => { const g = html.slice(html.indexOf(`data-month="${month}">`)); const grid = g.slice(0, g.indexOf('<h3 class="wh">')); return { n: (grid.match(/<div class="c[de]/g) || []).length, first: (grid.match(/data-day="(\d{4}-\d{2}-\d{2})"/) || [])[1], pad: (grid.match(/class="ce"/g) || []).length }; };

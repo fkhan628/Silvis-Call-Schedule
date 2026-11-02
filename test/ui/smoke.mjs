@@ -71,9 +71,9 @@
 //     present, screenshot share-page.png),
 //     the printable popup (P/B strings, OPEN red, external cover, screenshot
 //     printable-page.png), the ER-panel author's ER Call Panels (header text, visible-month
-//     default, the 11/2-12/13 preset with its rows printed and screenshotted
-//     to er-panel-2026-11-02-to-12-13.png, typed range, Copy for Word writing
-//     text/html + text/plain, the .html download) and My schedule's
+//     default, 11/2-12/13 typed into From / To with its rows printed and screenshotted
+//     to er-panel-2026-11-02-to-12-13.png, a narrower typed range, Copy for Word writing
+//     text/html + text/plain, the .html download, the 'Next 6 weeks' preset - 11/1) and My schedule's
 //     "Download my calendar" (silvis-call-khan.ics)
 //   - makes one schedule edit THROUGH THE DAY EDITOR and asserts a schedule_days
 //     POST (version 1) was sent
@@ -306,7 +306,7 @@
 //     WITHOUT a session on a second page (the auth token removed by an init
 //     script) and screenshotted in both themes (signin-light.png,
 //     signin-dark.png; the theme is forced through the app's own
-//     silvis-dark-mode flag - the app has no prefers-color-scheme hook), the
+//     silvis-dark-mode flag - with no Auto mark it is the Light / Dark choice; Auto would read Playwright's default 'light'), the
 //     SSC tile / Sign in button / links are measured orange on computed
 //     colours; a signed-in month view per theme (theme-month-light.png,
 //     theme-month-dark.png) is measured: navy header, orange today ring,
@@ -1631,6 +1631,29 @@ const DF9_ROWS_PROBE = (scope) => {
   });
   return { rows: per.length, lists, per, pageW: document.documentElement.scrollWidth, viewW: document.documentElement.clientWidth };
 };
+// 11/1 (item 4): where My schedule's two calendar buttons sit - on a wide screen in the header beside Paint my offers
+// (inHeader: they share its span; no mine-cal-actions), on a phone in mine-cal-actions after the Upcoming list (mine-upcoming,
+// or the next-call card when the list is empty / unread) and below it on screen; one of each on the page; Paint my offers
+// stays in the header above the next call. Read in the page; `missing` names what is not there.
+const MINE_CAL_PROBE = () => {
+  const card = document.querySelector("[data-testid=mine-card]");
+  if (!card) return { missing: ["mine-card"] };
+  const missing = ["next-call", "download-my-calendar", "copy-sync-url", "paint-offers"].filter(t => !card.querySelector("[data-testid=" + t + "]"));
+  if (missing.length) return { missing };
+  const q = (t) => card.querySelector("[data-testid=" + t + "]"), box = (el) => el.getBoundingClientRect();
+  const acts = q("mine-cal-actions"), hero = q("next-call"), list = q("mine-upcoming") || hero, dl = q("download-my-calendar"), cp = q("copy-sync-url"), po = q("paint-offers");
+  return {
+    hasActs: !!acts,
+    inHeader: dl.parentElement === po.parentElement && cp.parentElement === po.parentElement,
+    inActs: !!acts && acts.contains(dl) && acts.contains(cp) && !acts.contains(po),
+    afterList: !!acts && !list.contains(acts) && !!(list.compareDocumentPosition(acts) & Node.DOCUMENT_POSITION_FOLLOWING),
+    below: !!acts && box(acts).top >= box(list).bottom - 0.5,
+    paintAbove: box(po).bottom <= box(hero).top + 0.5,
+    one: document.querySelectorAll("[data-testid=download-my-calendar]").length === 1 && document.querySelectorAll("[data-testid=copy-sync-url]").length === 1,
+    btnH: Math.round(Math.min(box(dl).height, box(cp).height) * 10) / 10,
+    pageW: document.documentElement.scrollWidth, viewW: document.documentElement.clientWidth,
+  };
+};
 // Prompt 16 A7: the same route for ANOTHER session - the auth user and the own profile row come from `profile`, every
 // other request goes through routeSupabase unchanged (the shared stores, the recorded writes).
 // B3: an optional `extra({ route, req, url, json })` runs before the shared route and answers `true` when it fulfilled
@@ -2802,7 +2825,7 @@ try {
     ok("screenshot test/ui/out/printable-page.png");
     await pop.close();
   } catch (e) { fail("printable view: " + errLine(e)); }
-  // (e) ER Call Panels: default = visible month; preset 11/2-12/13; copy; download
+  // (e) ER Call Panels: default = visible month; 11/2-12/13 typed into From / To (the fixed preset became 'Next 6 weeks' - 11/1); copy; download; Next 6 weeks
   try {
     const defHdr = await page.$eval("[data-testid=er-panel-preview] thead", el => el.innerText.replace(/\s+/g, " ").trim());
     if (defHdr !== "MON/SUN DATES TRAUMA TRAUMA BACKUP") fail("ER panel header: " + defHdr); else ok("ER panel header: " + defHdr);
@@ -2830,20 +2853,24 @@ try {
     if (erOpenRed) { if (!/rgb\(255, 0, 0\)/.test(erOpenRed)) fail("ER panel OPEN not red: " + erOpenRed); else ok("ER panel: OPEN entries red (#ff0000)"); }
     else if (liveOpenBetween("2026-09-28", "2026-11-01")) fail("ER panel: no OPEN entry in the visible-month (Oct 2026) preview although the live rows have an open slot on " + liveOpenBetween("2026-09-28", "2026-11-01"));
     else console.log("     (ER panel: no open slot in the live rows for 9/28-11/1 - the 'OPEN red' pin has nothing to check)");
-    await page.click("[data-testid=er-preset-1213]");
-    await page.waitForFunction(() => { const r = document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]"); return r.length === 6 && r[0].getAttribute("data-week") === "2026-11-02"; }, null, { timeout: 3000 });
+    // 11/1 (item 3): the fixed '11/2 through 12/13' button is gone - the same six rows are TYPED into From / To, To first (the
+    // visible month's From 10/1 stays on or before it, so the range never reads invalid in between)
+    const typeErRange = async (from, to) => { await page.fill("[data-testid=er-to]", to); await page.fill("[data-testid=er-from]", from); };
+    const erSix1102 = () => page.waitForFunction(() => { const r = document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]"); return r.length === 6 && r[0].getAttribute("data-week") === "2026-11-02"; }, null, { timeout: 3000 });
+    await typeErRange("2026-11-02", "2026-12-13");
+    await erSix1102();
     const erFromV = await page.$eval("[data-testid=er-from]", el => el.value), erToV = await page.$eval("[data-testid=er-to]", el => el.value);
-    if (erFromV !== "2026-11-02" || erToV !== "2026-12-13") fail(`ER preset set ${erFromV}..${erToV}`); else ok("ER panel preset: 2026-11-02 .. 2026-12-13, 6 week rows");
+    if (erFromV !== "2026-11-02" || erToV !== "2026-12-13") fail(`ER panel: the typed range reads back ${erFromV}..${erToV}`); else ok("ER panel typed range: 2026-11-02 .. 2026-12-13, 6 week rows");
     const erNoteOnAligned = await page.$("[data-testid=er-span-note]");
-    if (erNoteOnAligned) fail("ER panel: the widened-range note must not show for a Mon..Sun range (11/2..12/13)"); else ok("ER panel: no widened-range note for the Mon..Sun preset");
+    if (erNoteOnAligned) fail("ER panel: the widened-range note must not show for a Mon..Sun range (11/2..12/13)"); else ok("ER panel: no widened-range note for the Mon..Sun range");
     const erRowsText = await page.$$eval("[data-testid=er-panel-preview] tbody tr", trs => trs.map(tr => Array.from(tr.children).map(td => td.innerText.replace(/\n/g, "; ")).join(" | ")));
     erRowsText.forEach(r => console.log("     " + r));
     await page.locator("[data-testid=er-panel-preview]").screenshot({ path: path.join(OUT, "er-panel-2026-11-02-to-12-13.png") });
     ok("screenshot test/ui/out/er-panel-2026-11-02-to-12-13.png");
     await page.fill("[data-testid=er-from]", "2026-11-16"); await page.fill("[data-testid=er-to]", "2026-11-22");
     await page.waitForFunction(() => document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]").length === 1, null, { timeout: 3000 }).then(() => ok("ER panel: typed range 11/16..11/22 -> one week row")).catch(() => fail("ER panel: typed range did not narrow to one row"));
-    await page.click("[data-testid=er-preset-1213]");
-    await page.waitForTimeout(200);
+    await typeErRange("2026-11-02", "2026-12-13");
+    await erSix1102();
     // Copy for Word is asserted on a MOCK of navigator.clipboard.write: it
     // records every ClipboardItem flavour the app hands over (the real system
     // clipboard is not readable on every runner), then delegates to the real
@@ -2882,6 +2909,28 @@ try {
     console.log(`     (system clipboard read-back: ${clip.ok ? clip.types.join(" + ") + ", " + clip.rows + " rows in text/html" : "unavailable - " + clip.error})`);
     const erDl = await saveDownload(() => page.click("[data-testid=er-download]"));
     if (erDl.name !== "silvis-er-call-panels-2026-11-02-2026-12-13.html" || !erDl.text.includes('data-export="er-call-panels"') || (erDl.text.match(/<tr data-week=/g) || []).length !== 6) fail("ER panel download wrong: " + erDl.name); else ok("ER panel download: " + erDl.name + " (6 week rows)");
+    // 11/1 (item 3): 'Next 6 weeks' (er-preset-6w) - six Mon-Sun weeks starting with the week that holds TOMORROW (the app's
+    // todayCentral() + 1 day, read from the page at the click: this week Monday to Saturday, the next one on a Sunday): From =
+    // that Monday, To = the Sunday 41 days on, six week rows, no widened-range note; the fixed button (er-preset-1213) is gone
+    {
+      const b6 = await page.$eval("[data-testid=er-preset-6w]", el => ({ text: el.textContent.trim(), title: el.title || "" })).catch(() => null);
+      if (b6) await page.click("[data-testid=er-preset-6w]");
+      const t6 = await page.evaluate(() => (typeof todayCentral === "function" ? todayCentral() : ""));
+      const ok6 = typeof t6 === "string" && t6.length === 10 && t6[4] === "-" && t6[7] === "-";
+      const tm6 = ok6 ? isoAddDays(t6, 1) : "";
+      const mon6 = ok6 ? isoAddDays(tm6, -((new Date(tm6 + "T12:00:00Z").getUTCDay() + 6) % 7)) : "", sun6 = ok6 ? isoAddDays(mon6, 41) : "";
+      const weeks6 = b6 && ok6 ? await page.waitForFunction((m) => { const r = Array.from(document.querySelectorAll("[data-testid=er-panel-preview] tr[data-week]")).map(x => x.getAttribute("data-week")); return r.length === 6 && r[0] === m ? r : null; }, mon6, { timeout: 3000 }).then(h => h.jsonValue()).catch(() => null) : null;
+      const from6 = await page.$eval("[data-testid=er-from]", el => el.value), to6 = await page.$eval("[data-testid=er-to]", el => el.value);
+      const note6 = !!(await page.$("[data-testid=er-span-note]")), old6 = !!(await page.$("[data-testid=er-preset-1213]"));
+      if (!b6 || b6.text !== "Next 6 weeks") fail(`ER panel: the preset button (er-preset-6w) reads ${b6 ? "'" + b6.text + "'" : "nothing - it is missing"}, not 'Next 6 weeks'`);
+      else if (old6) fail("ER panel: the fixed '11/2 through 12/13' button (er-preset-1213) is still rendered");
+      else if (!ok6) fail("ER panel Next 6 weeks: the page's todayCentral() did not answer a date: " + t6);
+      else if (from6 !== mon6 || to6 !== sun6) fail(`ER panel Next 6 weeks: From / To read ${from6} .. ${to6}; today ${t6} wants ${mon6} (the Monday of the week holding ${tm6}) .. ${sun6}`);
+      else if (!weeks6 || weeks6[5] !== isoAddDays(mon6, 35)) fail(`ER panel Next 6 weeks: expected six week rows ${mon6} .. ${isoAddDays(mon6, 35)}, got ${JSON.stringify(weeks6)}`);
+      else if (note6) fail("ER panel Next 6 weeks: the widened-range note shows for a Mon..Sun range");
+      else if (b6.title !== `Six Mon-Sun weeks: ${mdOf(mon6)} - ${mdOf(sun6)}`) fail(`ER panel Next 6 weeks: the button's title reads '${b6.title}'`);
+      else ok(`ER panel Next 6 weeks: today ${t6} -> ${mon6} .. ${sun6} (six Mon-Sun rows ${weeks6[0]} .. ${weeks6[5]}, no widened-range note; title '${b6.title}')`);
+    }
     await page.click("[data-testid=er-reset]");
   } catch (e) { fail("ER panel: " + errLine(e)); }
   // (f) My schedule: Download my calendar -> silvis-call-khan.ics
@@ -3557,6 +3606,20 @@ try {
           else if (R.eastPerson && ctStates[0] !== "ok") fail(`P31B card (Item E3, ${R.tag}): his card reads data-state '${ctStates[0]}', not ok - ${await rp.$eval("[data-testid=call-totals-card]", el => el.innerText.replace(/\s+/g, " ").slice(0, 200)).catch(() => "")}`);
           else ok(`P31B card (Item E3, ${R.tag}): ${R.eastPerson ? "Khan as a surgeon sees his call-totals card on his own Mine (data-state ok)" : "no call-totals card " + (R.kind === "surgeon" ? "on his Mine" : "anywhere on the page")}`);
         } catch (e) { fail(`P31B card (Item E3, ${R.tag}): ` + errLine(e)); }
+        // 11/1 (item 4): on a surgeon's own Mine (Burchett s2; Khan as a SURGEON s1) no row carries a padlock and the next-call
+        // card no 'locked' - trades ignore locks (tradeEligibility passes ignoreLocks), so the lock is the scheduler's word;
+        // restated on the days the live rows lock for that role (the scheduler's own list keeps it - the My schedule step)
+        if (R.kind === "surgeon") {
+          try {
+            const mr = await rp.$$eval("[data-testid=mine-card] [data-testid=mine-day]", els => els.map(r => ({ day: r.getAttribute("data-day"), role: r.getAttribute("data-role"), svg: r.querySelectorAll("svg").length })));
+            const hero = await rp.$eval("[data-testid=mine-card] [data-testid=next-call]", e => ({ day: e.getAttribute("data-next-day"), role: e.getAttribute("data-next-role"), text: e.innerText || "" })).catch(() => null);
+            const liveLocked = (x) => { const r = liveByDay[x.day]; return !!(r && (x.role === "primary" ? r.primary_locked : r.backup_locked)); };
+            const withSvg = mr.filter(x => x.svg), lockedRows = mr.filter(liveLocked), heroSays = !!(hero && /locked/i.test(hero.text));
+            if (!hero) fail(`${T}, 11/1 item 4: his Mine has no next-call card to read`);
+            else if (withSvg.length || heroSays) fail(`${T}, 11/1 item 4: his own Mine shows the scheduler's lock - ${withSvg.length} row(s) with a padlock${withSvg.length ? " (e.g. " + withSvg.slice(0, 3).map(x => x.day).join(", ") + ")" : ""}${heroSays ? "; the next-call card says 'locked': " + hero.text.slice(0, 140) : ""}`);
+            else ok(`${T}, 11/1 item 4: no padlock on his ${mr.length} upcoming row(s) (${lockedRows.length} locked in the live rows${lockedRows.length ? ", e.g. " + lockedRows[0].day : " - nothing locked to hide this run"}) and no 'locked' on his next-call card${hero.day && liveLocked({ day: hero.day, role: hero.role }) ? " (" + hero.day + " is locked in the live rows)" : ""}`);
+          } catch (e) { fail(`${T}, 11/1 item 4: ` + errLine(e)); }
+        }
         // Prompt 22: the group-call line on this role's Calendar (the office roles were moved to Time off by the role probe)
         if (R.jwt) { await rp.click('button[data-tab="calendar"]').catch(() => {}); await rp.waitForSelector("[data-testid=today-banner]", { timeout: 8000 }).catch(() => {}); }
         await checkGroupCallBanner(rp, T);
@@ -4459,6 +4522,49 @@ try {
     else if (kh !== "none") fail(`mobile 390px: the keyboard hint should be hidden at 390px (display ${kh})`);
     else ok("mobile 390px: the day editor's keyboard hint is hidden (display none) - it stays at desktop widths");
   } catch (e) { fail("mobile 390px keyboard hint: " + errLine(e)); }
+  // 11/1 (item 3): the day editor's close x is a 44 x 44 target (it was 18 x 36 here, 10 px from the next-day button) -
+  // inside the dialog (it reaches into the dialog's 18 px right padding), 4 px clear of the next-day button, the header row
+  // no taller than its 36 px day buttons, no sideways scroll, and the title on one line with room for the widest date (every
+  // weekday x month with a two-digit day, measured in the title's own computed font) - at 390 and at 360 px
+  try {
+    const X_PROBE = () => {
+      const dlg = document.querySelector("[data-testid=day-editor] [role=dialog]");
+      const x = dlg && dlg.querySelector("[data-testid=editor-x]"), h3 = dlg && dlg.querySelector("[data-testid=editor-title]");
+      const nx = dlg && dlg.querySelector('button[aria-label="Next day"]'), pv = dlg && dlg.querySelector('button[aria-label="Previous day"]');
+      if (!dlg || !x || !h3 || !nx || !pv) return null;
+      const R = (el) => { const b = el.getBoundingClientRect(), r1 = (v) => Math.round(v * 10) / 10; return { l: r1(b.left), r: r1(b.right), t: r1(b.top), b: r1(b.bottom), w: r1(b.width), h: r1(b.height) }; };
+      const cs = getComputedStyle(h3), probe = document.createElement("span");
+      probe.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap";
+      probe.style.font = cs.font; probe.style.letterSpacing = cs.letterSpacing;
+      document.body.appendChild(probe);
+      let widest = { text: "", w: 0 };
+      for (const d of ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]) for (const m of ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]) {
+        probe.textContent = d + " " + m + " 28, 2026";
+        const w = probe.getBoundingClientRect().width;
+        if (w > widest.w) widest = { text: probe.textContent, w: Math.round(w * 10) / 10 };
+      }
+      probe.remove();
+      const range = document.createRange(); range.selectNodeContents(h3);
+      const lines = new Set(Array.from(range.getClientRects()).filter(r => r.width > 0).map(r => Math.round(r.top))).size;
+      return { dlg: R(dlg), x: R(x), next: R(nx), prev: R(pv), row: R(x.parentElement), titleRoom: h3.clientWidth, lines, widest, sideways: dlg.scrollWidth - dlg.clientWidth };
+    };
+    const seen = [], bad = [];
+    for (const [w, h] of [[390, 844], [360, 780]]) {
+      if (w !== 390) { await page.setViewportSize({ width: w, height: h }); await page.waitForTimeout(250); }
+      const m = await page.evaluate(X_PROBE);
+      if (!m) { bad.push(`${w} px: the dialog, its x (editor-x), its title or its day buttons are missing`); continue; }
+      const gap = Math.round((m.x.l - m.next.r) * 10) / 10;
+      if (m.x.w < 44 || m.x.h < 44) bad.push(`${w} px: the x is ${m.x.w} x ${m.x.h} - under 44 x 44`);
+      if (m.x.r > m.dlg.r + 0.5 || m.x.t < m.dlg.t - 0.5 || m.prev.l < m.dlg.l - 0.5) bad.push(`${w} px: the header row leaves the dialog (prev from ${m.prev.l}, x ${m.x.l}..${m.x.r} from ${m.x.t}; dialog ${m.dlg.l}..${m.dlg.r} from ${m.dlg.t})`);
+      if (gap < 3.5) bad.push(`${w} px: the x starts ${gap} px after the next-day button (4 wanted)`);
+      if (m.row.h > 36.5) bad.push(`${w} px: the header row is ${m.row.h} px tall - the x's 44 px must not stretch it past its 36 px day buttons`);
+      if (m.lines !== 1 || m.widest.w > m.titleRoom + 0.5) bad.push(`${w} px: the title takes ${m.lines} line(s) in ${m.titleRoom} px; the widest date '${m.widest.text}' needs ${m.widest.w}`);
+      if (m.sideways > 0) bad.push(`${w} px: the dialog scrolls sideways by ${m.sideways} px`);
+      seen.push(`${w} px: x ${m.x.w} x ${m.x.h}, ${gap} px after next, row ${m.row.h} px, title room ${m.titleRoom} px ('${m.widest.text}' needs ${m.widest.w})`);
+    }
+    await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(250);
+    if (bad.length) fail("Day editor close x (11/1 item 3): " + bad.join(" | ")); else ok("Day editor close x (11/1 item 3): a 44 px target inside the dialog; the header row and the title's room intact - " + seen.join("; "));
+  } catch (e) { fail("Day editor close x (11/1 item 3): " + errLine(e)); try { await page.setViewportSize({ width: 390, height: 844 }); } catch (e2) {} }
   await page.keyboard.press("Escape");
   await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
   await b9EditorGuard("light"); // Prompt 16 B9 (b) at 390 px, light theme (the dark pass runs after the dark-mode switch below)
@@ -5918,6 +6024,23 @@ try {
       else console.log("     (My schedule: no upcoming own row - 'Give away' is not exercised)");
     } catch (e) { fail("My schedule Give away: " + errLine(e)); }
     if (!(await page.$("[data-testid=copy-sync-url]")) || !(await page.$("[data-testid=download-my-calendar]"))) fail("My schedule: the calendar buttons (download / copy sync URL) are missing"); else ok("My schedule: Download my calendar + Copy my calendar-sync URL buttons present");
+    // 11/1 (item 4): the padlock stays the scheduler's - every row of his own list that the live rows lock for that role
+    // carries one, inside the date span (Item E3 and F3 check that a surgeon's and a follower's lists carry none)
+    try {
+      const pl = await page.$$eval("[data-testid=mine-card] [data-testid=mine-day]", els => els.map(r => ({ day: r.getAttribute("data-day"), role: r.getAttribute("data-role"), lock: !!r.querySelector("[data-testid=mine-date] svg") })));
+      const liveLocked = (x) => { if (myPremiseStale.includes(x.day) || harnessDays[x.day]) return false; const r = liveByDay[x.day]; return !!(r && (x.role === "primary" ? r.primary_locked : r.backup_locked)); };
+      const want = pl.filter(liveLocked), miss = want.filter(x => !x.lock);
+      if (miss.length) fail(`11/1 item 4 (scheduler): ${miss.length} of ${want.length} live-locked row(s) on his own list lack the padlock (e.g. ${miss.slice(0, 3).map(x => x.day + " " + x.role).join(", ")}) - the scheduler keeps it`);
+      else if (!want.length) console.log("     (11/1 item 4 (scheduler): no live-locked day in his 90-day list - the scheduler's padlock is not exercised)");
+      else ok(`11/1 item 4 (scheduler): the padlock marks his ${want.length} live-locked row(s) (e.g. ${want[0].day} ${want[0].role}), inside the date span`);
+    } catch (e) { fail("11/1 item 4 (scheduler padlock): " + errLine(e)); }
+    // 11/1 (item 4), 1180 px: the calendar buttons stay in the header beside Paint my offers (no mine-cal-actions on a wide screen)
+    try {
+      const cal = await page.evaluate(MINE_CAL_PROBE);
+      if (!cal || cal.missing) fail("11/1 item 4 (1180px): My schedule lacks " + (cal ? cal.missing.join(", ") : "its card"));
+      else if (cal.hasActs || !cal.inHeader || !cal.paintAbove || !cal.one) fail(`11/1 item 4 (1180px): the calendar buttons should stay in the header beside Paint my offers on a wide screen - ${JSON.stringify(cal)}`);
+      else ok("11/1 item 4 (1180px): Download my calendar + Copy my calendar-sync URL stay in the header beside Paint my offers (no mine-cal-actions on a wide screen, one of each)");
+    } catch (e) { fail("11/1 item 4 (1180px): " + errLine(e)); }
     if (!(await page.$("[data-testid=mine-person]"))) fail("My schedule: the scheduler's person picker is missing");
     const mineText = await page.$eval("[data-testid=mine-card]", el => el.innerText);
     if (!noAddress(mineText)) fail("My schedule: an email address is rendered");
@@ -6142,7 +6265,7 @@ try {
     np.on("dialog", (d) => d.accept());
     try {
       await loadWithRetry(np, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "surgeon page (offer deadline notice)");
-      noticeThemeWas = await np.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode"); } catch (e) { return null; } });
+      noticeThemeWas = await np.evaluate(() => { try { return { flag: localStorage.getItem("silvis-dark-mode"), mark: localStorage.getItem("silvis-theme") }; } catch (e) { return { flag: null, mark: null }; } }); // item 5 (11/1): the Auto mark too
       await np.waitForSelector("text=Synced", { timeout: 30000 });
       await np.waitForTimeout(800);
       if ((await np.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")))).includes("setup")) throw new Error("the notice page shows a Setup tab - it is being treated as the scheduler");
@@ -6220,7 +6343,7 @@ try {
       }
     } catch (e) { fail("Offer deadline notice (s2): the surgeon page check threw: " + String(e && e.message || e).split("\n")[0]); }
     finally {
-      if (noticeThemeWas !== undefined) await np.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, noticeThemeWas).catch((e) => fail("Offer deadline notice (s2): could not put the shared silvis-dark-mode flag back: " + errLine(e)));
+      if (noticeThemeWas !== undefined) await np.evaluate((v) => { try { for (const [k, x] of [["silvis-theme", v.mark], ["silvis-dark-mode", v.flag]]) { if (x === null) localStorage.removeItem(k); else localStorage.setItem(k, x); } } catch (e) {} }, noticeThemeWas).catch((e) => fail("Offer deadline notice (s2): could not put the shared theme keys back: " + errLine(e)));
     }
     await np.close();
   }
@@ -7173,6 +7296,14 @@ try {
         else ok(`DF9 390px own rows (Acton): ${g.rows} row(s), ${locked.length} locked - the padlock inside the date span, date / role / holder one line with the holder never clipped (e.g. '${g.per[0].holder.text}'), the badges / offer tag (${withChips} row(s) carry one) + 'Trade' + 'Give away' together in mine-acts on the line under it (>= ${Math.min(...g.per.map(p => Math.min(...p.btns.map(b => b.h))))} px), rows ${Math.min(...g.per.map(p => p.rowH))}-${Math.max(...g.per.map(p => p.rowH))} px; the list is part of the page (max-height none)${locked.length ? "" : " (no locked row this run - the padlock placement is not exercised here; the follower step reads it)"}`);
       }
     } catch (e) { fail("DF9 390px own rows: " + errLine(e)); }
+    // 11/1 (item 4), 390 px: on a phone the calendar buttons sit under the Upcoming list (mine-cal-actions) - each a 36 px tap
+    // target, Paint offers alone above the next call, no sideways scroll
+    try {
+      const cal = await page.evaluate(MINE_CAL_PROBE);
+      if (!cal || cal.missing) fail("11/1 item 4 (390px): My schedule lacks " + (cal ? cal.missing.join(", ") : "its card"));
+      else if (!cal.hasActs || !cal.inActs || cal.inHeader || !cal.afterList || !cal.below || !cal.paintAbove || !cal.one || cal.btnH < 36 || cal.pageW > cal.viewW + 1) fail(`11/1 item 4 (390px): ${JSON.stringify(cal)}`);
+      else ok(`11/1 item 4 (390px): the calendar buttons sit under the Upcoming list (${cal.btnH} px tall), Paint offers alone above the next call, no sideways scroll (${cal.pageW} in ${cal.viewW})`);
+    } catch (e) { fail("11/1 item 4 (390px): " + errLine(e)); }
     await page.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(OUT, "myschedule-offers-390.png"), fullPage: false });
     ok("screenshot test/ui/out/myschedule-offers-390.png");
@@ -7851,12 +7982,12 @@ try {
             else if (holderAfter !== top.id) fail(`Give (receiver, S5): right after the accept the ${mDay} ${mRole} cell should read ${topName} (${top.id}) - the refetch after apply_trade - got ${holderAfter}`);
             else ok(`Give (receiver, S5): the day moved - the ${mDay} ${mRole} calendar cell read s2 (Burchett) before the accept and reads ${top.id} (${topName}) right after it, no reload`);
             const within90 = (new Date(yy, mm - 1, dd) - new Date(new Date().toDateString())) / 864e5 < 90;
-            const themeWas = await rp.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode"); } catch (e) { return null; } });   // the origin's storage is shared with the scheduler's page
+            const themeWas = await rp.evaluate(() => { try { return { flag: localStorage.getItem("silvis-dark-mode"), mark: localStorage.getItem("silvis-theme") }; } catch (e) { return { flag: null, mark: null }; } });   // the origin's storage is shared with the scheduler's page (item 5, 11/1: the Auto mark too)
             // S5 review: the shared flag is put back in a finally (a throw inside the loop must not leave the scheduler's page
             // in dark mode), and each pass proves its theme took - the stored flag AND the dark body paint (#0B1A33).
             try {
             for (const theme of ["light", "dark"]) {
-              await rp.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, theme === "dark");
+              await rp.addInitScript((dk) => { try { localStorage.removeItem("silvis-theme"); localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, theme === "dark"); // item 5 (11/1): an explicit Light / Dark = the flag with no Auto mark
               await loadWithRetry(rp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "receiver page (give, " + theme + ")");
               await rp.waitForSelector("text=Synced", { timeout: 30000 });
               const themeT = await rp.evaluate(() => { let f = "?"; try { f = localStorage.getItem("silvis-dark-mode") === "true" ? "dark" : "light"; } catch (e) {} return { flag: f, bg: getComputedStyle(document.body).backgroundColor }; });
@@ -7874,7 +8005,7 @@ try {
               else ok(`Give (receiver, S5, ${theme}, 390 px): after a reload the ${mDay} cell reads ${top.id} and ${mineRow ? "Mine lists " + mDay + " " + mRole : "(" + mDay + " is past Mine's 90-day window - the cell is the proof)"}; body ${themeT.bg}; scrollWidth ${swT}`);
             }
             } finally {
-              await rp.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, themeWas).catch((e) => fail("Give (receiver, S5): could not put the shared silvis-dark-mode flag back: " + errLine(e)));
+              await rp.evaluate((v) => { try { for (const [k, x] of [["silvis-theme", v.mark], ["silvis-dark-mode", v.flag]]) { if (x === null) localStorage.removeItem(k); else localStorage.setItem(k, x); } } catch (e) {} }, themeWas).catch((e) => fail("Give (receiver, S5): could not put the shared theme keys back: " + errLine(e)));
             }
             if (appN) {
               const schedRow = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...appN };
@@ -11308,7 +11439,7 @@ try {
   });
   for (const theme of ["light", "dark"]) {
     try {
-      await signin.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, theme === "dark");
+      await signin.addInitScript((dk) => { try { localStorage.removeItem("silvis-theme"); localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); } catch (e) {} }, theme === "dark"); // item 5 (11/1): an explicit Light / Dark = the flag with no Auto mark
       await settleSignin(); // the previous theme's mount reads land before this navigation (an in-flight read cut by it logs "Failed to fetch")
       await signin.goto(BASE, { waitUntil: "domcontentloaded" });
       await signin.waitForSelector("text=Sign in to your account", { timeout: 20000 });
@@ -11491,6 +11622,109 @@ try {
       await b7.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
       await b7Ctx.close();
     }
+  }
+
+  // ---- Item 5 (Faraz 11/1): the theme is Light / Dark / Auto, per device ----
+  // Own BrowserContexts (Playwright's colorScheme set per context - every other context of the run keeps its default 'light'):
+  // (1) a VIEWER device that never ran the app, on a dark phone, 1180 px: it opens in Auto - painted dark, Auto pressed, the
+  //     Auto mark and the flag "true" stored (an older cached build would open dark too); the phone turns light (emulateMedia)
+  //     and the page follows with no reload (the flag "false"); Dark holds on the light phone and survives a reload; Light
+  //     holds on a dark phone; Auto follows the dark phone again at once.
+  // (2) a device that ran a build before 11/1 (only the flag "false" stored), on a dark phone: Light stays.
+  // (3) ?public=1 on a dark phone that never opened the app (390 px): the read-only page follows the phone; no write.
+  // Screenshots theme-auto-dark.png, theme-auto-light.png, public-auto-dark-390.png.
+  {
+    const I5 = "Item 5 (theme)";
+    const BG = { dark: "rgb(11, 26, 51)", light: "rgb(246, 248, 251)" };
+    const mkI5 = async (scheme, flag, tag) => {
+      const ctx = await browser.newContext({ viewport: { width: 1180, height: 900 }, colorScheme: scheme });
+      // the flag is seeded ONCE per context (an init script runs on every navigation - a re-seed would hide what the app stored)
+      await ctx.addInitScript(({ token, version, flag }) => { try { if (!localStorage.getItem("silvis-i5-seeded")) { localStorage.setItem("silvis-i5-seeded", "1"); if (flag !== null) localStorage.setItem("silvis-dark-mode", flag); } localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: VIEWER_JWT, version: APP_VERSION, flag });
+      await ctx.route(cdnMatcher, routeCdn);
+      await ctx.route((url) => url.hostname === EAST_HOST, routeEast);
+      const pg = await ctx.newPage();
+      watchPage(pg, tag);
+      const settle = restReadsSettled(pg);
+      await pg.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await pg.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
+      await loadWithRetry(pg, BASE, "h1:has-text('Silvis Call Schedule')", 30000, tag);
+      await pg.waitForSelector("text=Synced", { timeout: 30000 });
+      await pg.click('button[data-tab="settings"]');
+      await pg.waitForSelector("[data-testid=theme-auto]", { timeout: 5000 });
+      return { ctx, pg, settle };
+    };
+    const themeState = (pg) => pg.evaluate(() => { const ls = (k) => { try { return localStorage.getItem(k); } catch (e) { return "?"; } }; return { bg: getComputedStyle(document.body).backgroundColor, mark: ls("silvis-theme"), flag: ls("silvis-dark-mode"), pressed: Array.from(document.querySelectorAll("[data-testid^=theme-][aria-pressed=true]")).map(b => b.getAttribute("data-testid")).join(",") }; });
+    const paints = (pg, want) => pg.waitForFunction((bg) => getComputedStyle(document.body).backgroundColor === bg, BG[want], { timeout: 5000 }).then(() => true, () => false);
+    let X = null;
+    try {
+      X = await mkI5("dark", null, "item5-new-device");
+      let s = await themeState(X.pg);
+      const note = await X.pg.$eval("[data-testid=theme-auto-note]", el => el.textContent.trim()).catch(() => null);
+      if (s.bg !== BG.dark || s.mark !== "auto" || s.flag !== "true" || s.pressed !== "theme-auto") fail(`${I5} (1): a new device on a dark phone should open in Auto, painted dark, the Auto mark and the flag "true" stored - got ${JSON.stringify(s)}`);
+      else if (note !== "Auto follows this device's light or dark setting.") fail(`${I5} (1): the line under the theme buttons reads ${JSON.stringify(note)}`);
+      else ok(`${I5} (1): a new device on a dark phone opens in Auto - body ${s.bg}, silvis-theme '${s.mark}', silvis-dark-mode '${s.flag}' (an older build would open dark too), Auto pressed`);
+      await X.pg.screenshot({ path: path.join(OUT, "theme-auto-dark.png"), fullPage: false });
+      await X.pg.emulateMedia({ colorScheme: "light" });
+      const followed = await paints(X.pg, "light");
+      s = await themeState(X.pg);
+      if (!followed || s.mark !== "auto" || s.flag !== "false" || s.pressed !== "theme-auto") fail(`${I5} (1): the phone turned light - Auto should follow with no reload (body light, the flag "false") - got ${JSON.stringify(s)}`);
+      else ok(`${I5} (1): the phone turned light - Auto followed with no reload (body ${s.bg}, flag '${s.flag}')`);
+      await X.pg.screenshot({ path: path.join(OUT, "theme-auto-light.png"), fullPage: false });
+      await X.pg.click("[data-testid=theme-dark]");
+      const darkHolds = await paints(X.pg, "dark");
+      await X.settle();
+      await X.pg.reload({ waitUntil: "domcontentloaded" });
+      await X.pg.waitForSelector("text=Synced", { timeout: 30000 });
+      await X.pg.click('button[data-tab="settings"]');
+      s = await themeState(X.pg);
+      if (!darkHolds || s.bg !== BG.dark || s.mark !== null || s.flag !== "true" || s.pressed !== "theme-dark") fail(`${I5} (1): Dark on a light phone should paint dark and survive a reload (no Auto mark, the flag "true") - got ${JSON.stringify(s)}`);
+      else ok(`${I5} (1): Dark holds on a light phone and survives a reload (body ${s.bg}, no Auto mark, flag '${s.flag}')`);
+      await X.pg.emulateMedia({ colorScheme: "dark" });
+      await X.pg.click("[data-testid=theme-light]");
+      const lightHolds = await paints(X.pg, "light");
+      s = await themeState(X.pg);
+      if (!lightHolds || s.mark !== null || s.flag !== "false" || s.pressed !== "theme-light") fail(`${I5} (1): Light on a dark phone should stay light (no Auto mark, the flag "false") - got ${JSON.stringify(s)}`);
+      else ok(`${I5} (1): Light holds on a dark phone (body ${s.bg}, flag '${s.flag}')`);
+      await X.pg.click("[data-testid=theme-auto]");
+      const autoAgain = await paints(X.pg, "dark");
+      s = await themeState(X.pg);
+      if (!autoAgain || s.mark !== "auto" || s.flag !== "true" || s.pressed !== "theme-auto") fail(`${I5} (1): Auto on a dark phone should paint dark at once - got ${JSON.stringify(s)}`);
+      else ok(`${I5} (1): Auto again follows the dark phone at once (body ${s.bg}, mark '${s.mark}', flag '${s.flag}')`);
+    } catch (e) { fail(`${I5} (1): ` + errLine(e)); }
+    finally { if (X) { await X.settle().catch(() => {}); await X.ctx.close().catch(() => {}); } }
+    let Y = null;
+    try {
+      Y = await mkI5("dark", "false", "item5-older-device");
+      const s = await themeState(Y.pg);
+      if (s.bg !== BG.light || s.mark !== null || s.flag !== "false" || s.pressed !== "theme-light") fail(`${I5} (2): a device with only the pre-11/1 flag "false", on a dark phone, should keep Light - got ${JSON.stringify(s)}`);
+      else ok(`${I5} (2): a device that ran an older build keeps its saved Light on a dark phone (body ${s.bg}, no Auto mark, Light pressed)`);
+    } catch (e) { fail(`${I5} (2): ` + errLine(e)); }
+    finally { if (Y) { await Y.settle().catch(() => {}); await Y.ctx.close().catch(() => {}); } }
+    let Z = null;
+    try {
+      const zCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: "dark" });
+      await zCtx.route(cdnMatcher, routeCdn);
+      await zCtx.route((url) => url.hostname === EAST_HOST, routeEast);
+      const zp = await zCtx.newPage();
+      Z = { ctx: zCtx, pg: zp, settle: restReadsSettled(zp) };
+      zp.on("pageerror", (e) => fail(`${I5} (3) public: pageerror ` + String(e && e.message || e)));
+      await zp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await zp.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+        const req = route.request();
+        if (req.method() !== "GET") { writes.push({ method: req.method(), path: new URL(req.url()).pathname, body: req.postData() || "", public: true }); return route.fulfill({ status: 200, contentType: "application/json", body: "[]" }); }
+        const fx = fixtureAnswer(new URL(req.url()));
+        if (fx) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(fx) });
+        const headers = { ...req.headers() }; headers["authorization"] = "Bearer " + ANON_KEY;
+        return route.continue({ headers });
+      });
+      await loadWithRetry(zp, BASE + "?public=1", "[data-testid=cal-month]", 20000, "item 5 public page");
+      await zp.waitForTimeout(800);
+      const pz = await zp.evaluate(() => ({ bg: getComputedStyle(document.body).backgroundColor, mark: localStorage.getItem("silvis-theme"), nav: document.querySelectorAll("button[data-tab]").length }));
+      if (pz.bg !== BG.dark || pz.mark !== "auto" || pz.nav) fail(`${I5} (3): ?public=1 on a dark phone that never opened the app should paint dark (Auto) with no nav - got ${JSON.stringify(pz)}`);
+      else ok(`${I5} (3): ?public=1 follows a dark phone on a new device (body ${pz.bg}, no nav)`);
+      await zp.screenshot({ path: path.join(OUT, "public-auto-dark-390.png"), fullPage: false });
+    } catch (e) { fail(`${I5} (3): ` + errLine(e)); }
+    finally { if (Z) { await Z.settle().catch(() => {}); await Z.ctx.close().catch(() => {}); } }
   }
 
   // (f) Prompt 16 A3: session lifecycle. A page whose stored token expired an hour ago (the tab-left-open picture;
@@ -11937,7 +12171,7 @@ try {
       for (const theme of ["light", "dark"]) {
         if (theme === "dark") {
           await A.settle();
-          await A.pg.evaluate(() => { try { localStorage.setItem("silvis-dark-mode", "true"); } catch (e) {} });
+          await A.pg.evaluate(() => { try { localStorage.removeItem("silvis-theme"); localStorage.setItem("silvis-dark-mode", "true"); } catch (e) {} }); // item 5 (11/1): an explicit Dark = the flag with no Auto mark (this fresh context opened in Auto)
           await A.pg.reload({ waitUntil: "domcontentloaded" });
           await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
           await A.pg.waitForTimeout(500);
@@ -12136,7 +12370,7 @@ try {
         await A.pg.screenshot({ path: path.join(OUT, `p29-calendar-${theme}-390.png`), fullPage: true });
       }
       await A.settle();
-      await A.pg.evaluate(() => { try { localStorage.setItem("silvis-dark-mode", "false"); } catch (e) {} });
+      await A.pg.evaluate(() => { try { localStorage.removeItem("silvis-theme"); localStorage.setItem("silvis-dark-mode", "false"); } catch (e) {} });
       await A.pg.reload({ waitUntil: "domcontentloaded" });
       await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
       await A.pg.waitForTimeout(500);
@@ -12885,7 +13119,7 @@ try {
       };
     };
     try {
-      ctThemeWas = await page.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode"); } catch (e) { return null; } }); // the origin's storage is the main page's too
+      ctThemeWas = await page.evaluate(() => { try { return { flag: localStorage.getItem("silvis-dark-mode"), mark: localStorage.getItem("silvis-theme") }; } catch (e) { return { flag: null, mark: null }; } }); // the origin's storage is the main page's too (item 5, 11/1: the Auto mark too)
       // (1) the card on the scheduler's own Mine (1180 px) = the Node computation, period by period, and the month list
       try {
         await loadWithRetry(ctp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "call-totals page");
@@ -13015,7 +13249,7 @@ try {
       await page.waitForTimeout(300);
       ctForced500Lines = 0;
       // the shared silvis-dark-mode flag back as it was before this page
-      if (ctThemeWas !== undefined) await page.evaluate((v) => { try { if (v === null) localStorage.removeItem("silvis-dark-mode"); else localStorage.setItem("silvis-dark-mode", v); } catch (e) {} }, ctThemeWas).catch((e) => fail("P31B card: could not put the shared silvis-dark-mode flag back: " + errLine(e)));
+      if (ctThemeWas !== undefined) await page.evaluate((v) => { try { for (const [k, x] of [["silvis-theme", v.mark], ["silvis-dark-mode", v.flag]]) { if (x === null) localStorage.removeItem(k); else localStorage.setItem(k, x); } } catch (e) {} }, ctThemeWas).catch((e) => fail("P31B card: could not put the shared theme keys back: " + errLine(e)));
     }
   }
 
@@ -14730,10 +14964,12 @@ try {
         // The theme flag, and a fresh Alerts state: the per-device seen / cleared markers live in the origin's storage
         // (shared by every page of this context), and the light pass's Alerts tap marks the feed seen - without this
         // reset the dark pass would read no badge.
-        await pv.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); localStorage.removeItem("silvis-notif-seen"); localStorage.removeItem("silvis-notif-cleared"); } catch (e) {} }, theme === "dark");
+        await pv.addInitScript((dk) => { try { localStorage.removeItem("silvis-theme"); localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); localStorage.removeItem("silvis-notif-seen"); localStorage.removeItem("silvis-notif-cleared"); } catch (e) {} }, theme === "dark");
         await loadWithRetry(pv, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "viewer page (" + theme + ")");
         await pv.waitForSelector("text=Synced", { timeout: 30000 });
         await pv.waitForTimeout(1200);
+        // item 5 (11/1): the seed must take - a light body here would screenshot the dark pass in light without a word
+        { const bgV = await pv.evaluate(() => getComputedStyle(document.body).backgroundColor); if (bgV !== (theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)")) fail(`viewer (${theme}): the ${theme} theme did not take (body ${bgV})`); }
         // (a) the shell: no unlinked banner, no Setup / Mine / Paint offers, Time off and Settings present
         const tabs = await pv.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
         const banner = await pv.$("[data-testid=unlinked-banner]");
@@ -14856,10 +15092,12 @@ try {
     let followerPrefToggles = 0; // P20 R2: toggles (c2) made that passed its checks - (e2) expects one prefs POST each
     try {
       for (const theme of ["light", "dark"]) {
-        await pf.addInitScript((dk) => { try { localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); localStorage.removeItem("silvis-notif-seen"); localStorage.removeItem("silvis-notif-cleared"); } catch (e) {} }, theme === "dark");
+        await pf.addInitScript((dk) => { try { localStorage.removeItem("silvis-theme"); localStorage.setItem("silvis-dark-mode", dk ? "true" : "false"); localStorage.removeItem("silvis-notif-seen"); localStorage.removeItem("silvis-notif-cleared"); } catch (e) {} }, theme === "dark");
         await loadWithRetry(pf, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "follower page (" + theme + ")");
         await pf.waitForSelector("text=Synced", { timeout: 30000 });
         await pf.waitForTimeout(1200);
+        // item 5 (11/1): the seed must take - a light body here would screenshot the dark pass in light without a word
+        { const bgF = await pf.evaluate(() => getComputedStyle(document.body).backgroundColor); if (bgF !== (theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)")) fail(`F3 follower (${theme}): the ${theme} theme did not take (body ${bgF})`); }
         // (a) the nav
         const tabs = await pf.$$eval("button[data-tab]", els => els.map(e => [e.getAttribute("data-tab"), (e.textContent || "").trim()]));
         const mineTab = tabs.find(([k]) => k === "myschedule");
@@ -14904,21 +15142,30 @@ try {
           if (ctF !== 0) fail(`P31B card (F3 follower, ${theme}): ${ctF < 0 ? "the page could not be read" : ctF + " call-totals card(s)"} on the Following view - the card is the East-code surgeon's own`);
           else ok(`P31B card (F3 follower, ${theme}): no call-totals card on the Following view`);
         }
-        // review 9/27 Do first 9 (10/1), 390 px: a locked row is ONE line (its padlock sits inside the date span - it used to
-        // wrap onto a line of its own), no row carries a button, and each list is part of the page (no nested scroller)
+        // review 9/27 Do first 9 (10/1), 390 px: a row is ONE line, no row carries a button, and each list is part of the page
+        // (no nested scroller). 11/1 (item 4): the padlock and ' - locked' are the scheduler's - a follower's rows carry no
+        // padlock and his next-call cards no 'locked' (trades ignore locks), restated on the days the page's own
+        // schedule_days answers lock for that role (so the check is exercised whenever a followed day is locked)
+        try {
+          const fRows = await pf.$$eval("[data-testid=following-card] [data-testid=mine-day]", els => els.map(r => ({ who: r.closest("[data-testid=following-card]").getAttribute("data-surgeon"), day: r.getAttribute("data-day"), role: r.getAttribute("data-role"), svg: r.querySelectorAll("svg").length })));
+          const fHeroes = await pf.$$eval("[data-testid=following-card] [data-testid=next-call]", els => els.map(e => ({ who: e.closest("[data-testid=following-card]").getAttribute("data-surgeon"), day: e.getAttribute("data-next-day"), role: e.getAttribute("data-next-role"), text: e.innerText || "" })));
+          const servedLocked = (x) => { const r = servedByDay.get(x.day); return !!(r && (x.role === "primary" ? r.primary_locked : r.backup_locked)); };
+          const withSvg = fRows.filter(x => x.svg), lockedRows = fRows.filter(servedLocked), saysLocked = fHeroes.filter(h => /locked/i.test(h.text));
+          if (withSvg.length || saysLocked.length) fail(`11/1 item 4 follower (${theme}): ${withSvg.length} Following row(s) carry a padlock (e.g. ${withSvg.slice(0, 3).map(x => x.who + " " + x.day).join(", ") || "none"}), ${saysLocked.length} next-call card(s) say 'locked' - the padlock is the scheduler's`);
+          else ok(`11/1 item 4 follower (${theme}): no padlock on ${fRows.length} Following row(s) (${lockedRows.length} of them locked in the served rows${lockedRows.length ? ", e.g. " + lockedRows[0].who + " " + lockedRows[0].day : " - nothing locked to hide this run"}); no next-call card says 'locked' (${fHeroes.filter(servedLocked).length} of ${fHeroes.length} hero day(s) locked in the served rows)`);
+        } catch (e) { fail(`11/1 item 4 follower (${theme}): ` + errLine(e)); }
         try {
           const g = await pf.evaluate(DF9_ROWS_PROBE, null);
-          const locked = g ? g.per.filter(p => p.locked) : [];
           if (!g || !g.lists.length) fail(`DF9 follower (${theme}) 390px: no mine-upcoming list on the Following view`);
           else if (g.lists.some(l => l.maxH !== "none" || l.overflowY !== "visible" || l.nested)) fail(`DF9 follower (${theme}) 390px: a list is still a scroller inside the page ${JSON.stringify(g.lists)}`);
-          else if (!locked.length) console.log(`     (DF9 follower (${theme}) 390px: no locked row in the followed lists this run - the one-line check is not exercised)`);
+          else if (!g.rows) console.log(`     (DF9 follower (${theme}) 390px: no row in the followed lists this run - the one-line check is not exercised)`);
           else {
             // second review fixes (10/2): badges that do not fit after the name wrap under it (chipsWrapped) - the date / role /
             // holder line stays one line, the row may then be two
-            const bad = locked.filter(p => p.lockOutside || p.spread === null || p.spread > 6 || p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));
-            const wrapped = locked.filter(p => p.chipsWrapped).length;
-            if (bad.length) fail(`DF9 follower (${theme}) 390px: ${bad.length} of ${locked.length} locked row(s) take more than one line: ${JSON.stringify(bad.slice(0, 2))}`);
-            else ok(`DF9 follower (${theme}) 390px: every locked row's date / role / holder is one line (${locked.length} of ${g.rows} row(s); ${Math.max(...locked.map(p => p.rowH))} px tall at most, the padlock inside the date span${wrapped ? `; ${wrapped} row(s) with badges wrapped under the name` : ""}); the lists are part of the page (no nested scroller)`);
+            const bad = g.per.filter(p => p.spread === null || p.spread > 6 || p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));
+            const wrapped = g.per.filter(p => p.chipsWrapped).length;
+            if (bad.length) fail(`DF9 follower (${theme}) 390px: ${bad.length} of ${g.rows} row(s) take more than one line: ${JSON.stringify(bad.slice(0, 2))}`);
+            else ok(`DF9 follower (${theme}) 390px: every row's date / role / holder is one line (${g.rows} row(s); ${Math.max(...g.per.map(p => p.rowH))} px tall at most${wrapped ? `; ${wrapped} row(s) with badges wrapped under the name` : ""}); the lists are part of the page (no nested scroller)`);
           }
         } catch (e) { fail(`DF9 follower (${theme}) 390px: ` + errLine(e)); }
         // Second review fixes of Do first 9 (10/2): a colleague's name on a Following row is never clipped on a phone (with

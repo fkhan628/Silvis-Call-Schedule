@@ -416,6 +416,10 @@ function CallSchedule() {
   const setView = (k) => { if (k !== viewRef.current && !leaveMineOk("leave")) return false; viewRef.current = k; setViewState(k); return true; };
   const reloadForUpdate = () => { if (!leaveMineOk("reload")) return false; APP_DAYS_UNLOAD.confirmed = true; if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); return true; };
 
+  // 11/1 phone polish (items 4 and 6): the phone layout - at most 600 px wide, the CSS phone blocks' width - as React state,
+  // through the module-scope useMediaQuery; a rotation across 600 px re-renders.
+  const isPhone = useMediaQuery("(max-width: 600px)");
+
   // --- Roster / rules / settings (the call_schedule_data blob, id=main) ---
   // roster: { id, name (last name), code, fullName, active, roles }. The
   // schedule stores ids. surgeonRules / groupRules / holidays stay undefined
@@ -522,13 +526,19 @@ function CallSchedule() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [showPastVacations, setShowPastVacations] = useState(false);
 
-  // --- Dark Mode ---
-  const [darkMode, setDarkMode] = useState(() => {
-    try { return localStorage.getItem("silvis-dark-mode") === "true"; } catch(e) { console.warn("Couldn't read the dark-mode setting (light mode used):", e); return false; }
+  // --- Theme: Light / Dark / Auto (item 5, Faraz 11/1) ---
+  // Per device, through helpers.js themePrefFromStorage / themeIsDark / themeStorageWrites (their comment holds the storage
+  // contract): the flag 'silvis-dark-mode' still says whether this device shows dark - all an older cached build reads - and
+  // is the choice for Light / Dark; 'silvis-theme' = "auto" marks Auto, which follows the device's own light / dark setting
+  // live (useMediaQuery). Nothing stored = Auto. darkMode is what the device shows; dk, T and the dark sheet read it as before.
+  const [themePref, setThemePref] = useState(() => {
+    try { return themePrefFromStorage(localStorage.getItem("silvis-theme"), localStorage.getItem("silvis-dark-mode")); } catch(e) { console.warn("Couldn't read the theme setting (following the device):", e); return "auto"; }
   });
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const darkMode = themeIsDark(themePref, systemDark);
   useEffect(() => {
-    try { localStorage.setItem("silvis-dark-mode", darkMode); } catch(e) { console.warn("Couldn't persist dark-mode setting:", e); }
-  }, [darkMode]);
+    try { themeStorageWrites(themePref, darkMode).forEach(([k, v]) => { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }); } catch(e) { console.warn("Couldn't persist the theme setting:", e); }
+  }, [themePref, darkMode]);
 
   // --- Week start of the month grids (Item A, Faraz 9/23) ---
   // Per device: 'sun' (default, like the Davenport app) or 'mon', stored in localStorage
@@ -6937,6 +6947,11 @@ function CallSchedule() {
   // the surrounding Monday/Sunday (helpers.js erPanelSpan); the note under the
   // buttons says so and the download is named for the span it really covers.
   const erSpan = erRangeOk ? erPanelSpan(erFrom, erTo) : { from: erFrom, to: erTo, widened: false };
+  // 11/1 (item 3): "Next 6 weeks" replaces the fixed 11/2-12/13 preset - six whole Mon-Sun weeks starting with the week that
+  // holds TOMORROW (todayStr is the app's Central date, as every export reads it): Monday to Saturday that is this week (today's
+  // call stays on the paper copy), on a Sunday the week starting the next day - a finished week is never printed. monOf is the
+  // Monday helper the week rows and erPanelSpan use; 41 days on is the sixth week's Sunday, so the span is never widened.
+  const erSixWeeks = (() => { const mon = monOf(addD(parse(todayStr), 1)); return { from: fmt(mon), to: fmt(addD(mon, 41)) }; })();
   const erPanelHtml = useMemo(() => (daysShown && erRangeOk) ? buildErCallPanelsHTML(schedule, surgeons, erFrom, erTo, { today: todayStr }) : "", [schedule, surgeons, erFrom, erTo, erRangeOk, todayStr, daysShown]); // review 9/28: no all-OPEN preview while unread
   // Copy for Word: text/html + text/plain in one ClipboardItem so Word pastes
   // a real table. When the rich clipboard is unavailable (http, an old
@@ -8166,7 +8181,7 @@ function CallSchedule() {
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>
                   <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:4}}>From <input data-testid="er-from" aria-label="From" type="date" value={erFrom} onChange={e=>setErRange({from:e.target.value,to:erTo})} style={{...inp,fontSize:12,padding:"4px 6px"}}/></label>
                   <label style={{fontSize:12,color:dkSubtext,display:"flex",alignItems:"center",gap:4}}>To <input data-testid="er-to" aria-label="To" type="date" value={erTo} onChange={e=>setErRange({from:erFrom,to:e.target.value})} style={{...inp,fontSize:12,padding:"4px 6px"}}/></label>
-                  <button data-testid="er-preset-1213" onClick={()=>setErRange({from:"2026-11-02",to:"2026-12-13"})} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>11/2 through 12/13</button>
+                  <button data-testid="er-preset-6w" onClick={()=>setErRange(erSixWeeks)} title={"Six Mon-Sun weeks: " + fmtMD(erSixWeeks.from) + " - " + fmtMD(erSixWeeks.to)} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>Next 6 weeks</button>
                   <button data-testid="er-reset" onClick={()=>setErRange(null)} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>Visible month</button>
                   <button data-testid="er-copy" onClick={copyErForWord} disabled={!erRangeOk || !daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(copiedUrl==="er"),padding:"5px 12px",fontSize:11,opacity:erRangeOk && daysShown?1:0.5}}>{copiedUrl==="er" ? "Copied" : "Copy for Word"}</button>
                   <button data-testid="er-download" onClick={downloadErHtml} disabled={!erRangeOk || !daysShown} title={daysShown ? undefined : EXPORT_UNREAD_TITLE} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:erRangeOk && daysShown?1:0.5}}>Download .html</button>
@@ -8405,13 +8420,16 @@ function CallSchedule() {
             // a row's H / E / F / EV badges (the holiday unit's name gives way to its legend letter H on a phone - the phone
             // block's .mine-hol-name / .mine-hol-letter)
             const badgeEls = (x) => badgesFor(x.day, who).map(b => <span key={b.k} title={b.title} data-badge={b.k} style={{fontSize:9,fontWeight:800,padding:"0 5px",borderRadius:4,background:b.bg,color:b.fg}}>{b.k === "H" ? <><span className="mine-hol-name">{b.text}</span><span className="mine-hol-letter">H</span></> : b.text}</span>);
+            // 11/1 (item 4): a row's padlock and the hero's " - locked" are the scheduler's (as on the grid and in the day editor) -
+            // trades ignore locks (tradeEligibility passes ignoreLocks), so to a surgeon, a follower or an APP's Following card the
+            // mark only read as "you cannot trade this day"
             return <>
               <div data-testid="next-call" data-next-day={next ? next.day : ""} data-next-role={next ? next.role : ""} style={{padding:"12px 14px",borderRadius:8,marginBottom:12,background:next ? (next.role === "primary" ? `linear-gradient(135deg,${T.primaryStart},${T.primaryEnd})` : "linear-gradient(135deg,#8a6a20,#b08a30)") : T.raised,color:next ? "#fff" : dkText}}>
                 {!loaded ? <span style={{fontStyle:"italic"}}>Loading schedule</span> : !daysReadOk ? <span data-testid="next-call-unread" style={{fontStyle:"italic"}}>Schedule not loaded - the next call is not known until it loads.</span> : !next ? <span>No upcoming call on file for {nameOf(who)}.</span> : (
                   <>
                     <div style={{fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",opacity:0.85}}>Next call - {countdown(next.day)}</div>
                     <div style={{fontSize:18,fontWeight:700,marginTop:2}}>{roleWord(next.role)} - {dowShort(next.day)} {MO[parse(next.day).getMonth()]} {parse(next.day).getDate()}, {parse(next.day).getFullYear()}</div>
-                    <div style={{fontSize:12.5,marginTop:4,opacity:0.95}}>{next.role === "primary" ? "Backup" : "Primary"}: {holderLabel(next.other, nameOf)} - 07:00 to 07:00 next day{next.locked ? " - locked" : ""}{badgesFor(next.day, who).map(b => " - " + b.title).join("")}</div>
+                    <div style={{fontSize:12.5,marginTop:4,opacity:0.95}}>{next.role === "primary" ? "Backup" : "Primary"}: {holderLabel(next.other, nameOf)} - 07:00 to 07:00 next day{next.locked && isScheduler ? " - locked" : ""}{badgesFor(next.day, who).map(b => " - " + b.title).join("")}</div>
                   </>
                 )}
               </div>
@@ -8444,7 +8462,7 @@ function CallSchedule() {
                 <div data-testid="mine-upcoming" className="mine-upcoming">
                   {upcoming.map(x => (
                     <div key={x.day} data-testid="mine-day" data-day={x.day} data-role={x.role} style={{display:"flex",gap:"6px 10px",alignItems:"center",padding:"5px 8px",borderBottom:`1px solid ${dkCardBorder}`,flexWrap:"wrap"}}>
-                      <span data-testid="mine-date" style={{fontFamily:mono,fontSize:12,color:dkText,width:92,flexShrink:0,display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>{dowShort(x.day)} {fmtMD(x.day)}{x.locked && <Padlock title="locked" size={9}/>}</span>
+                      <span data-testid="mine-date" style={{fontFamily:mono,fontSize:12,color:dkText,width:92,flexShrink:0,display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>{dowShort(x.day)} {fmtMD(x.day)}{x.locked && isScheduler && <Padlock title="locked" size={9}/>}</span>
                       <span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>{roleWord(x.role)}</span>
                       <span data-testid="mine-holder" className="mine-holder" title={(x.role === "primary" ? "backup" : "primary") + ": " + holderLabel(x.other, nameOf)} style={{...muted,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.role === "primary" ? "backup" : "primary"}: {holderLabel(x.other, nameOf)}</span>
                       {!own && badgeEls(x)}
@@ -8480,6 +8498,13 @@ function CallSchedule() {
             {followingCards()}
           </>;
           if (following.length) return <>{followingCards()}</>; // end of the Following view
+          // 11/1 (item 4): My schedule's two calendar buttons - in the header beside Paint my offers on a wide screen, under the
+          // Upcoming list on a phone (isPhone), where they no longer stack two button rows above the next call. One copy is
+          // rendered in one of the two places, so each testid is on the page once.
+          const mineCalButtons = <>
+                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} disabled={!daysShown} title={!daysShown ? EXPORT_UNREAD_TITLE : "One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars"} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:daysShown?1:0.5}}>Download my calendar</button>
+                  <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
+          </>;
           return <>
             <div style={css.card} data-testid="mine-card">
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
@@ -8491,11 +8516,11 @@ function CallSchedule() {
                 ) : <Badge id={pid}/>}
                 <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                   <button data-testid="paint-offers" onClick={()=>setOfferSheet({ personId: pid })} title={pid === mySurgeon ? "Paint the dates you'll cover (primary / backup / either), any time ahead" : "Enter " + nameOf(pid) + "'s offered dates as the scheduler (relayed; entered_by scheduler)"} style={{...css.btn(true),padding:"5px 12px",fontSize:11}}>{pid === mySurgeon ? "Paint my offers" : "Paint offers for " + nameOf(pid)}</button>
-                  <button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} disabled={!daysShown} title={!daysShown ? EXPORT_UNREAD_TITLE : "One all-day event per run of consecutive days on call (07:00-to-07:00 Central times in the description), importable into Google, Apple or Outlook calendars"} style={{...css.btn(false),padding:"5px 12px",fontSize:11,opacity:daysShown?1:0.5}}>Download my calendar</button>
-                  <button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")} title={"Subscribe your phone or Outlook to this feed (it updates itself): " + syncUrl} style={{...css.btn(false),padding:"5px 12px",fontSize:11}}>{copiedUrl === "mine-sync" ? "Copied" : "Copy my calendar-sync URL"}</button>
+                  {!isPhone && mineCalButtons}
                 </span>
               </div>
               {daysBlock(pid, true)}
+              {isPhone && <div data-testid="mine-cal-actions" style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end",marginTop:12}}>{mineCalButtons}</div>}
             </div>
             {/* Call pay (Faraz 9/27): a linked surgeon's own pay (not rendered when he is switched off the call stipend -
                 payMyCardHidden); the scheduler's for the person picked above (one line for a switched-off surgeon). Never for
@@ -8753,10 +8778,14 @@ function CallSchedule() {
 
           <div style={css.card}>
             <div style={css.cardT}>Appearance</div>
-            <div style={{display:"flex",alignItems:"center",gap:12}}>
+            {/* Item 5 (Faraz 11/1): Light / Dark / Auto for this device. Light stays the view's first button and Dark its second
+                (the smoke clicks them by text; data-layer SD1). */}
+            <div data-testid="theme-choice" role="group" aria-label="Theme" style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               <span style={{fontSize:13,color:"#5B6B82"}}>Theme</span>
-              <button onClick={()=>setDarkMode(false)} style={{...css.btn(!darkMode),padding:"6px 16px",fontSize:12}}>Light</button>
-              <button onClick={()=>setDarkMode(true)} style={{...css.btn(darkMode),padding:"6px 16px",fontSize:12}}>Dark</button>
+              <button data-testid="theme-light" aria-pressed={themePref === "light"} onClick={()=>setThemePref("light")} style={{...css.btn(themePref === "light"),padding:"6px 16px",fontSize:12}}>Light</button>
+              <button data-testid="theme-dark" aria-pressed={themePref === "dark"} onClick={()=>setThemePref("dark")} style={{...css.btn(themePref === "dark"),padding:"6px 16px",fontSize:12}}>Dark</button>
+              <button data-testid="theme-auto" aria-pressed={themePref === "auto"} onClick={()=>setThemePref("auto")} style={{...css.btn(themePref === "auto"),padding:"6px 16px",fontSize:12}}>Auto</button>
+              <span data-testid="theme-auto-note" style={{fontSize:11,color:T.muted,flexBasis:"100%"}}>Auto follows this device's light or dark setting.</span>
             </div>
             {/* Item A (Faraz 9/23): the month grids' first column, per device - the week rows stay Mon-Sun. */}
             <div style={{display:"flex",alignItems:"center",gap:12,marginTop:10,flexWrap:"wrap"}}>
@@ -10250,6 +10279,33 @@ function cvAccountLabel(row, profiles) {
   return { name: role ? name + " \u2014 " + role : name, id: "" };
 }
 
+// useMediaQuery(query) -> whether a CSS media query matches now (11/1 phone polish: item 5's "(prefers-color-scheme: dark)"
+// for Auto, items 4 and 6's "(max-width: 600px)" for the phone layout). Read synchronously, so the first render is already
+// right; kept current by the list's change event (old Safari's MediaQueryList has only addListener / removeListener) and
+// re-read when the app comes back to the screen (a Home Screen app resumed after the phone switched at sunset). Every
+// listener is removed on unmount. Module scope, after cvAccountLabel: outside the DayEditor runners' lifted slice.
+function useMediaQuery(query) {
+  const read = () => { try { return !!(window.matchMedia && window.matchMedia(query).matches); } catch (e) { console.warn("Couldn't read the media query " + query + " (treated as not matching):", e); return false; } };
+  const [on, setOn] = useState(read);
+  useEffect(() => {
+    let mq = null;
+    try { mq = window.matchMedia ? window.matchMedia(query) : null; } catch (e) { console.warn("Couldn't watch the media query " + query + " (its first reading stays):", e); }
+    if (!mq) return undefined;
+    const onChange = () => setOn(!!mq.matches);
+    const onMediaVisible = () => { if (document.visibilityState === "visible") onChange(); };
+    onChange();
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onChange);
+    else if (typeof mq.addListener === "function") mq.addListener(onChange);
+    document.addEventListener("visibilitychange", onMediaVisible);
+    return () => {
+      if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onChange);
+      else if (typeof mq.removeListener === "function") mq.removeListener(onChange);
+      document.removeEventListener("visibilitychange", onMediaVisible);
+    };
+  }, [query]);
+  return on;
+}
+
 // --- Offer standing in words (Prompt 14 part 3c, U3c 9/23) ---
 // offerCandidateWords(st, role) -> null when st is not an offerState result (the
 // day lies in no period: nobody is offers-governed), else { kind, tag, words,
@@ -10886,11 +10942,15 @@ function DayEditor(props) {
   return (
     <div data-testid="day-editor" onClick={requestClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9500,padding:14}}>
       <div role="dialog" aria-modal="true" aria-label={"Day editor " + day} ref={dialogRef} tabIndex={-1} onKeyDown={dialogKeyDown} onClick={e => e.stopPropagation()} style={{outline:"none",background:panelBg,color:text,borderRadius:12,padding:"16px 18px",maxWidth:600,width:"100%",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.25)",fontFamily:font}}>
-        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:8}}>
           <button type="button" aria-label="Previous day" onClick={() => { if (dirty) setHint("Save or cancel your changes before moving to another day."); else onNav(-1); }} style={{...css.btn(false),minWidth:34,padding:"4px 8px"}}>&lsaquo;</button>
           <h3 data-testid="editor-title" style={{margin:0,fontSize:16,color:text,flex:1,textAlign:"center"}}>{title}</h3>
           <button type="button" aria-label="Next day" onClick={() => { if (dirty) setHint("Save or cancel your changes before moving to another day."); else onNav(1); }} style={{...css.btn(false),minWidth:34,padding:"4px 8px"}}>&rsaquo;</button>
-          <button type="button" aria-label="Close" onClick={requestClose} style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer",padding:"0 4px",marginLeft:4}}>x</button>
+          {/* 11/1 (item 3): a 44 x 44 target like the painters' x (it was 18 px wide, 10 px from the next-day button). Its negative
+              margins keep the row's height (24 of its 44 px count, like .hdr-errors) and reach into the dialog's 18 px right
+              padding; with the row's gap 4 (was 6) the title has 2 px more room than before (190 px at 360). outlineOffset keeps a
+              focus ring inside the dialog's clip. */}
+          <button type="button" data-testid="editor-x" aria-label="Close" onClick={requestClose} style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer",padding:"6px 10px",minWidth:44,minHeight:44,margin:"-10px -18px -10px 0",outlineOffset:-4}}>x</button>
         </div>
         <div style={{fontSize:12,color:sub,lineHeight:1.6,marginBottom:10}}>
           {(hol || canEdit) && <div>{hol ? <><span style={{fontWeight:700,color:"#8a6a10"}}>{hol.name}</span> holiday unit ({hol.tier}): {hol.days.map(fmtMD).join(", ")} - one primary and one backup stick through the unit.</> : "Not in a holiday unit."}</div>}

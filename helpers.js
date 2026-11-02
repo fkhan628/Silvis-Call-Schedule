@@ -54,6 +54,22 @@ const monthGridDays = (year, month0, weekStartsOn) => {
   return out;
 };
 
+/* ═══ Theme (item 5, Faraz 11/1): Light / Dark / Auto, per device ═══
+   Two localStorage keys. 'silvis-dark-mode' keeps the meaning every build gives it: "true" while this device shows the
+   dark theme - all an older cached build reads (=== "true"). With Light or Dark chosen it IS the choice (no other key).
+   'silvis-theme' = "auto" marks Auto: the device's own light / dark setting (prefers-color-scheme) decides, live, and the
+   flag beside it follows what the device shows. Nothing stored (a device that never ran the app) = Auto; a device that
+   ran an older build has the flag (those builds wrote it on every start - "false" unless Dark was picked), so its Light /
+   Dark stays. */
+const THEME_PREFS = ["light", "dark", "auto"];
+// The stored choice: the Auto mark, else the flag's Light / Dark, else (nothing stored) Auto.
+const themePrefFromStorage = (themeMark, darkFlag) => themeMark === "auto" ? "auto" : darkFlag === "true" ? "dark" : darkFlag === "false" ? "light" : "auto";
+// Does this device show the dark theme? Light / Dark as chosen; Auto as the device's own setting says.
+const themeIsDark = (pref, systemDark) => pref === "dark" || (pref === "auto" && !!systemDark);
+// What to store for a choice and the theme it shows, in write order: [key, value], null = remove. Auto writes its mark
+// first (a refused write then changes nothing); the flag is always what the device shows.
+const themeStorageWrites = (pref, dark) => [["silvis-theme", pref === "auto" ? "auto" : null], ["silvis-dark-mode", dark ? "true" : "false"]];
+
 function onVac(id,ds,v){ return (v[id]||[]).some(([a,b])=>ds>=a&&ds<=b); }
 
 // "10/12" from "2026-10-12" (no leading zeros) - the publish-diff convention.
@@ -7185,7 +7201,7 @@ if (typeof module !== "undefined" && module.exports) {
     SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg,
     GROUP_CALL_DEFAULTS, groupCallRules, groupCallTimeLabel, groupCallRuleSentence, groupCallNow, GROUP_CALL_SHARE_CSS, GROUP_CALL_PRINT_CSS,
     vacRangeLabel, groupVacationRows,
-    normalizeWeekStart, weekdayLabels, monthGridDays,
+    normalizeWeekStart, weekdayLabels, monthGridDays, THEME_PREFS, themePrefFromStorage, themeIsDark, themeStorageWrites,
     openSlots, openSlotKey, openSlotCounts, openSlotWeekendKinds, OPEN_SLOT_PATTERN_WORDS, openSlotPatternWords, openSlotsLine, openShiftsEmail, obBoardRows, obLastAnnounced, obBoardSlots, obUnitMates,
     openSlotReason, openSlotReasonCurrent, openSlotsMessageCurrent, lastGenerateFromDiagnostics,
     emptyDayAssignment, dayRowToAssignment, assignmentToDayRow, sameDayAssignment, mergeRealtimeDay, dayHolder, dayLockFlags,

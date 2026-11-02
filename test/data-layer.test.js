@@ -1278,6 +1278,31 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/buildPrintableCalendarHTML\(\{[^}]*weekStartsOn[^}]*\}\)/.test(src), "the printable gets the setting");
     assert.ok(src.includes("monOf("), "monOf is still in use (week rows, East weeks) - Item A never touches it");
   });
+  // Item 5 (Faraz 11/1): the theme is a per-device choice - Light / Dark / Auto. helpers.js holds the storage contract
+  // (themePrefFromStorage / themeIsDark / themeStorageWrites, exports.test.js); these pins hold the wiring and the one
+  // module-scope useMediaQuery hook that reads the device's setting (items 4 and 6 read the phone width through it too).
+  check("Item 5 pins: themePref reads the Auto mark and the flag through themePrefFromStorage (Auto only when nothing is stored); darkMode is derived (themeIsDark over useMediaQuery's prefers-color-scheme) and still feeds dk / T / the dark sheet; one effect writes themeStorageWrites; the hook keeps its reading current (change listener, the addListener fallback, a re-read on return) and removes all three; Settings > Appearance is Light / Dark / Auto with aria-pressed and one line", () => {
+    assert.strictEqual(count('localStorage.getItem("silvis-theme")'), 1, "one read of the Auto mark");
+    assert.strictEqual(count('localStorage.getItem("silvis-dark-mode")'), 1, "one read of the flag");
+    assert.ok(src.includes('themePrefFromStorage(localStorage.getItem("silvis-theme"), localStorage.getItem("silvis-dark-mode"))'), "both keys go through the one helper");
+    assert.ok(src.includes("const [themePref, setThemePref] = useState("), "the choice is state");
+    assert.strictEqual(count('const systemDark = useMediaQuery("(prefers-color-scheme: dark)");'), 1, "the device's reading comes from the hook, once");
+    assert.ok(src.includes("const darkMode = themeIsDark(themePref, systemDark);"), "darkMode is what the device shows - derived, never stored on its own");
+    assert.ok(src.includes("const dk = darkMode;") && src.includes("{darkMode && <style>{`"), "dk and the dark sheet still read darkMode");
+    assert.strictEqual(count("setDarkMode"), 0, "no boolean setter is left - the buttons set the choice");
+    assert.strictEqual(count('localStorage.setItem("silvis-dark-mode"'), 0, "the flag is written only through themeStorageWrites");
+    assert.ok(src.includes("themeStorageWrites(themePref, darkMode).forEach(([k, v]) => { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); });") && src.includes("}, [themePref, darkMode]);"), "one effect writes the keys whenever the choice or the shown theme changes (an older cached build reads the flag)");
+    // the hook: module scope, after cvAccountLabel (outside the DayEditor runners' lifted slice), one definition
+    assert.strictEqual(count("function useMediaQuery(query) {"), 1, "one hook");
+    const hk = src.indexOf("function useMediaQuery(query) {");
+    assert.ok(hk > src.indexOf("\nfunction cvAccountLabel(") && hk > src.indexOf("// --- Client versions"), "after cvAccountLabel and the lifted slices");
+    const hook = src.slice(hk, src.indexOf("\n}\n", hk) + 3);
+    assert.strictEqual(count("matchMedia("), 2, "the hook's first reading and its listener's list - nothing else asks the browser");
+    assert.ok(hook.includes("window.matchMedia(query).matches") && hook.includes("const [on, setOn] = useState(read);") && hook.includes("}, [query]);"), "read synchronously (the first render is right), re-subscribed per query");
+    for (const w of ['mq.addEventListener("change", onChange)', "mq.addListener(onChange)", 'mq.removeEventListener("change", onChange)', "mq.removeListener(onChange)", 'document.addEventListener("visibilitychange", onMediaVisible)', 'document.removeEventListener("visibilitychange", onMediaVisible)']) assert.ok(hook.includes(w), w);
+    for (const [k, label] of [["light", "Light"], ["dark", "Dark"], ["auto", "Auto"]]) assert.strictEqual(count(`<button data-testid="theme-${k}" aria-pressed={themePref === "${k}"} onClick={()=>setThemePref("${k}")} style={{...css.btn(themePref === "${k}"),padding:"6px 16px",fontSize:12}}>${label}</button>`), 1, "the " + label + " button");
+    assert.ok(src.includes(`<span data-testid="theme-auto-note" style={{fontSize:11,color:T.muted,flexBasis:"100%"}}>Auto follows this device's light or dark setting.</span>`), "the one line under the buttons, in T.muted");
+  });
   // Item B (Faraz 9/23 evening): the vacation lists are grouped per surgeon - one block per roster entry in roster
   // order (a header with the Badge, "N upcoming" and, with Show past on, "+M past"), the ranges underneath as compact
   // "Nov 19-22" lines. Two pure helpers carry the behaviour so the grouping and the label are testable here.
@@ -7498,7 +7523,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "<div style={css.cardT}>Refresh app</div>", hs, 'ck="settings_audit"', 'ck="settings_client_versions"', "<span>Office notifications</span>", "<div style={css.cardT}>Data management</div>",
         'data-testid="export-backup"', 'data-testid="reset-all-data"', "<span>Restore from snapshot</span>"].map(k => settings.indexOf(k));
       order.forEach((at, i) => assert.ok(at >= 0 && (i === 0 || at > order[i - 1]), "Settings order broken at step " + i + " (" + at + ")"));
-      assert.strictEqual(settings.indexOf("<button"), settings.indexOf("<button onClick={()=>setDarkMode(false)}"), "the Light / Dark buttons are still the first buttons on the view (the smoke's has-text('Light'|'Dark') clicks)");
+      // pin moved deliberately 11/1 (item 5: Light / Dark / Auto) - the Light choice is still the view's first button, Dark second
+      assert.strictEqual(settings.indexOf("<button"), settings.indexOf('<button data-testid="theme-light"'), "the Light / Dark / Auto buttons are still the first buttons on the view (the smoke's has-text('Light'|'Dark') clicks)");
+      assert.ok(settings.indexOf('<button data-testid="theme-light"') < settings.indexOf('<button data-testid="theme-dark"') && settings.indexOf('<button data-testid="theme-dark"') < settings.indexOf('<button data-testid="theme-auto"'), "Light, then Dark, then Auto");
       for (const t of ["Your preferences", "Scheduler tools"]) SMOKE_TEXT.forEach(x => assert.ok(!t.toLowerCase().includes(x), `heading '${t}' holds the smoke title '${x}'`));
       const gh = SD.slice(SD.indexOf("  const groupHeading = "), SD.indexOf("  const settingsToggleRow = "));
       assert.ok(gh.includes('fontVariant:"small-caps"') && gh.includes("color:T.muted") && gh.includes("background:T.border") && !/#[0-9a-fA-F]{3,6}/.test(gh), "the heading is small caps in T.muted with a T.border hairline - tokens only");
@@ -9739,6 +9766,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 11) - the lifted daysBlock reads the flag for its badge
         // legend (the E / F / EV words are the scheduler's); these rows checks run as a non-scheduler
         eastDetailsVisible: false,
+        // pin moved deliberately 11/1 (item 4): the row's padlock and the hero's " - locked" read isScheduler - a non-scheduler
+        // here too; the padlock checks below set it true (the scheduler's view)
+        isScheduler: false,
         proposeTradeForDay: (d, r) => calls.push(["trade", d, r]), proposeGiveForDay: (d, r, w) => calls.push(["give", d, r, w]),
         DAYS: [],
       };
@@ -9756,6 +9786,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
 
     check("DF9 rows (daysBlock lifted and run): a locked day's padlock is INSIDE the date span (mine-date: the date text, then the Padlock) and nowhere else in the row; an unlocked day has none - the padlock no longer takes a row item of its own (at 390 px it wrapped onto a line by itself)", () => {
       const { daysBlock, box, Padlock } = liftDaysBlock();
+      box.isScheduler = true; // pin moved deliberately 11/1 (item 4): the padlock is the scheduler's - this check reads his view
       box.DAYS = [DAY("2026-10-15", "primary", "s1", true), DAY("2026-10-20", "backup", "s3", false)];
       const tree = daysBlock("s2", false);
       const rows = byId(tree, "mine-day");
@@ -9834,6 +9865,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("DF9 list: mine-upcoming carries the class mine-upcoming and NO inline maxHeight / overflowY (an inline one would beat the phone rule); every upcoming day is a row - 60 days, 60 rows (no cap: the smoke compares the count with the served rows)", () => {
       const { daysBlock, box } = liftDaysBlock();
+      box.isScheduler = true; // pin moved deliberately 11/1 (item 4): the 20 padlocks are the scheduler's
       box.DAYS = Array.from({ length: 60 }, (_, i) => DAY(isoPlus("2026-10-02", i), i % 2 ? "backup" : "primary", "s1", i % 3 === 0));
       const tree = daysBlock("s2", true);
       const ul = byId(tree, "mine-upcoming");
@@ -9910,17 +9942,39 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(db.includes('{own && <button data-testid="mine-give" onClick={()=>proposeGiveForDay(x.day, x.role, who)} style={{...css.mini(false),color:T.text,borderColor:T.border}}>Give away</button>}'), "mine-give byte-identical");
       assert.ok(db.includes('{own && <button data-testid="mine-trade" onClick={()=>proposeTradeForDay(x.day, x.role)}'), "the mine-trade prefix");
       assert.ok(db.includes('<span data-testid="mine-role" style={{fontSize:11,fontWeight:700,width:58,color:x.role==="primary"?T.title:T.backupText}}>'), "the mine-role span");
-      assert.ok(db.includes('{fmtMD(x.day)}{x.locked && <Padlock title="locked" size={9}/>}</span>'), "the padlock closes the date span");
-      assert.ok(!/\n\s*\{x\.locked && <Padlock/.test(db), "no padlock on a line (a row item) of its own");
+      // pin moved deliberately 11/1 (item 4): the padlock (and the hero's " - locked") is the scheduler's - still the date span's last child
+      assert.ok(db.includes('{fmtMD(x.day)}{x.locked && isScheduler && <Padlock title="locked" size={9}/>}</span>'), "the padlock closes the date span (the scheduler's)");
+      assert.ok(!db.split("\n").some(l => l.trim().startsWith("{x.locked && ")), "no padlock on a line (a row item) of its own");
+      assert.ok(db.includes('07:00 to 07:00 next day{next.locked && isScheduler ? " - locked" : ""}'), "the hero's ' - locked' is the scheduler's too");
       assert.ok(!db.includes(">Propose a trade</button>") && !db.includes("maxHeight:420") && !db.includes("minWidth:120"), "the old label, the inline scroller and the holder's 120 px floor are gone");
     });
-    check("DF9 pins (smoke): the 390 px checks exist - the own rows (Acton, the scheduler's picker: padlock in the date, date / role / holder one line, Trade + Give away one line under it at >= 36 px, no nested scroller), the follower's (a locked row is ONE line, both themes) and the 1180 px scroller, all through DF9_ROWS_PROBE", () => {
+    // 11/1 (item 4): the padlock and the hero's " - locked" are the scheduler's - trades ignore locks (tradeEligibility passes
+    // ignoreLocks), so to anyone else the mark only read as "you cannot trade this day"
+    check("11/1 item 4 (daysBlock lifted and run): a surgeon's own rows and a follower's (own true / false) carry no padlock and the hero no 'locked'; the scheduler's carry one padlock per locked row, inside its date span, and the hero's ' - locked'", () => {
+      const { daysBlock, box, Padlock } = liftDaysBlock();
+      box.DAYS = [DAY("2026-11-24", "backup", "s4", true), DAY("2026-11-25", "primary", "s5", true), DAY("2026-11-30", "backup", "s3", false)];
+      for (const own of [true, false]) {
+        box.isScheduler = false;
+        const t0 = daysBlock("s1", own), h0 = text(byId(t0, "next-call")[0]);
+        assert.strictEqual(all(t0, x => x.type === Padlock).length, 0, "no padlock for a non-scheduler (own " + own + ")");
+        assert.ok(h0.includes("07:00 to 07:00 next day") && !h0.includes("locked"), "the hero says no 'locked' (own " + own + "): " + h0);
+        box.isScheduler = true;
+        const t1 = daysBlock("s1", own), h1 = text(byId(t1, "next-call")[0]);
+        assert.strictEqual(all(t1, x => x.type === Padlock).length, 2, "the scheduler: one padlock per locked row (own " + own + ")");
+        assert.strictEqual(all(t1, x => x.props && x.props["data-testid"] === "mine-date" && kids(x).some(c => c.type === Padlock)).length, 2, "each inside its date span (own " + own + ")");
+        assert.ok(h1.includes("07:00 to 07:00 next day - locked"), "the scheduler's hero keeps ' - locked' (own " + own + "): " + h1);
+      }
+    });
+    check("DF9 pins (smoke): the 390 px checks exist - the own rows (Acton, the scheduler's picker: padlock in the date, date / role / holder one line, Trade + Give away one line under it at >= 36 px, no nested scroller), the follower's (every row ONE line and, since 11/1, no padlock - both themes) and the 1180 px scroller, all through DF9_ROWS_PROBE", () => {
       const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
       assert.ok(smoke.includes("const DF9_ROWS_PROBE = (scope) => {"), "the probe");
       assert.ok(smoke.includes('await page.evaluate(DF9_ROWS_PROBE, "[data-testid=mine-card]")') && smoke.includes("DF9 390px own rows"), "the own-rows check");
       // second review fixes (10/2) - pin moved deliberately: the follower's check reads the date / role / holder line (badges
       // may wrap under the name), and a names check measures every Following holder at 390 / 360 / 320 px
-      assert.ok(smoke.includes("await pf.evaluate(DF9_ROWS_PROBE, null)") && smoke.includes("every locked row's date / role / holder is one line") && smoke.includes("p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));"), "the follower's one-line check (a second line only for badges wrapped under the name)");
+      // pin moved deliberately 11/1 (item 4): a follower's rows carry no padlock - the one-line check reads EVERY row, and a
+      // separate check finds no padlock / no 'locked' on the days the page's own rows lock
+      assert.ok(smoke.includes("await pf.evaluate(DF9_ROWS_PROBE, null)") && smoke.includes("every row's date / role / holder is one line") && smoke.includes("const bad = g.per.filter(p => p.spread === null || p.spread > 6 || p.btns.length || (p.rowH > p.dateH + 16 && !p.chipsWrapped));"), "the follower's one-line check over every row (a second line only for badges wrapped under the name)");
+      assert.ok(smoke.includes("11/1 item 4 follower (${theme}): no padlock on"), "the follower's no-padlock check");
       assert.ok(smoke.includes("DF9 1180px"), "the wide-screen scroller check");
       // review of the merge (10/2): the landscape rule (@media (max-height: 500px)) is run in the browser too, at 844 x 390
       assert.ok(smoke.includes("await page.setViewportSize({ width: 844, height: 390 });") && smoke.includes('else if (l.lists.some(x => x.maxH !== "none" || x.overflowY !== "visible" || x.nested)) fail(`DF9 844x390:'), "the landscape check");
@@ -10608,7 +10662,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(pt.includes('const fr = await auth.ensureFresh();\n      if (fr && fr.refreshed) resyncPendingRef.current("poll");\n      await refreshNotifs();'), "the hidden head: ensureFresh / re-send, then notifications");
       assert.ok(src.includes("const onPollVisibility = () => { if (!document.hidden && pollCatchUpDue(lastFullPollAt, Date.now())) pollTick(); };"), "the catch-up reads document.hidden (the smoke's keepalive dispatches override hidden only)");
       // pin moved deliberately 10/12: push UX follow-up - a sixth, the Pop-ups / push-card permission re-read (push.test.js permRefreshCheck)
-      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 6, "the keepalive flush, A3's ensureFresh, the version check, the shift clock, the poll's and the push UX permission re-read");
+      // pin moved deliberately 11/1: phone polish - a seventh, the module-scope useMediaQuery hook's re-read (onMediaVisible; the
+      // theme's Auto and the phone layout)
+      assert.strictEqual(count('document.addEventListener("visibilitychange", '), 7, "the keepalive flush, A3's ensureFresh, the version check, the shift clock, the poll's, the push UX permission re-read and the media-query hook's re-read");
+      assert.strictEqual(count('document.addEventListener("visibilitychange", onMediaVisible);'), 1, "the seventh is the media-query hook's (removed on its cleanup - the Item 5 pins)");
       assert.strictEqual(count('document.addEventListener("visibilitychange", onVisible);\n    return () => document.removeEventListener("visibilitychange", onVisible);\n  }, [isPublicMode, pushCardOpen, pushUid, refreshPushState]);'), 1, "the sixth is the push UX permission re-read, removed on cleanup");
       const ra = between("    const refreshAll = async () => {", "    refreshDaysRef.current = refreshDays;");
       assert.ok(ra.indexOf("lastFullPollAt = Date.now();") > 0 && ra.indexOf("lastFullPollAt = Date.now();") < ra.indexOf("await auth.ensureFresh();"), "refreshAll stamps the clock first");
@@ -15043,6 +15100,64 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(fn.includes("Since revision y (applied 2026-10-20 00:41:25Z, recorded in docs/SCHEMA-REVIEW.md) apply_trade() writes his call_offers row, as a claim does, when he agreed himself (for a return leg, both surgeons did) and is submitted for the day's period; where it writes none - the scheduler accepting for him, say (the record lists the cases) - a traded day off his offers / list still reads as a conflict on the held slot."), "the comment names revision y's write and the legs it skips");
       assert.ok(!/does not yet write/.test(fn) && !/call_offers row \(open\)/.test(s), "no 'does not yet write' / 'call_offers row (open)' is left");
       assert.ok(fn.includes("try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }"), "the check itself is unchanged (claim: true)");
+    });
+  }
+
+  /* ---------------- PP34. 11/1 phone polish, items 3 and 4 (Faraz 11/1) ---------------- */
+  console.log("\n[PP34] 11/1 phone polish, items 3 and 4 (the day editor's 44 px x; the ER Panels 'Next 6 weeks' preset; My schedule's calendar buttons under the Upcoming list on a phone; the smoke checks)");
+  {
+    const de = src.slice(src.indexOf("function DayEditor(props) {"), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
+    check("PP34 item 3: the day editor's close x is a 44 x 44 target (editor-x: the painters' padding and minimums) whose negative margins keep the header row's height and reach into the dialog's 18 px right padding; the row's gap is 4 (the title keeps 2 px more room); it still closes through requestClose", () => {
+      const xs = de.split("\n").filter(l => l.includes('aria-label="Close"'));
+      assert.strictEqual(xs.length, 1, "one header x in the day editor");
+      assert.strictEqual(xs[0].trim(), '<button type="button" data-testid="editor-x" aria-label="Close" onClick={requestClose} style={{background:"none",border:"none",color:sub,fontSize:20,cursor:"pointer",padding:"6px 10px",minWidth:44,minHeight:44,margin:"-10px -18px -10px 0",outlineOffset:-4}}>x</button>');
+      const prev = de.indexOf('aria-label="Previous day"'), rowEnd = de.lastIndexOf("\n", prev), rowLine = de.slice(de.lastIndexOf("\n", rowEnd - 1) + 1, rowEnd).trim();
+      assert.strictEqual(rowLine, '<div style={{display:"flex",alignItems:"center",gap:4,marginBottom:8}}>', "the header row: gap 4 (was 6)");
+      assert.ok(de.includes('borderRadius:12,padding:"16px 18px",maxWidth:600,width:"100%"'), "the dialog's 18 px side padding the x reaches into (margin-right -18)");
+      assert.ok(!de.includes('padding:"0 4px",marginLeft:4}}>x</button>'), "the 18 px x is gone");
+    });
+    check("PP34 item 3: 'Next 6 weeks' (er-preset-6w) sets six Mon-Sun weeks starting with the week that holds TOMORROW - monOf(addD(parse(todayStr), 1)) through 41 days on: this week Monday to Saturday, the next one on a Sunday; six whole rows, never widened (the app's own expression run on helpers.js); the fixed 11/2-12/13 button is gone", () => {
+      const sp = src.indexOf("  const erSpan = erRangeOk ? erPanelSpan(erFrom, erTo)"), at = src.indexOf("  const erSixWeeks = (() => {");
+      assert.ok(sp > 0 && at > sp, "erSixWeeks sits after erSpan");
+      const line = src.slice(at, src.indexOf("\n", at));
+      assert.strictEqual(line, "  const erSixWeeks = (() => { const mon = monOf(addD(parse(todayStr), 1)); return { from: fmt(mon), to: fmt(addD(mon, 41)) }; })();");
+      const six = (today) => new Function("monOf", "parse", "fmt", "addD", "todayStr", "return " + line.trim().replace(/^const erSixWeeks = /, "").replace(/;$/, ""))(H.monOf, H.parse, H.fmt, H.addD, today);
+      assert.deepStrictEqual(six("2026-11-01"), { from: "2026-11-02", to: "2026-12-13" }, "Sunday 11/1: the week starting tomorrow - the old fixed preset's six weeks");
+      assert.deepStrictEqual(six("2026-11-02"), { from: "2026-11-02", to: "2026-12-13" }, "Monday 11/2: this week");
+      assert.deepStrictEqual(six("2026-11-07"), { from: "2026-11-02", to: "2026-12-13" }, "Saturday 11/7: still this week");
+      assert.deepStrictEqual(six("2026-11-08"), { from: "2026-11-09", to: "2026-12-20" }, "Sunday 11/8: the week starting tomorrow");
+      assert.deepStrictEqual(six("2027-03-14"), { from: "2027-03-15", to: "2027-04-25" }, "the spring DST Sunday: whole calendar days");
+      ["2026-11-01", "2026-11-04", "2026-12-31", "2027-03-14", "2027-11-07"].forEach(t => {
+        const r = six(t), tomorrow = H.fmt(H.addD(H.parse(t), 1));
+        assert.deepStrictEqual(H.erPanelSpan(r.from, r.to), { from: r.from, to: r.to, widened: false }, "never widened: " + t);
+        assert.ok(r.from <= tomorrow && tomorrow <= r.to, "tomorrow inside: " + t);
+      });
+      const btn = (src.split("\n").find(l => l.includes('data-testid="er-preset-6w"')) || "").trim();
+      assert.strictEqual(btn, '<button data-testid="er-preset-6w" onClick={()=>setErRange(erSixWeeks)} title={"Six Mon-Sun weeks: " + fmtMD(erSixWeeks.from) + " - " + fmtMD(erSixWeeks.to)} style={{...css.btn(false),padding:"4px 10px",fontSize:11}}>Next 6 weeks</button>');
+      const b = src.indexOf('data-testid="er-preset-6w"');
+      assert.ok(b > src.indexOf('data-testid="er-to"') && b < src.indexOf('data-testid="er-reset"'), "between To and Visible month, where the fixed button sat");
+      assert.ok(!src.includes("er-preset-1213") && !src.includes('setErRange({from:"2026-11-02",to:"2026-12-13"})') && !src.includes("11/2 through 12/13"), "the fixed preset is gone");
+    });
+    check("PP34 item 4: My schedule's calendar buttons are ONE const (mineCalButtons, after the Following view's end) rendered in the header beside Paint my offers on a wide screen ({!isPhone && mineCalButtons}) and in mine-cal-actions right after {daysBlock(pid, true)} on a phone; isPhone comes from the shared useMediaQuery; one element per testid", () => {
+      assert.strictEqual(count('const isPhone = useMediaQuery("(max-width: 600px)");'), 1, "isPhone, once, from the hook");
+      const fv = src.indexOf("// end of the Following view"), cb = src.indexOf("const mineCalButtons = <>");
+      assert.ok(fv > 0 && cb > fv && count("const mineCalButtons = <>") === 1, "one mineCalButtons, after the Following view's end (the P20 F3 slice stays free of downloadMyCal)");
+      const a = src.indexOf('<div style={css.card} data-testid="mine-card">'), b = src.indexOf("{/* Call pay (Faraz 9/27)", a);
+      assert.ok(a > cb && b > a, "the own Mine card, after the const");
+      const card = src.slice(a, b), at = card.indexOf("{daysBlock(pid, true)}");
+      const head = card.slice(0, at), tail = card.slice(at);
+      assert.ok(at > 0 && head.includes('data-testid="paint-offers"') && head.indexOf("{!isPhone && mineCalButtons}") > head.indexOf('data-testid="paint-offers"') && !head.includes("download-my-calendar"), "the header: Paint my offers, then the buttons on a wide screen");
+      assert.ok(tail.startsWith('{daysBlock(pid, true)}\n              {isPhone && <div data-testid="mine-cal-actions" style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end",marginTop:12}}>{mineCalButtons}</div>}'), "under the list on a phone");
+      const consts = src.slice(cb, src.indexOf("</>;", cb));
+      assert.ok(consts.indexOf('<button data-testid="download-my-calendar" onClick={()=>downloadMyCal(pid)} disabled={!daysShown}') > 0 && consts.indexOf('<button data-testid="copy-sync-url" onClick={()=>copyText(syncUrl, "mine-sync")}') > consts.indexOf("download-my-calendar"), "Download, then Copy, their lines unchanged");
+      ["download-my-calendar", "copy-sync-url", "paint-offers", "mine-cal-actions"].forEach(t => assert.strictEqual(src.split('data-testid="' + t + '"').length - 1, 1, "one " + t));
+    });
+    check("PP34 pins (smoke): the x is measured at 390 and 360 px; 11/2-12/13 is typed (no er-preset-1213 left) and 'Next 6 weeks' is checked against the page's own today; the padlock on the scheduler's list, none on a surgeon's (Item E3) or a follower's (F3); the calendar buttons' place at 1180 (the header) and 390 px (under the list)", () => {
+      const smoke = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8");
+      assert.ok(smoke.includes('fail("Day editor close x (11/1 item 3): " + bad.join(" | "))') && smoke.includes("for (const [w, h] of [[390, 844], [360, 780]])"), "the x check at 390 / 360");
+      assert.ok(!smoke.includes('page.click("[data-testid=er-preset-1213]")') && smoke.includes('old6 = !!(await page.$("[data-testid=er-preset-1213]"))') && smoke.split('await typeErRange("2026-11-02", "2026-12-13");').length - 1 === 2 && smoke.includes('await page.click("[data-testid=er-preset-6w]");') && smoke.includes("ER panel Next 6 weeks: today ${t6} -> ${mon6} .. ${sun6}"), "the ER steps (the old button is never clicked - only checked absent)");
+      assert.ok(smoke.includes("11/1 item 4 (scheduler): the padlock marks his") && smoke.includes("${T}, 11/1 item 4: no padlock on his") && smoke.includes("11/1 item 4 follower (${theme}): no padlock on"), "the padlock: the scheduler's, a surgeon's and a follower's");
+      assert.ok(smoke.includes("const MINE_CAL_PROBE = () => {") && smoke.split("await page.evaluate(MINE_CAL_PROBE)").length - 1 === 2, "the calendar buttons' place at 1180 and 390 px");
     });
   }
 
