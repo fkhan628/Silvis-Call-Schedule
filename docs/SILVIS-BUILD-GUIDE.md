@@ -763,14 +763,16 @@ buttons, the notification center, the refresh/version banner, and Settings → D
     never opens over one - the wide Alerts panel, with no backdrop and under the editor, stays open as it always did. The claim
     sheet and the open-shifts e-mail preview render inside Open shifts, so their state goes when the view leaves it (only a
     notification tap can move the view while one is up) - unless its claim or send is in flight: that dialog stays, busy, for a
-    return to the board and closes itself. A bar tap or a More pick shows the page from its top. The bar is absent
+    return to the board and closes itself; the toast rule reads the claim sheet on screen (`claimSheetUp`), so a claim in flight
+    elsewhere never puts the toast over More / Alerts. A bar tap or a More pick shows the page from its top. The bar is absent
     on `?public=1`, the
     sign-in cards and under the painter sheets. Icons are inline SVG (`NavIcon`, hidden from assistive tech). The smoke reaches More
     destinations through `clickTab` / `clickNav` and reads a role's phone nav with `phoneNavModel`.
   Proof: `test/data-layer.test.js` item 1, [I2], [PP34], [N6], the Item 5 pins, "PD F x P30" (d) - an open sheet closes only once
   spec F let the tap through, (d2) one opened before the queued day opens closes with goToDay on a phone (the wide panel stays),
   (d3) the phone's scroll to the top, also from a listener made wide - with nine mutants - and "review 11/1" (the claim sheet /
-  e-mail preview state goes with the view unless in flight; the 340 px gaps; the ref mirrored every render);
+  e-mail preview state goes with the view unless in flight; the toast rule's claimSheetUp; the 340 px gaps; the ref mirrored
+  every render);
   `test/exports.test.js` Item 5 helpers; `test/ui/contrast.mjs` own-day ring / rim rows and the tab bar's count digits; the
   smoke's item 1 to 6 checks, "item 1 (surgeon, 320)" (November and September keep their year with 2 px or more to spare,
   measured fractionally in the smoke's fallback font - Google Fonts are stubbed), "11/1 toast over a phone sheet" and "P30 x

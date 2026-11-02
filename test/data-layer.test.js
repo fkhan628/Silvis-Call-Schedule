@@ -7198,7 +7198,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(n6c(", bannerLift),fontSize:12.5"), 3);
       const line = N6SRC.split("\n").find(l => l.includes('data-testid="toast-box"')) || "";
       // review 11/1: while a phone sheet (More, Alerts) stands on the bar the toast sits at the top (css.topToast), never over the sheet's rows
-      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? ((moreOpen || showNotifs) && !editorDay && !claimSheet ? css.topToast : css.aboveTabBar(24)) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
+      // pin moved deliberately 11/2 (re-check): the rule reads the claim sheet ON SCREEN (claimSheetUp) - its state outlives the
+      // view while a claim is in flight
+      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? ((moreOpen || showNotifs) && !editorDay && !claimSheetUp ? css.topToast : css.aboveTabBar(24)) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
       assert.deepStrictEqual(st6.css.topToast, { top: "calc(12px + env(safe-area-inset-top, 0px))", bottom: "auto" }, "the top placement, from app-styles (no new inset reader in index-source.html)");
       assert.ok(a > 0 && b > a && c > b);
       assert.ok(N6SRC.includes('document.documentElement.style.scrollPaddingBottom = tabBarShown ? TABBAR_CLEAR : "";'));
@@ -13908,7 +13910,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(PSRC.includes("  const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !paintSheet && !offerSheet;\n  tabBarShownRef.current = tabBarShown;\n"), "every render mirrors tabBarShown into the ref, where it is computed");
       assert.strictEqual(cntP(PSRC, "openClaimSheet("), 1, "openClaimSheet's one caller is the board's Take - nothing opens the sheet from another view");
       assert.ok(PSRC.includes('data-testid="ob-take" onClick={(e) => openClaimSheet(s, e.currentTarget)}'), "the board's Take");
-      assert.ok(PSRC.includes("(moreOpen || showNotifs) && !editorDay && !claimSheet ? css.topToast : css.aboveTabBar(24)"), "the toast rule it keeps honest");
+      // 11/2 re-check: the toast rule reads the claim sheet ON SCREEN - a claim in flight keeps claimSheet off the board, where no
+      // sheet shows, and the toast must still go to the top over More / Alerts
+      assert.strictEqual(cntP(PSRC, '  const claimSheetUp = view === "openshifts" && !!claimSheet;'), 1, "claimSheetUp, once");
+      assert.ok(PSRC.includes("(moreOpen || showNotifs) && !editorDay && !claimSheetUp ? css.topToast : css.aboveTabBar(24)") && !PSRC.includes("!claimSheet ? css.topToast"), "the toast rule reads claimSheetUp");
+      const up = new Function("view", "claimSheet", 'return view === "openshifts" && !!claimSheet;');
+      assert.deepStrictEqual([up("openshifts", { day: "x" }), up("timeoff", { day: "x" }), up("calendar", { day: "x" }), up("openshifts", null)], [true, false, false, false], "on screen only on the board");
       const r340 = sliceP("    @media (max-width: 340px) {\n      .cal-title > :first-child", "\n    }\n"); // (the tab bar's own 340 px line comes first)
       assert.ok(r340.includes(".cal-title > :first-child { font-size: 12px !important; }") && r340.includes(".cal-navrow { gap: 4px !important; }"), "the 340 px rule: the 12 px title and the row's 4 px gaps");
       assert.ok(PSRC.includes('<div className="cal-navrow" style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>'), "the row's inline 6 px gap the rule overrides (!important)");
