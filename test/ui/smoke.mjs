@@ -7427,16 +7427,23 @@ try {
         if (d1Brush === "clear") console.log(`     (Offer painter: the saved ${d1} reads blocked after the save ('${d1Cell.why}') - the tap-again step clears it with the Clear brush)`);
         await page.click(`[data-testid=ofp-brush-${d1Brush}]`); await tap(d1);
         const clearState = await stateOf(d1);
-        ofpDismissNext = true; const dlgN = dialogs.length;
-        await page.click("[data-testid=ofp-close]"); await page.waitForTimeout(200);
-        const stillOpen = !!(await page.$("[data-testid=ofp-sheet]"));
-        const closeAsk = dialogs[dlgN] || "";
-        await page.click("[data-testid=ofp-discard]"); await page.waitForTimeout(200);
-        const afterDiscard = await stateOf(d1);
-        if (clearState.state !== "draft" || clearState.offer !== "") fail(`Offer painter: tapping the saved ${d1} with ${d1Brush === "clear" ? "Clear (it reads blocked)" : "Primary"} should draft a clear, got ${JSON.stringify(clearState)}`);
-        else if (!stillOpen || !/Discard 1 unsaved change and close\?/.test(closeAsk)) fail(`Offer painter: Close on a dirty draft must confirm and stay when dismissed (open=${stillOpen}, dialog '${closeAsk}')`);
-        else if (afterDiscard.state !== (d1Brush === "clear" ? "blocked" : "saved") || afterDiscard.offer !== "primary") fail("Offer painter: Discard did not restore the saved row: " + JSON.stringify(afterDiscard));
-        else ok(`Offer painter: tap-again on saved ${d1}${d1Brush === "clear" ? " (Clear brush: it reads blocked)" : ""} = 'will clear' draft; Close asked '${closeAsk}' and stayed when dismissed; Discard (confirmed) restored the saved row`);
+        // 11/2 (time travel 1/4/2027): a tap the painter skips (a one-role block, a declined confirm) drafts nothing - Close then shut the
+        // clean sheet and the Discard click waited out 30 s; the cell and the painter's hint (it names a skip) go into the FAIL instead
+        if (clearState.state !== "draft" || clearState.offer !== "") {
+          const tapHint = await page.$eval("[data-testid=ofp-hint]", el => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
+          const d1After = await page.$eval(`[data-testid=ofp-day][data-day="${d1}"]`, el => ({ state: el.getAttribute("data-state"), offer: el.getAttribute("data-offer"), why: el.getAttribute("data-why") || "" })).catch(() => null);
+          fail(`Offer painter: tapping the saved ${d1} with ${d1Brush === "clear" ? "Clear (it reads blocked)" : "Primary"} should draft a clear, got ${JSON.stringify(clearState)}` + ` - the cell before ${JSON.stringify(d1Cell)}, after ${JSON.stringify(d1After)}, hint '${tapHint.slice(0, 200)}'`);
+        } else {
+          ofpDismissNext = true; const dlgN = dialogs.length;
+          await page.click("[data-testid=ofp-close]"); await page.waitForTimeout(200);
+          const stillOpen = !!(await page.$("[data-testid=ofp-sheet]"));
+          const closeAsk = dialogs[dlgN] || "";
+          await page.click("[data-testid=ofp-discard]"); await page.waitForTimeout(200);
+          const afterDiscard = await stateOf(d1);
+          if (!stillOpen || !/Discard 1 unsaved change and close\?/.test(closeAsk)) fail(`Offer painter: Close on a dirty draft must confirm and stay when dismissed (open=${stillOpen}, dialog '${closeAsk}')`);
+          else if (afterDiscard.state !== (d1Brush === "clear" ? "blocked" : "saved") || afterDiscard.offer !== "primary") fail("Offer painter: Discard did not restore the saved row: " + JSON.stringify(afterDiscard));
+          else ok(`Offer painter: tap-again on saved ${d1}${d1Brush === "clear" ? " (Clear brush: it reads blocked)" : ""} = 'will clear' draft; Close asked '${closeAsk}' and stayed when dismissed; Discard (confirmed) restored the saved row`);
+        }
       }
       await page.click("[data-testid=ofp-close]");
       await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
