@@ -1603,8 +1603,8 @@ var HARD_REASONS = [
   "holds-other-role", "monthly-cap:", "max-consecutive:", "backup-cap:",
   "backup-weekend-cap:", "max-major-holidays:", "not-offered", "lone-weekend-day:"
 ];
-function rdStatic(ctx, date, role, id, asBlock) {
-  var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "");
+function rdStatic(ctx, date, role, id, asBlock, assumeOffer) {
+  var key = id + "|" + role + "|" + date + (asBlock ? "|b" : "") + (assumeOffer ? "|o" : ""); // assumeOffer: eligibility() opts (11/2)
   var memo = ctx._memo[key];
   if (memo) return memo;
 
@@ -1659,6 +1659,9 @@ function rdStatic(ctx, date, role, id, asBlock) {
     if (role === "primary" && W.eastClear) soft.push({ reason: "east-clear", weight: -W.eastClear });
   }
 
+  // eligibility() opts.assumeOffer (11/2): the day as if he had offered this role - an offer is in P.avail too (below), so it
+  // is a dated availability for the role, and it is offered (no not-offered / outside-offers for it)
+  if (assumeOffer) rowAvail = true;
   // Offers (Prompt 14 P2, 9/23): inside a period a SUBMITTED surgeon is offers-governed.
   // An offered day (P.offers mask covers the role; it is also in P.avail, so rowAvail
   // is true and the weekday-pattern family below is lifted for it - W) earns the
@@ -1680,7 +1683,7 @@ function rdStatic(ctx, date, role, id, asBlock) {
     if (P.offerStatus[perKey] === "submitted") {
       offersGovern = true;
       listsAside = P.offerMode[perKey] === "exhaustive";
-      if ((P.offers[date] || 0) & mask) { if (W.offerBonus) soft.push({ reason: "offered", weight: -W.offerBonus }); }
+      if (assumeOffer || ((P.offers[date] || 0) & mask)) { if (W.offerBonus) soft.push({ reason: "offered", weight: -W.offerBonus }); }
       else {
         if (P.offerMode[perKey] === "exhaustive") res.notOffered = true;   // hard unless the caller claims (eligibility)
         // B10 (9/23, pre-launch review section 5 item 2): the soft term is scoped per MONTH in preferred mode - it rides
@@ -1850,6 +1853,11 @@ function rdAssumeMap(assume) {
 //                    mode, is read as if his dated lists did not exist (st.claimHard: no list
 //                    code, his recurring whitelist where the month list stood). Every other hard
 //                    rule stands; one who never painted keeps his lists.
+//   assumeOffer    - (11/2, the painter) evaluate as if this surgeon had an offer of this role on this day: the day counts as
+//                    offered and as a dated availability (rowAvail), so the weekday-pattern family and the dated whitelists
+//                    are lifted for it exactly as a saved offer lifts them, and eligibility() goes on past the static layer
+//                    to the blocks behind it (the derived East locks, the other role). The painter asks it for a role whose
+//                    hard list held only the pattern family - else a colleague's derived week showed only after the save.
 function eligibility(ctx, dateStr, role, surgeonId, opts) {
   opts = opts || {};
   if (role !== "primary" && role !== "backup") return { ok: false, hard: ["bad-role:" + role], soft: [] };
@@ -1874,7 +1882,7 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     if (!opts.manual) hard.push("external-surgeon");
     return hard.length ? { ok: false, hard: hard, soft: [], external: true } : { ok: true, hard: [], soft: [], external: true };
   }
-  var st = rdStatic(ctx, dateStr, role, surgeonId, !!opts.asBlockMember);
+  var st = rdStatic(ctx, dateStr, role, surgeonId, !!opts.asBlockMember, !!opts.assumeOffer);
   if (st.notOffered && !opts.claim) hard.push("not-offered"); // P2: exhaustive mode, the first reason after the slot facts
   // 10/18 (Faraz: "taking it counts as painting it"): a claim or a trade (opts.claim) by a surgeon SUBMITTED for the day's
   // period - either mode - is his own choice, like painting that day (claim_open_slot also records the offer), so it is read

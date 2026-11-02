@@ -5115,6 +5115,65 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       });
     });
   });
+  check("U3a (11/2, Faraz 'fix it'): a block behind the weekday-pattern family shows BEFORE the save - eligibility opts.assumeOffer equals a saved offer, and the painter asks it for a confirm-only role", () => {
+    // eligibility() returns at its static layer, so a role whose hard list held only the pattern family (confirm codes - the saved
+    // offer lifts them) never named the block behind it: time travel to 1/4/2027 showed Khan's Tue 2/2 paintable behind the 'never
+    // a call day' confirmation, and only once saved 'backup only - your East/Silvis week' (Fierce's derived Silvis primary week).
+    const R = require(path.join(ROOT, "rules.js"));
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const core = (c) => String(c).split(":")[0];
+    // (1) as if offered == the ctx rebuilt with that offer, on every confirm-family case of every seed period; the plain ask unchanged
+    let cases = 0;
+    seed.offerPeriods.forEach(per => {
+      const base = { roster: seed.roster, surgeonRules: seed.surgeonRules, groupRules: seed.groupRules, holidays: seed.holidays, schedule: {}, availabilityRows: [], periods: [per], today: "2026-09-23" };
+      const ctx0 = R.buildContext({ ...base, offers: [] });
+      for (let d = per.start; d <= per.end; d = H.suAddDays(d, 1)) {
+        ["s1", "s2", "s3", "s4", "s5", "s6"].forEach(id => ["primary", "backup"].forEach(role => {
+          const plain = R.eligibility(ctx0, d, role, id, { claim: true }).hard;
+          if (!plain.map(core).some(c => H.OFFER_CONFIRM_WORDS[c])) return;
+          cases++;
+          const asIf = R.eligibility(ctx0, d, role, id, { claim: true, assumeOffer: true }).hard;
+          const rebuilt = R.eligibility(R.buildContext({ ...base, offers: [{ person_id: id, day: d, role_pref: role }] }), d, role, id, { claim: true }).hard;
+          assert.deepStrictEqual(asIf, rebuilt, id + " " + d + " " + role + ": assumeOffer must read like the saved offer");
+          assert.deepStrictEqual(R.eligibility(ctx0, d, role, id, { claim: true }).hard, plain, id + " " + d + " " + role + ": the plain ask changed after an assumeOffer ask (memo keys)");
+        }));
+      }
+    });
+    assert.ok(cases >= 100, "the seed should give at least 100 confirm-family cases, saw " + cases);
+    // (2) the 1/4/2027 case, restated: Fierce's derived Silvis primary week, Khan's Tuesday inside his 56-day notice
+    const per0 = seed.offerPeriods[0];
+    const inp = { roster: seed.roster, surgeonRules: seed.surgeonRules, groupRules: seed.groupRules, holidays: seed.holidays, schedule: {}, availabilityRows: [], periods: [per0], today: "2026-09-23", offers: [], eastDerived: [{ surgeonId: "s5", weekMonday: "2026-11-09", silvisRole: "primary" }] };
+    const ctx = R.buildContext(inp), tue = "2026-11-10";
+    const plain = R.eligibility(ctx, tue, "primary", "s1", { claim: true }).hard;
+    assert.deepStrictEqual(plain.map(core), ["hard-never-weekday"], "the plain ask stops at the pattern: " + JSON.stringify(plain));
+    const why = H.offerDayWhy(plain);
+    assert.ok(why.confirm && !why.block, "so the plain picture was paintable behind one confirmation (the bug): " + JSON.stringify(why));
+    const asIf = R.eligibility(ctx, tue, "primary", "s1", { claim: true, assumeOffer: true }).hard;
+    assert.deepStrictEqual(asIf, ["derived-lock-held:s5"], "as if offered, the colleague's derived week shows");
+    assert.deepStrictEqual(asIf, R.eligibility(R.buildContext({ ...inp, offers: [{ person_id: "s1", day: tue, role_pref: "primary" }] }), tue, "primary", "s1", { claim: true }).hard, "and it is what the saved offer meets");
+    const fixed = H.offerWhyIfOffered(why, asIf);
+    assert.strictEqual(fixed.block, "a colleague's East/Silvis week", "the role is blocked before the save, in words that are not 'your'");
+    assert.strictEqual(fixed.confirm, why.confirm, "the confirm words stay");
+    assert.deepStrictEqual(fixed.codes, { block: ["derived-lock-held:s5"], confirm: why.codes.confirm }, "the codes follow");
+    assert.strictEqual(H.offerWhyIfOffered(H.offerDayWhy(plain, { eastDetails: false }), asIf, { eastDetails: false }).block, "not available", "a non-scheduler reads 'not available' (decision 11)");
+    assert.ok(R.eligibility(ctx, tue, "backup", "s1", { claim: true }).ok, "his backup that day stays paintable - a one-role block, not a grey");
+    // (3) every other picture is left alone
+    const confirmOnly = H.offerDayWhy(["hard-never-weekday:Tue"]);
+    assert.strictEqual(H.offerWhyIfOffered(confirmOnly, []), confirmOnly, "nothing behind the pattern -> unchanged");
+    assert.strictEqual(H.offerWhyIfOffered(confirmOnly, ["holds-other-role", "max-consecutive:3"]), confirmOnly, "the generator's business (neither family) never blocks");
+    const blocked = H.offerDayWhy(["time-off:2026-11-10", "hard-never-weekday:Tue"]);
+    assert.strictEqual(H.offerWhyIfOffered(blocked, ["derived-lock-held:s5"]), blocked, "a block already -> unchanged");
+    const free = H.offerDayWhy([]);
+    assert.strictEqual(H.offerWhyIfOffered(free, ["derived-lock-held:s5"]), free, "no confirm -> unchanged (the plain ask already went past the static layer)");
+    assert.strictEqual(H.OFFER_BLOCK_WORDS["derived-lock-held"], "a colleague's East/Silvis week");
+    assert.strictEqual(H.OFFER_BLOCK_WORDS["derived-lock"], "your East/Silvis week", "his own derived week keeps 'your'");
+    // (4) the painter: the second ask for a confirm-only role, the same backup-only filter, the same East words option
+    const sheet = src.slice(src.indexOf("\nfunction OfferPainterSheet("), src.indexOf("\nfunction Collapsible("));
+    assert.ok(sheet.includes("let why = offerDayWhy(hard, { eastDetails: !!eastDetails });\n") && sheet.includes("if (!why.block && why.confirm) {"), "the plain picture, then the second ask only for a confirm-only role");
+    assert.ok(sheet.includes("eligO = eligibility(ctx, ds, role, person.id, { claim: true, assumeOffer: true });"), "asked as if offered");
+    assert.ok(sheet.includes("why = offerWhyIfOffered(why, eligO ? eligO.hard.filter(c => !(role === \"primary\" && c === \"backup-only-row\")) : [], { eastDetails: !!eastDetails });"), "merged with the same filter and East words");
+    assert.ok(sheet.indexOf("row.block[role] = why.block; row.confirm[role] = why.confirm;") > sheet.indexOf("if (!why.block && why.confirm) {"), "the row reads the merged picture");
+  });
   check("U3a: offerNextPeriod prefers the earliest period still OPEN for offers, falls back to the running frozen one; offerPeriodOpen reads status + offers_close_at like OF003 / OM005", () => {
     const P = [{ id: "b", start_day: "2027-02-01", end_day: "2027-04-30", offers_close_at: "2027-01-05", status: "upcoming" }, { id: "a", start_day: "2026-11-02", end_day: "2027-01-03", offers_close_at: "2026-10-02", status: "upcoming" }, { id: "z", start_day: "2026-08-01", end_day: "2026-09-20", offers_close_at: "2026-07-01", status: "published" }];
     assert.strictEqual(H.offerNextPeriod(P, "2026-09-23").id, "a", "a is open until 10/2");
@@ -5249,7 +5308,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('readAuthOnlyTable("call_offers"'), "call_offers must be read through readAuthOnlyTable (an anon read answers 200 + [] and would wipe the list)");
       assert.ok(src.includes('readAuthOnlyTable("call_periods"'), "call_periods must be read through readAuthOnlyTable");
       assert.ok(src.includes('eligibility(ctx, ds, role, person.id, { claim: true })'), "the sheet must consult eligibility with { claim: true } (exhaustive not-offered never greys)");
-      assert.ok(src.includes("const why = offerDayWhy("), "the sheet must classify the hard reasons through helpers.offerDayWhy");
+      // pin moved deliberately 11/2 (Faraz: fix the painter): `let` - a confirm-only role is asked again as if offered (offerWhyIfOffered)
+      assert.ok(src.includes("let why = offerDayWhy("), "the sheet must classify the hard reasons through helpers.offerDayWhy");
       assert.ok(src.includes("normally not one of your"), "the weekday-pattern confirmation wording is missing");
       assert.ok(src.includes("frozen") && src.includes("ask the scheduler"), "the frozen reason must say to ask the scheduler");
       assert.ok(src.includes("if (per && !isScheduler && !offerPeriodOpen(per, today))"), "a row's frozen reading must be helpers.offerPeriodOpen (one reading with OF003 / OM005 and the period box)");
@@ -5314,7 +5374,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const filt = src.indexOf("const hard = elig ? elig.hard.filter(c => !(role === \"primary\" && c === \"backup-only-row\")) : [];");
       // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 11) - the call passes { eastDetails } (the East block words
       // read "not available" to everyone but the scheduler); the filter still runs first
-      assert.ok(filt > 0 && src.indexOf("const why = offerDayWhy(hard, { eastDetails: !!eastDetails });") > filt, "backup-only-row is filtered from the primary hard list BEFORE offerDayWhy");
+      assert.ok(filt > 0 && src.indexOf("let why = offerDayWhy(hard, { eastDetails: !!eastDetails });") > filt, "backup-only-row is filtered from the primary hard list BEFORE offerDayWhy");
       assert.ok(src.includes("if (row.npRange && !row.block.primary) row.block.primary = NO_PRIMARY_RANGE_WORDS;"), "a range day blocks primary with the range words");
       assert.ok(src.includes("row.holdsPrimary = !!pid && row.holders.primary === pid;"), "held primary comes from the schedule the sheet already gets");
       assert.ok(src.includes("const out = offerPaintCell(cellOf(r), brush, { single });"), "every paint goes through helpers.offerPaintCell");
@@ -5755,7 +5815,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }"), "the open-shifts board gate must pass claim: true");
       const ed = src.slice(src.indexOf("\nfunction DayEditor("), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
       assert.strictEqual(/claim:\s*true/.test(ed), false, "the day editor never claims - a manual pick onto a not-offered day goes through the Override panel");
-      assert.strictEqual((src.match(/eligibility\([^;\n]*claim: true/g) || []).length, 3, "exactly three claim call sites: the painter, the board gate, the trade path");
+      // pin moved deliberately 11/2 (Faraz: fix the painter): the painter asks a confirm-only role again as if offered - a fourth call site
+      assert.strictEqual((src.match(/eligibility\([^;\n]*claim: true/g) || []).length, 4, "exactly four claim call sites: the painter (its plain ask and the as-if-offered ask), the board gate, the trade path");
     });
     check("U3c pins: My schedule marks each upcoming assignment inside a period the person submitted for as offered / outside the offers (mine-offer-tag, from offerState on the app ctx) and each My-offers pill says when the day is already placed (data-placed)", () => {
       const ms = src.slice(src.indexOf("{/* ================ MY SCHEDULE (Prompt 6 Slice G) ================ */}"), src.indexOf("{/* ================ TIME OFF & TRADES (Prompt 6 Slice G) ================ */}"));
@@ -14816,7 +14877,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes("{eastDetailsVisible && eastVacById[pid] && ("), "Mine's East card");
       assert.ok(src.includes("{eastDetailsVisible && eastVacPeople.length > 0 && (\n            <div style={css.card} data-testid=\"eastvac-timeoff\">"), "Time off's East card");
       assert.ok(!src.includes("My East (Davenport) vacations\" : \"") && !src.includes('isScheduler ? "East (Davenport) vacations" : "My East (Davenport) vacations"'), "no non-scheduler East title left");
-      assert.ok(src.includes("eastDetails={eastDetailsVisible}") && src.includes("const why = offerDayWhy(hard, { eastDetails: !!eastDetails });"), "the painter");
+      // pin moved deliberately 11/2: `let why`, and the as-if-offered ask passes the same East words option
+      assert.ok(src.includes("eastDetails={eastDetailsVisible}") && src.includes("let why = offerDayWhy(hard, { eastDetails: !!eastDetails });") && src.includes(": [], { eastDetails: !!eastDetails });"), "the painter");
       assert.ok(/function OfferPainterSheet\(\{[^}]*\beastDetails \}\)/.test(src), "the sheet's prop");
     });
     check("P31A3 pins: the scheduler's warning for the East person's own range (item 2) - eastVacationOwnWarnings over vacEastAway / timeOffRows / eastVacConflictRows, the scheduler's only; Setup > East feed, the Time off East card, the coverage strip's count (opens the panel) and the day editor's East lines", () => {

@@ -4285,7 +4285,7 @@ const OFFER_BLOCK_WORDS = {
   "east-busy": "East busy",
   "east-forecast-busy": "East forecast busy",
   "derived-lock": "your East/Silvis week",
-  "derived-lock-held": "your East/Silvis week",
+  "derived-lock-held": "a colleague's East/Silvis week", // another surgeon's derived slot (11/2: it read 'your', which it is not)
   "outside-window": "outside your window",
   "holiday-opt-out": "you opted out of this holiday",
   "backup-opt-out": "you opted out of backup",
@@ -4325,6 +4325,20 @@ function offerDayWhy(hard, opts) {
     else if (OFFER_CONFIRM_WORDS[core]) { out.codes.confirm.push(s); if (!out.confirm) out.confirm = OFFER_CONFIRM_WORDS[core]; }
   });
   return out;
+}
+// offerWhyIfOffered(why, hardIfOffered, opts) -> the painter's picture of one role once the block behind the pattern family shows
+// (11/2, Faraz "fix it"). eligibility() returns at its static layer, so a role whose hard list carries only confirm codes (the
+// weekday-pattern family a saved offer lifts) never named what an offer would still meet - a colleague's derived East week
+// (derived-lock-held), his own derived week for the other role (derived-lock): the painter showed the day paintable behind one
+// confirmation and greyed it only after the save. For such a role the painter asks eligibility again with { claim: true,
+// assumeOffer: true } and passes that hard list here: a BLOCK code there becomes the role's block (its words and codes; the
+// confirm words stay); anything else - no block behind, a block already, no confirm - returns `why` unchanged.
+// why = offerDayWhy(hard, opts) of the plain ask; opts as offerDayWhy (eastDetails).
+function offerWhyIfOffered(why, hardIfOffered, opts) {
+  if (!why || why.block || !why.confirm) return why;
+  const after = offerDayWhy(hardIfOffered, opts);
+  if (!after.block) return why;
+  return { block: after.block, confirm: why.confirm, codes: { block: after.codes.block.slice(), confirm: why.codes.confirm.slice() } };
 }
 // offerPeriodOpen(period, today) -> true while a SURGEON may still enter offers / choose a mode for the period: its
 // status is 'upcoming' (absent = upcoming) and offers_close_at (alias offersCloseAt) is after today - the same
@@ -7250,7 +7264,7 @@ if (typeof module !== "undefined" && module.exports) {
     holidayPlanSource, holidayPlanNote, holidayPlanDefaultYear, holidayPlanInputs, holidayPlanCheck, holidayPlanSwapOptions, holidayPlanRecheck, holidayPlanAcceptRows, holidayPlanWrittenCheck, holidayPlanConflictLines, holidayPlanUnitLines, holidayPlanNoticeChanges, holidayPlanHeldNotices,
     periodFor, offerStatus, offerTimeline, opEndOfPeriod, OP_PERIOD_DEFAULTS,
     offerPoolIds, offerRollcall, offerCronPlan,
-    offersDraftDiff, offerDayWhy, offerNextPeriod, offerPeriodOpen, offerRulesWords, suMonthlyCapReading, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
+    offersDraftDiff, offerDayWhy, offerWhyIfOffered, offerNextPeriod, offerPeriodOpen, offerRulesWords, suMonthlyCapReading, OFFER_BLOCK_WORDS, OFFER_CONFIRM_WORDS,
     NO_PRIMARY_RANGE_WORDS, NO_PRIMARY_HELD_WORDS, noPrimaryDays, offerPaintCell, noPrimaryDraftDiff, offersAuditSummary, noPrimaryErrorWords,
     suRulesSummary, suRulesUnknownKeys, suHnOtherDayRules, suSumGoverned, suSumDays, suSumMonths, suSumPattern, SU_SUM_KNOWN, SU_SUM_WEIGHT_DEFAULTS,
     SU_RULE_GROUPS, SU_RULE_FIELDS, SU_RULE_JSON_ONLY, suRuleField, suRuleFieldsUsed, suRuleFieldHasKeys, suRuleFieldAdd, suRuleFieldRemove, suRulesJsonOnly, suPatternWithKind,

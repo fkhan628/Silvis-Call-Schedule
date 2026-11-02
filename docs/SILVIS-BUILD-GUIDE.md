@@ -1512,6 +1512,11 @@ hard-never-weekday, weekday-not-allowed, recurring-unavailable, not-recurring-av
 weekend-block-only, day-before-aledo, whitelist-month, outside-available-weeks) never greys: painting such a day asks
 once per batch ("Tuesday 11/3 is normally not one of your primary call days (never a call day by your rules) - offer it
 anyway?") because the saved offer is a dated row that lifts the pattern (item W); obligations are never liftable here.
+11/2 (Faraz: "fix it"): `eligibility()` returns at its static layer, so a role whose hard list holds only that family is
+asked again with `{ claim: true, assumeOffer: true }` (as if offered - the same hard list a saved offer gives, data-layer U3a)
+and `helpers.offerWhyIfOffered` makes a block behind the pattern the role's block before anything is painted: a colleague's
+derived East week (derived-lock-held, worded "a colleague's East/Silvis week" - it read "your") greyed the day only after the
+save before (time travel to 1/4/2027: Khan's Tue 2/2 behind Fierce's derived week).
 Every other hard reason (caps, runs, a lock, the other role, `not-offered` — hence `{ claim: true }`) is the generator's
 business and neither greys nor asks. `test/data-layer.test.js` section F checks every code in `rules.HARD_REASONS` is
 classified on purpose **and proves the split from a real seed ctx**: every confirm code the first period raises (seven)

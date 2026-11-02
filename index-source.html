@@ -9786,7 +9786,15 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           const hard = elig ? elig.hard.filter(c => !(role === "primary" && c === "backup-only-row")) : [];
           // Prompt 31 Part A (A3, decision 11): the East block words (East busy / forecast busy / East-Silvis week) read "not available"
           // to everyone but the scheduler - a surgeon painting his own days, the office relaying them (eastDetails = eastDetailsVisible)
-          const why = offerDayWhy(hard, { eastDetails: !!eastDetails });
+          let why = offerDayWhy(hard, { eastDetails: !!eastDetails });
+          // 11/2 (Faraz: fix it): a role holding only the weekday-pattern family (confirm codes - the saved offer lifts them) is
+          // asked again as if offered: eligibility() returns at the pattern block, so a block behind it (a colleague's derived
+          // East week, his own derived week) greyed the day only after the save - now it shows before anything is painted
+          if (!why.block && why.confirm) {
+            let eligO = null;
+            try { eligO = eligibility(ctx, ds, role, person.id, { claim: true, assumeOffer: true }); } catch (e) { console.warn("Paint offers: eligibility (as if offered) threw for " + ds + " " + role, e); }
+            why = offerWhyIfOffered(why, eligO ? eligO.hard.filter(c => !(role === "primary" && c === "backup-only-row")) : [], { eastDetails: !!eastDetails });
+          }
           row.block[role] = why.block; row.confirm[role] = why.confirm;
         });
       }

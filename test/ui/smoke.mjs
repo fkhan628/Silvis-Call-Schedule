@@ -7431,18 +7431,18 @@ try {
       await page.waitForTimeout(3300);
       if (await page.$("[data-testid=ofp-saved]")) fail("Offer painter: the saved note did not clear after 3 s"); else ok("Offer painter: the saved note cleared after 3 s");
       // tap-again on a saved day drafts a clear; Close on a dirty draft confirms (dismissed = the sheet stays); Discard restores.
-      // 11/2 (time travel 1/4/2027 + fix-checks): the saved d1 2/2 read 'saved' / 'backup only - your East/Silvis week' after the save
-      // - a PRIMARY-only block the pre-save picture hid behind Khan's Tuesday confirm (eligibility() returns at the pattern block; the
-      // saved offer lifts the pattern and Fierce's derived week shows - an app question for Faraz). The Primary tap is a no-op there,
-      // so that diagnosed case (a primary confirm code before the save) takes the Clear brush; a 'blocked' (grey) saved row with
-      // data-clearable takes it too (a defensive path no observed date takes); any other post-save primary block FAILs, naming it
+      // 11/2 (time travel 1/4/2027): the saved d1 2/2 read 'saved' / 'backup only - your East/Silvis week' after the save - a PRIMARY
+      // block the painter's picture hid behind Khan's Tuesday confirm (eligibility() returned at the pattern block). FIXED in the app
+      // the same day (Faraz): the painter asks a confirm-only role again as if offered, so such a day shows its block before anything
+      // is painted and is never picked as free here. A saved d1 that reads 'backup only - ...' now FAILs (the fix regressed, or a new
+      // block appeared); a 'blocked' (grey) saved row with data-clearable is cleared with the Clear brush (a defensive path)
       const d1Cell = await page.$eval(`[data-testid=ofp-day][data-day="${d1}"]`, el => ({ state: el.getAttribute("data-state"), why: el.getAttribute("data-why") || "", clearable: el.getAttribute("data-clearable") }));
-      const d1Masked = /^backup only - /.test(d1Cell.why) && confirmCodesOf(d1, "primary").length > 0;
-      const d1Brush = d1Cell.state === "blocked" || d1Masked ? "clear" : "primary";
+      const d1Masked = /^backup only - /.test(d1Cell.why) && confirmCodesOf(d1, "primary").length > 0; // the 11/2 masking, fixed in the app
+      const d1Brush = d1Cell.state === "blocked" ? "clear" : "primary";
       if (d1Cell.state === "blocked" && d1Cell.clearable !== "1") fail(`Offer painter: the saved ${d1} reads blocked and not clearable after the save ('${d1Cell.why}') - the tap-again / Close / Discard step cannot run`);
-      else if (/^backup only - /.test(d1Cell.why) && !d1Masked) fail(`Offer painter: the saved ${d1} reads '${d1Cell.why}' after the save although it read free with no primary confirm before it - a just-saved primary offer the painter now blocks`);
+      else if (/^backup only - /.test(d1Cell.why)) fail(`Offer painter: the saved ${d1} reads '${d1Cell.why}' after the save although the painter showed it free before${d1Masked ? " behind the confirm " + confirmCodesOf(d1, "primary").join(", ") + " - the 11/2 masking is back (the painter must ask a confirm-only role as if offered)" : " with no primary confirm"} - a just-saved primary offer the painter now blocks`);
       else {
-        if (d1Brush === "clear") console.log(`     (Offer painter: the saved ${d1} ${d1Masked ? "read free before the save (confirm " + confirmCodesOf(d1, "primary").join(", ") + ") and '" + d1Cell.why + "' after it - the pattern masked a primary block" : "reads blocked after the save ('" + d1Cell.why + "')"}; Primary cannot draft there, so the tap-again step clears it with the Clear brush)`);
+        if (d1Brush === "clear") console.log(`     (Offer painter: the saved ${d1} reads blocked after the save ('${d1Cell.why}'); Primary cannot draft there, so the tap-again step clears it with the Clear brush)`);
         await page.click(`[data-testid=ofp-brush-${d1Brush}]`); await tap(d1);
         const clearState = await stateOf(d1);
         // 11/2: an unexpected skip (the tap drafted nothing) FAILs at once with the cell and the painter's hint, which names the skip -
