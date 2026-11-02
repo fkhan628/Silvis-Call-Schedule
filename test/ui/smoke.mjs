@@ -3050,9 +3050,14 @@ try {
   // Real downloads are captured and read back; the share page is re-opened
   // through the static server (test/ui/out is under ROOT) and the printable
   // view is the popup window.open produced. October 2026 is still showing.
-  // a Playwright timeout's first line names only the call ("page.click: Timeout 30000ms exceeded."); its call log names what it
-  // waited for - kept in brackets (11/2: a time-travel FAIL could not say which click hung)
-  const errLine = (e) => { const m = String(e && e.message || e).split("\n"); const w = m.find(l => /^\s*-\s*waiting for /.test(l)); return m[0] + (w ? " [" + w.trim().replace(/^-\s*/, "").slice(0, 160) + "]" : ""); };
+  // a Playwright timeout's first line names only the call ("page.click: Timeout 30000ms exceeded."); its call log (ANSI-dimmed
+  // lines) names what it waited for and the element's last state - kept in brackets (11/2: a time-travel FAIL could not say
+  // which click hung)
+  const errLine = (e) => {
+    const m = String(e && e.message || e).replace(/\x1b\[[0-9;]*m/g, "").split("\n");
+    const w = m.find(l => /^\s*-\s*waiting for /.test(l)), why = m.find(l => /element is not |intercepts pointer events|outside of the viewport|not attached/.test(l));
+    return m[0] + (w ? " [" + w.trim().replace(/^-\s*/, "").slice(0, 140) + (why ? "; " + why.trim().replace(/^-\s*/, "").slice(0, 80) : "") + "]" : "");
+  };
   await context.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
   const saveDownload = async (trigger) => {
     const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 8000 }), trigger()]);
