@@ -76,6 +76,11 @@
     .cal-os-short { display: none; }
     /* 10/30: the Open shifts board's role word - "Primary (TRAUMA)" on a wide screen, "Primary" on a phone (below) */
     .ob-role-short { display: none; }
+    /* item 1 (11/1, Faraz): the calendar's month controls. On a wide screen the title's wrapper and the pickers' wrapper are
+       display: contents - their children sit in the row exactly as before - and the phone's title toggle and caret are not
+       drawn; the phone block below makes prev / the title / next / Today one row of 44 px targets whose title opens the pickers. */
+    .cal-title, .cal-picks { display: contents; }
+    .cal-title-btn, .cal-caret { display: none; }
     /* 10/21 (Faraz: "put the people on vacation in the bottom of each day ... similar to how the Davenport calendar looks"):
        the vacation bar - one grey bar at the bottom of the day, the names inside (codes on a phone), joined to the next
        day's bar when the same people are off (cal-vac-l / cal-vac-r: it reaches into the cell's padding on that side). */
@@ -156,6 +161,30 @@
       .ob-role-short { display: inline; }
       /* 10/30: on a phone the scheduler's all-clear strip items (a count of 0) give way - counts above 0 and the dates stay */
       .cov-zero { display: none; }
+      /* item 1 (11/1, Faraz: "show the month on the first screen"): On call now opens the calendar card, compact on a phone -
+         "On call now:", the pills and Share on its first line ("(until 07:00 Dow)" and "today" give way: the strong's title and
+         the share text keep them), Share's 36 px tap target taking 28 px of that line (negative vertical margins, as
+         .moretoggle); the From 07:00 line, the group-call line and its rule sentence (Faraz 9/29) stay */
+      .ocn-banner { padding: 6px 8px !important; row-gap: 6px !important; }
+      .ocn-until, .ocn-share-long { display: none; }
+      .ocn-share { margin-top: -4px; margin-bottom: -4px; }
+      /* ... the month controls one row of 44 px targets - prev, the title (cal-month-toggle over it opens the month select and
+         the year field on a row of their own, cal-picks-open; a second tap closes them), next, Today - and the six code chips
+         + only OPEN one row (equal chips, 28 px at least: about 276 px, one row at 360 px) */
+      .cal-navrow, .cal-chips { flex: 1 1 100%; }
+      .cal-navbtn { min-height: 44px; min-width: 44px !important; }
+      .cal-navarrow { font-size: 18px !important; line-height: 1; }
+      .cal-title { display: flex; position: relative; flex: 1 1 0; min-width: 0; min-height: 44px; align-items: center; justify-content: center; }
+      .cal-title > :first-child { min-width: 0 !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .cal-caret { display: inline-block; flex-shrink: 0; }
+      .cal-title-btn { display: block; position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; }
+      .cal-picks { display: none; }
+      .cal-picks.cal-picks-open { display: flex; flex: 1 1 100%; gap: 6px; align-items: center; }
+      .cal-picks-open > select { flex: 1 1 auto; min-height: 44px; }
+      .cal-picks-open > input { min-height: 44px; font-size: 16px !important; }
+      .cal-chip { flex: 1 1 0; min-width: 28px; min-height: 44px; padding-left: 2px !important; padding-right: 2px !important; }
+      .cal-chip-all { min-height: 44px; }
+      .cal-onlyopen { min-height: 44px; margin-left: 0 !important; white-space: nowrap; }
       .cal-app { font-size: 9px; }
       /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
          tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
@@ -484,7 +513,8 @@ function CallSchedule() {
   useEffect(() => { setCalYearText(String(calYear)); }, [calYear]);
   const [calSurgeonFilters, setCalSurgeonFilters] = useState([]); // roster ids; [] = everyone (chips dim the rest)
   const [calOnlyOpen, setCalOnlyOpen] = useState(false);          // dim every day without an OPEN slot
-  const [editorDay, setEditorDay] = useState(null);               // "YYYY-MM-DD" while the day editor is open
+  const [calPickOpen, setCalPickOpen] = useState(false);          // item 1 (11/1): a phone's month select + year field, opened from the month title (a wide screen always shows them)
+  const [editorDay, setEditorDay] = useState(null);              // "YYYY-MM-DD" while the day editor is open
   const [editorFocus, setEditorFocus] = useState(null);           // "external" when the board's 'Outside cover' opened the editor (it focuses that input)
   // --- East feed inputs (read-only caches of the Davenport project; Setup's
   // East panel refreshes them in Slice E). A failed read keeps the previous
@@ -7862,6 +7892,16 @@ function CallSchedule() {
           // Review 9/27 Do first 1: while no schedule_days read has landed the day editor / summary would show the day as
           // OPEN (and a scheduler's edit there would later be written over the real row) - a cell tap says so instead.
           const openCellDay = (d) => { if (refuseUnreadDay()) return; setEditorDay(d); };
+          // Item 2 (Faraz 11/1, "your own days stand out"): the signed-in surgeon's own P / B pills wear a ring. mySurgeon is the
+          // profile's roster link - a surgeon, and the scheduler as Khan (s1); the office, a viewer, a follower and an APP have none,
+          // and ?public=1 is never signed in. The ring = the pill's own 1 px border recoloured + a boxShadow outside it (THEME
+          // mineRim / mineRing: one ink, 1 px, in light; a dark rim and a light ring, 1.5 px, in dark - the pill keeps its light tint
+          // in both themes): no pill grows (vis-001) and the 1-1.5 px fits the cell's 2 px phone padding (never clipped). Not orange
+          // (today, the over-soft badge), not violet or dashed (a Generate preview). The scheduler's padlock after his own locked pill
+          // keeps 2 px more room. The share page, the printable view, the ER panels and the feeds are built by helpers.js from the
+          // schedule alone - they never see who is looking.
+          const isMine = (h) => !isPublicMode && !!mySurgeon && h === mySurgeon;
+          const mineRing = { borderColor: T.mineRim, boxShadow: "0 0 0 " + (dk ? 1.5 : 1) + "px " + T.mineRing };
           const SlotLine = ({ role, day, holder, locked }) => {
             const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
             let body;
@@ -7872,7 +7912,7 @@ function CallSchedule() {
             else if (!holder && !slotIsOpen(day, holder, todayStr)) body = <span className="cal-pill cal-blank" aria-hidden="true">&nbsp;</span>;
             else if (!holder) body = <span className="cal-pill cal-open" style={{color:T.open,fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
             else if (isExt) { const ext = holder.slice(4); body = <span className="cal-pill cal-ext" title={ext + " (external cover, outside the roster)"} style={{color:dk?"#a0a8b0":"#6a7a88",fontStyle:"italic",background:dk?"#1e2a44":"#eef1f4",borderColor:dk?"#24406B":"#d8dee6"}}><span className="cal-name">{ext}</span><span className="cal-code">{ext.slice(0, 3).toUpperCase()}</span></span>; }
-            else { const c = colorOf(holder); body = <span className="cal-pill" title={nameOf(holder)} style={{background:c.tg,color:c.tx,borderColor:c.bd,borderStyle:c.dashed?"dashed":"solid"}}><span className="cal-name">{nameOf(holder)}</span><span className="cal-code">{codeOf(holder)}</span></span>; }
+            else { const c = colorOf(holder), mine = isMine(holder); body = <span className="cal-pill" data-mine={mine ? "1" : undefined} title={nameOf(holder)} style={{background:c.tg,color:c.tx,borderColor:c.bd,borderStyle:c.dashed?"dashed":"solid",...(mine ? mineRing : {}),...(mine && locked && isScheduler ? { marginRight: 2 } : {})}}><span className="cal-name">{nameOf(holder)}</span><span className="cal-code">{codeOf(holder)}</span></span>; }
             return <div className="cal-line"><span className="cal-role">{role}</span>{body}{locked && !isPublicMode && (isScheduler || (!holder && slotIsOpen(day, holder, todayStr))) ? <Padlock className="cal-lock" title={(role === "P" ? "Primary" : "Backup") + " locked"}/> : null}</div>;
           };
           const badge = (solid, color) => ({ display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:3,fontSize:9,fontWeight:800,lineHeight:1,
@@ -7891,8 +7931,48 @@ function CallSchedule() {
           const legendExt = legendExtH ? legendExtH.slice(4) : "";
           const legendHol = rulesCtx ? gridDays.map(gd => isHolidayDay(rulesCtx, gd)).filter(Boolean).map(u => u.name).filter((n, i, all) => all.indexOf(n) === i) : [];
           const legendVac = gridDays.some(gd => calVac(gd).length > 0);
+          // Item 2 (Faraz 11/1): the ring's legend line - only while this month's grid draws a ring (the rows the cells read: gridRow)
+          const legendMine = gridDays.some(gd => { const g = gridRow(gd); return isMine(dayHolder(g, "primary")) || isMine(dayHolder(g, "backup")); });
+          // Item 2: "Your next call" in On call now - Mine's next-call list (upcomingDaysOf: the published rows, never a preview) read
+          // against the shift on now (helpers.myNextCallLine); his own line only, and nothing before the schedule_days read landed
+          const myNext = !isPublicMode && mySurgeon && daysShown ? myNextCallLine(onCall, mySurgeon, upcomingDaysOf(mySurgeon, null), lastPublishedDay) : null;
           return <>
-          <div style={css.card}>
+          <div className="cal-card" style={css.card}>
+            {/* item 1 (11/1, Faraz): On call now opens the card on every width - the shift now, then the urgent offer notice, the next 60 days
+                and the month's controls right above the grid they drive (on a wide screen the banner sat between the controls and the grid;
+                the grid's top does not move). On a phone it is compact (.ocn-banner: "On call now:", the pills and Share on one line) and
+                keeps the group-call rule sentence (Faraz 9/29). */}
+            {/* On call now - the 07:00 -> 07:00 shift covering this moment (onCall = helpers.onCallNow); before 07:00 a second line names the pair from 07:00 */}
+            <div data-testid="today-banner" className="ocn-banner" data-shift-day={onCall.shiftDay} data-before-handoff={onCall.beforeHandoff ? "1" : "0"} style={{fontSize:12.5,color:dkText,background:dk?"#13294B":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <strong title={"The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"}>On call now<span className="ocn-until"> (until 07:00 {onCall.handoffDow})</span>:</strong>
+              {/* 10/30: a role letter never wraps away from its name on a phone */}
+              <span style={{whiteSpace:"nowrap"}}>P <HolderTag a={onCall.current} role="primary" small/></span>
+              <span style={{whiteSpace:"nowrap"}}>B <HolderTag a={onCall.current} role="backup" small/></span>
+              {/* 10/30: the share text repeated the pills; signed in it shows only when copying fails (the toast says long-press it) and
+                  rides in Share today's hover; ?public=1 (no Share button) keeps it. Hidden, not unmounted: its text stays readable */}
+              <span data-testid="today-banner-msg" hidden={!isPublicMode && !shareMsgShown} style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
+              {/* item 1 (11/1): on a phone the button reads "Share" (.ocn-share-long gives way) and its 36 px target takes 28 px of the first line */}
+              {!isPublicMode && <button data-testid="share-today" className="ocn-share" onClick={shareTonightMsg} disabled={!daysShown} title={daysShown ? "Shares: " + buildTonightMsg() : "The schedule has not loaded - nothing to share yet"} style={{...css.btn(false),padding:"4px 10px",fontSize:11,marginLeft:"auto",opacity:daysShown?1:0.5,cursor:daysShown?"pointer":"default"}}>{copied ? "Copied" : <>Share<span className="ocn-share-long"> today</span></>}</button>}
+              {onCall.beforeHandoff && (
+                <div data-testid="today-banner-next" style={{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",color:dkSubtext}}>
+                  <span>From 07:00:</span> <HolderTag a={onCall.next} role="primary" small/> <span>/</span> <HolderTag a={onCall.next} role="backup" small/>
+                </div>
+              )}
+              {/* Item 2 (Faraz 11/1): his own line - his next call on the published schedule after the shift on now (myNext above);
+                  a surgeon and the scheduler as Khan only, and only once the schedule_days read landed */}
+              {myNext && <div data-testid="my-next-call" data-kind={myNext.kind} data-next-day={myNext.next ? myNext.next.day : ""} data-next-role={myNext.next ? myNext.next.role : ""} style={{flexBasis:"100%",fontWeight:600}}>{myNext.text}</div>}
+              {/* Group call (Faraz 9/29): who takes the clinic's patient calls now (groupCall = helpers.groupCallNow), then the rule sentence from the data; the name goes through HolderTag */}
+              {groupCall && (
+                <div data-testid="group-call" data-group-mode={groupCall.mode} data-group-day={groupCall.day} style={{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                  {groupCall.mode === "own"
+                    ? <><strong>Group call:</strong> <span>own patients until {groupCall.untilLabel} &middot; from {groupCall.untilLabel}:</span> <HolderTag a={groupCall.entry} role="primary" small/></>
+                    : <><strong>Group call now:</strong> <HolderTag a={groupCall.entry} role="primary" small/> <span>(Trauma primary)</span></>}
+                </div>
+              )}
+              {groupCall && <div data-testid="group-call-rule" style={{flexBasis:"100%",fontSize:11,lineHeight:1.4,color:dkSubtext}}>{groupCallRuleSentence(groupRules)}</div>}
+            </div>
+            {/* 9/27: the offer deadline notice on the Calendar - URGENT rows only (within groupRules.offerPeriods.noticeUrgentDaysBeforeClose, default 14); the full list is on Mine. Prompt 26 (9/30): the same heads-up words, every status */}
+            {offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}
             {/* Coverage at a glance (Prompt 11): every count links to its first day. */}
             {(() => {
               const covItem = (key, text, days, color) => {
@@ -7949,58 +8029,39 @@ function CallSchedule() {
               );
             })()}
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:10}}>
-              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                <button onClick={prevMonth} aria-label="Previous month" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&lsaquo;</button>
-                <span data-testid="cal-month" style={{fontSize:15,fontWeight:700,color:dkText,minWidth:150,textAlign:"center"}}>{MO[calMonth]} {calYear}</span>
-                <button onClick={nextMonth} aria-label="Next month" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&rsaquo;</button>
-                <button onClick={goToday} style={{...css.btn(false),padding:"5px 10px",fontSize:11}}>Today</button>
-                <select data-testid="cal-month-select" aria-label="Month" value={calMonth} onChange={e=>setCalMonth(Number(e.target.value))} style={{...inp,fontSize:12,padding:"4px 6px"}}>
-                  {MO.map((m,i) => <option key={m} value={i}>{m}</option>)}
-                </select>
-                <input data-testid="cal-year-input" aria-label="Year" type="number" inputMode="numeric" min="2020" max="2100" value={calYearText}
-                  onChange={e=>{ const t = e.target.value; setCalYearText(t); const y = Number(t); if (/^\d{4}$/.test(t) && y >= 2020 && y <= 2100) setCalYear(y); }}
-                  onBlur={()=>setCalYearText(String(calYear))}
-                  onKeyDown={e=>{ if (e.key === "Enter") { e.preventDefault(); setCalYearText(String(calYear)); e.currentTarget.blur(); } }}
-                  style={{...inp,width:78,fontSize:12,padding:"4px 6px"}}/>
+              <div className="cal-navrow" style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                <button onClick={prevMonth} aria-label="Previous month" className="cal-navbtn cal-navarrow" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&lsaquo;</button>
+                {/* item 1 (11/1): on a phone the title is a 44 px tap target (cal-month-toggle over it) that opens the month select and the
+                    year field on a row of their own (cal-picks); a wide screen shows them in this row always (both wrappers are display:
+                    contents there). cal-month's own text stays "Month Year" - the smoke reads it. */}
+                <span className="cal-title">
+                  <span data-testid="cal-month" style={{fontSize:15,fontWeight:700,color:dkText,minWidth:150,textAlign:"center"}}>{MO[calMonth]} {calYear}</span>
+                  <span className="cal-caret" aria-hidden="true" style={{width:0,height:0,borderLeft:"4px solid transparent",borderRight:"4px solid transparent",borderTop:"5px solid " + dkSubtext,marginLeft:6}}/>
+                  <button type="button" data-testid="cal-month-toggle" className="cal-title-btn" aria-controls="cal-picks" aria-expanded={calPickOpen} aria-label="Choose month and year" onClick={()=>setCalPickOpen(o => !o)} style={{background:"transparent",border:"none",padding:0,cursor:"pointer"}}/>
+                </span>
+                <button onClick={nextMonth} aria-label="Next month" className="cal-navbtn cal-navarrow" style={{...css.btn(false),minWidth:40,padding:"5px 10px"}}>&rsaquo;</button>
+                <button onClick={goToday} data-testid="cal-today" className="cal-navbtn" style={{...css.btn(false),padding:"5px 10px",fontSize:11}}>Today</button>
+                <div id="cal-picks" className={"cal-picks" + (calPickOpen ? " cal-picks-open" : "")}>
+                  <select data-testid="cal-month-select" aria-label="Month" value={calMonth} onChange={e=>setCalMonth(Number(e.target.value))} style={{...inp,fontSize:12,padding:"4px 6px"}}>
+                    {MO.map((m,i) => <option key={m} value={i}>{m}</option>)}
+                  </select>
+                  <input data-testid="cal-year-input" aria-label="Year" type="number" inputMode="numeric" min="2020" max="2100" value={calYearText}
+                    onChange={e=>{ const t = e.target.value; setCalYearText(t); const y = Number(t); if (/^\d{4}$/.test(t) && y >= 2020 && y <= 2100) setCalYear(y); }}
+                    onBlur={()=>setCalYearText(String(calYear))}
+                    onKeyDown={e=>{ if (e.key === "Enter") { e.preventDefault(); setCalYearText(String(calYear)); e.currentTarget.blur(); } }}
+                    style={{...inp,width:78,fontSize:12,padding:"4px 6px"}}/>
+                </div>
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+              <div className="cal-chips" style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
                 {activeSurgeons.map(s => { const on = calSurgeonFilters.includes(s.id); return (
-                  <button key={s.id} data-filter={s.code} aria-pressed={on} title={"Show " + s.name + (on ? " (on)" : "")} onClick={()=>toggleCalFilter(s.id)} style={chipStyle(on, colorOf(s.id))}>{s.code}</button>
+                  <button key={s.id} data-filter={s.code} className="cal-chip" aria-pressed={on} title={"Show " + s.name + (on ? " (on)" : "")} onClick={()=>toggleCalFilter(s.id)} style={chipStyle(on, colorOf(s.id))}>{s.code}</button>
                 ); })}
-                {calSurgeonFilters.length > 0 && <button onClick={()=>setCalSurgeonFilters([])} style={{...css.btn(false),padding:"3px 8px",fontSize:11}}>All</button>}
-                <label style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:dkSubtext,cursor:"pointer",marginLeft:4}}>
+                {calSurgeonFilters.length > 0 && <button className="cal-chip-all" onClick={()=>setCalSurgeonFilters([])} style={{...css.btn(false),padding:"3px 8px",fontSize:11}}>All</button>}
+                <label className="cal-onlyopen" style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:dkSubtext,cursor:"pointer",marginLeft:4}}>
                   <input type="checkbox" data-testid="cal-only-open" checked={calOnlyOpen} onChange={e=>setCalOnlyOpen(e.target.checked)}/> only OPEN
                 </label>
               </div>
             </div>
-
-            {/* On call now - the 07:00 -> 07:00 shift covering this moment (onCall = helpers.onCallNow); before 07:00 a second line names the pair from 07:00 */}
-            <div data-testid="today-banner" data-shift-day={onCall.shiftDay} data-before-handoff={onCall.beforeHandoff ? "1" : "0"} style={{fontSize:12.5,color:dkText,background:dk?"#13294B":"#f8f9fb",border:"1px solid " + dkCardBorder,borderRadius:6,padding:"6px 10px",marginBottom:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-              <strong title={"The " + fmtMD(onCall.shiftDay) + " shift, 07:00 " + ttDow(onCall.shiftDay) + " to 07:00 " + onCall.handoffDow + " (Central)"}>On call now (until 07:00 {onCall.handoffDow}):</strong>
-              {/* 10/30: a role letter never wraps away from its name on a phone */}
-              <span style={{whiteSpace:"nowrap"}}>P <HolderTag a={onCall.current} role="primary" small/></span>
-              <span style={{whiteSpace:"nowrap"}}>B <HolderTag a={onCall.current} role="backup" small/></span>
-              {/* 10/30: the share text repeated the pills; signed in it shows only when copying fails (the toast says long-press it) and
-                  rides in Share today's hover; ?public=1 (no Share button) keeps it. Hidden, not unmounted: its text stays readable */}
-              <span data-testid="today-banner-msg" hidden={!isPublicMode && !shareMsgShown} style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>
-              {!isPublicMode && <button data-testid="share-today" onClick={shareTonightMsg} disabled={!daysShown} title={daysShown ? "Shares: " + buildTonightMsg() : "The schedule has not loaded - nothing to share yet"} style={{...css.btn(false),padding:"4px 10px",fontSize:11,marginLeft:"auto",opacity:daysShown?1:0.5,cursor:daysShown?"pointer":"default"}}>{copied ? "Copied" : "Share today"}</button>}
-              {onCall.beforeHandoff && (
-                <div data-testid="today-banner-next" style={{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",color:dkSubtext}}>
-                  <span>From 07:00:</span> <HolderTag a={onCall.next} role="primary" small/> <span>/</span> <HolderTag a={onCall.next} role="backup" small/>
-                </div>
-              )}
-              {/* Group call (Faraz 9/29): who takes the clinic's patient calls now (groupCall = helpers.groupCallNow), then the rule sentence from the data; the name goes through HolderTag */}
-              {groupCall && (
-                <div data-testid="group-call" data-group-mode={groupCall.mode} data-group-day={groupCall.day} style={{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                  {groupCall.mode === "own"
-                    ? <><strong>Group call:</strong> <span>own patients until {groupCall.untilLabel} &middot; from {groupCall.untilLabel}:</span> <HolderTag a={groupCall.entry} role="primary" small/></>
-                    : <><strong>Group call now:</strong> <HolderTag a={groupCall.entry} role="primary" small/> <span>(Trauma primary)</span></>}
-                </div>
-              )}
-              {groupCall && <div data-testid="group-call-rule" style={{flexBasis:"100%",fontSize:11,lineHeight:1.4,color:dkSubtext}}>{groupCallRuleSentence(groupRules)}</div>}
-            </div>
-            {/* 9/27: the offer deadline notice on the Calendar - URGENT rows only (within groupRules.offerPeriods.noticeUrgentDaysBeforeClose, default 14); the full list is on Mine. Prompt 26 (9/30): the same heads-up words, every status */}
-            {offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}
             {!loaded && <p style={muted}>Loading schedule</p>}
             {loaded && !daysReadOk && <p data-testid="cal-days-unread" style={{...muted,fontStyle:"italic",marginBottom:8}}>Schedule not loaded - the calendar shows no one's call until it loads (see Retry above).</p>}
             {previewGen && (
@@ -8111,6 +8172,8 @@ function CallSchedule() {
               <span><span style={{color:T.open,fontWeight:800}}>OPEN</span> = nobody assigned (today onward)</span>
               {/* 10/30: the lines below show only while this month's grid draws their mark (the external cover by its own name); the
                   weekend tint, today's outline and the scheduler's editing note have no line - the grid shows them plainly */}
+              {/* Item 2 (Faraz 11/1): his own pill, ringed, as the swatch - only while the grid draws a ring (legendMine) */}
+              {legendMine && (() => { const c = colorOf(mySurgeon); return <span data-testid="legend-mine" style={{display:"inline-flex",alignItems:"center",gap:4}}><span className="cal-pill" style={{background:c.tg,color:c.tx,borderStyle:c.dashed?"dashed":"solid",...mineRing}}><span className="cal-name">{nameOf(mySurgeon)}</span><span className="cal-code">{codeOf(mySurgeon)}</span></span> = you on call</span>; })()}
               {legendExt && <span data-testid="legend-ext"><span style={{fontStyle:"italic"}}>{legendExt}</span> = external cover</span>}
               {!isPublicMode && (isScheduler || gridDays.some(gd => { const g = schedule[gd]; return !!g && slotIsOpen(gd, null, todayStr) && ((g.primaryLocked && !dayHolder(g, "primary")) || (g.backupLocked && !g.backup)); })) && <span data-testid="legend-lock" style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot{isScheduler ? "" : " (ask the scheduler)"}</span>}
               {/* Item E2 (9/25): no "E East-derived week" / "F East forecast" line - the grid draws neither badge any more */}

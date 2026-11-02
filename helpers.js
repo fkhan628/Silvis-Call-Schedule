@@ -219,6 +219,29 @@ function onCallNowMsg(view, nameOf, loaded, daysRead) {
   if (v.beforeHandoff) msg += `; from 07:00: ${pair(v.next)}`;
   return msg;
 }
+// myNextCallLine(view, me, upcoming, through) -> the On call now banner's own line for the signed-in surgeon (Faraz 11/1,
+// item 2), or null (no roster id, no clock reading). view = onCallNow(...) ({ shiftDay, calendarDay, current }); me = his roster
+// id (the profile's person_id - a surgeon, the scheduler as Khan); upcoming = the days he holds from today on, sorted, as
+// [{ day, role }] (index-source.html upcomingDaysOf(me, null) - Mine's next-call list: the published rows, never a Generate
+// preview); through = the published block's last day (lastPublishedDay) or null. Read against the SHIFT clock: the shift on
+// now is never his "next" - after 07:00 today's day IS the shift on now; before 07:00 a day he holds today starts at 07:00.
+// Names nobody else, no contact data, no East word. Pure.
+//   { kind: "next", role, next, text: "Your next call: Backup Thu 11/5 (in 4 days)" } - "(tomorrow)"; before 07:00 "(today, from 07:00)"
+//   { kind: "now",  role, next, text: "You're on call now - next: Primary Fri 11/6 (tomorrow)" }
+//                                   ("You're on call now - no later call published through 1/3" when none follows)
+//   { kind: "none", role: null, next: null, text: "Your next call: none published through 1/3" } (no through: "... none published")
+function myNextCallLine(view, me, upcoming, through) {
+  if (!me || !view || typeof view !== "object" || !suIsIso(view.shiftDay) || !suIsIso(view.calendarDay)) return null;
+  const cur = view.current || null;
+  const nowRole = dayHolder(cur, "primary") === me ? "primary" : dayHolder(cur, "backup") === me ? "backup" : null;
+  const next = (Array.isArray(upcoming) ? upcoming : []).find(x => x && suIsIso(x.day) && x.day > view.shiftDay && (x.role === "primary" || x.role === "backup")) || null;
+  const when = (d) => { const n = suDaysBetween(view.calendarDay, d); return n <= 0 ? "today, from 07:00" : n === 1 ? "tomorrow" : "in " + n + " days"; };
+  const dayText = (x) => (x.role === "primary" ? "Primary" : "Backup") + " " + ttDow(x.day) + " " + fmtMD(x.day) + " (" + when(x.day) + ")";
+  const thru = suIsIso(through) ? " through " + fmtMD(through) : "";
+  if (nowRole) return { kind: "now", role: nowRole, next, text: "You're on call now - " + (next ? "next: " + dayText(next) : "no later call published" + thru) };
+  if (next) return { kind: "next", role: next.role, next, text: "Your next call: " + dayText(next) };
+  return { kind: "none", role: null, next: null, text: "Your next call: none published" + thru };
+}
 
 /* ═══ Group call (Faraz 9/29, Prompt 22 - current practice, written down) ═══
    On weekdays, from the 07:00 handoff until ownPatientsUntil (17:00), each provider takes their own patients' calls. On
@@ -7198,7 +7221,7 @@ if (typeof module !== "undefined" && module.exports) {
     suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
-    SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg,
+    SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg, myNextCallLine,
     GROUP_CALL_DEFAULTS, groupCallRules, groupCallTimeLabel, groupCallRuleSentence, groupCallNow, GROUP_CALL_SHARE_CSS, GROUP_CALL_PRINT_CSS,
     vacRangeLabel, groupVacationRows,
     normalizeWeekStart, weekdayLabels, monthGridDays, THEME_PREFS, themePrefFromStorage, themeIsDark, themeStorageWrites,

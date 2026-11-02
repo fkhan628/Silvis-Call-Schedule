@@ -3549,9 +3549,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const b0 = src.indexOf('<div data-testid="today-banner"'), b1 = src.indexOf("{offerNoticeBox(offerNotices.filter(n => n.urgent), \"calendar\")}", b0);
     assert.ok(b0 > 0 && b1 > b0, "the banner block");
     const banner = src.slice(b0, b1);
-    for (const w of ['data-shift-day={onCall.shiftDay}', "On call now (until 07:00 {onCall.handoffDow}):", '<HolderTag a={onCall.current} role="primary" small/>', '<HolderTag a={onCall.current} role="backup" small/>',
+    // pin moved deliberately 11/1: item 1 - "(until 07:00 <Dow>)" and Share's "today" are spans a phone hides (.ocn-until /
+    // .ocn-share-long); the words, the textContent and the wide screen are unchanged
+    for (const w of ['data-shift-day={onCall.shiftDay}', '>On call now<span className="ocn-until"> (until 07:00 {onCall.handoffDow})</span>:</strong>', '<HolderTag a={onCall.current} role="primary" small/>', '<HolderTag a={onCall.current} role="backup" small/>',
       // pin moved deliberately 10/30: the share text is hidden while signed in (shown when copying fails; kept on ?public=1)
-      "<span data-testid=\"today-banner-msg\" hidden={!isPublicMode && !shareMsgShown} style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>", "{onCall.beforeHandoff && (", 'data-testid="today-banner-next"', "<span>From 07:00:</span>", '<HolderTag a={onCall.next} role="primary" small/>', '<HolderTag a={onCall.next} role="backup" small/>', "{copied ? \"Copied\" : \"Share today\"}"]) assert.ok(banner.includes(w), "banner: " + w);
+      "<span data-testid=\"today-banner-msg\" hidden={!isPublicMode && !shareMsgShown} style={{fontFamily:mono,fontSize:11,color:dkSubtext}}>{buildTonightMsg()}</span>", "{onCall.beforeHandoff && (", 'data-testid="today-banner-next"', "<span>From 07:00:</span>", '<HolderTag a={onCall.next} role="primary" small/>', '<HolderTag a={onCall.next} role="backup" small/>', '{copied ? "Copied" : <>Share<span className="ocn-share-long"> today</span></>}']) assert.ok(banner.includes(w), "banner: " + w);
     assert.ok(!banner.includes("slotIsOpen") && !banner.includes("todayStr"), "the banner never asks slotIsOpen or the calendar day");
     assert.strictEqual(count("On call today"), 0, "the old 'On call today' wording remains");
     assert.strictEqual(count("Silvis call today"), 0, "the old share wording remains");
@@ -3583,6 +3585,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(/flexBasis:"100%"[^>]*flexWrap:"wrap"/.test(gc.slice(0, gc.indexOf(">"))), "the line wraps at a phone width");
     assert.ok(src.includes("  const buildTonightMsg = () => onCallNowMsg(onCall, nameOf, loaded, daysReadOk);") && !/groupCall/.test(H.onCallNowMsg.toString()), "Share today's text is unchanged (onCallNowMsg, no group call)");
     for (const f of ["buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildICSEvents", "generateICS"]) { assert.strictEqual(typeof H[f], "function", f + " is a helpers export (the pin must not skip a renamed builder)"); assert.ok(!/groupCall/.test(H[f].toString()), f + " does not read group call"); }
+  });
+  check("item 1 (11/1, Faraz): On call now opens the calendar card (then the urgent offer notice, the coverage strip, the month title, the grid); on a phone the banner is compact, the month controls are one row of 44 px targets whose title opens the month select and the year field, the six code chips + only OPEN one row - rules inside the two existing phone blocks, a wide screen laid out as before (display: contents)", () => {
+    const at = (s) => src.indexOf(s);
+    const order = [at('<div className="cal-card" style={css.card}>'), at('<div data-testid="today-banner" className="ocn-banner"'), at('{offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}'), at('<div data-testid="coverage-strip"'), at('<span data-testid="cal-month"'), at('<div className="cal-grid" data-testid="cal-grid"')];
+    assert.ok(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1])), "the card's order (card, banner, urgent notice, strip, month title, grid): " + JSON.stringify(order));
+    assert.strictEqual(count('data-testid="today-banner"'), 1, "one banner");
+    assert.ok(src.includes('>On call now<span className="ocn-until"> (until 07:00 {onCall.handoffDow})</span>:</strong>'), "the until words are a span a phone hides (the text is unchanged)");
+    assert.ok(src.includes('{!isPublicMode && <button data-testid="share-today" className="ocn-share" onClick={shareTonightMsg}') && src.includes('{copied ? "Copied" : <>Share<span className="ocn-share-long"> today</span></>}'), "Share: the phone class; 'today' a span a phone hides");
+    assert.ok(src.includes("  const [calPickOpen, setCalPickOpen] = useState(false);"), "the pickers start closed");
+    assert.ok(src.includes('<button type="button" data-testid="cal-month-toggle" className="cal-title-btn" aria-controls="cal-picks" aria-expanded={calPickOpen} aria-label="Choose month and year" onClick={()=>setCalPickOpen(o => !o)}'), "the title's toggle");
+    const pk0 = at('<div id="cal-picks" className={"cal-picks" + (calPickOpen ? " cal-picks-open" : "")}>'), pk = src.slice(pk0, src.indexOf("</div>", pk0));
+    assert.ok(pk0 > 0 && pk.includes('<select data-testid="cal-month-select"') && pk.includes('<input data-testid="cal-year-input"'), "the month select and the year field live in the pickers' wrapper");
+    assert.strictEqual(count('className="cal-chip"'), 1, "the chips' class (one map)");
+    const style = src.slice(src.indexOf("<style>"), src.indexOf("</style>"));
+    const ph1 = style.lastIndexOf("@media (max-width: 600px) {"), wideFrom = style.indexOf(".ob-role-short { display: none; }"), wideTo = style.indexOf("@media (max-height: 500px)");
+    const wide = style.indexOf(".cal-title, .cal-picks { display: contents; }"), hid = style.indexOf(".cal-title-btn, .cal-caret { display: none; }");
+    assert.ok(ph1 > 0 && wide > wideFrom && wide < wideTo && hid > wideFrom && hid < wideTo && wideTo < ph1, "a wide screen: the wrappers lay out as before, no toggle, no caret - outside every @media (after .ob-role-short, before the landscape block)");
+    for (const r of [".ocn-until, .ocn-share-long { display: none; }", ".ocn-share { margin-top: -4px; margin-bottom: -4px; }", ".cal-navbtn { min-height: 44px; min-width: 44px !important; }", ".cal-title { display: flex; position: relative; flex: 1 1 0;", ".cal-picks { display: none; }", ".cal-picks.cal-picks-open { display: flex;", ".cal-chip { flex: 1 1 0; min-width: 28px; min-height: 44px;", ".cal-onlyopen { min-height: 44px;"]) assert.ok(style.indexOf(r, ph1) > ph1, "the grid's phone block: " + r);
   });
   check("empty-schedule note and legend say OPEN is today onward", () => {
     assert.ok(src.includes("No schedule days in the database yet - every day from today shows OPEN."), "empty-schedule note");
@@ -3830,6 +3850,62 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('" Days with a held slot from the start on: " + laterText + " - locked slots stay as they are while \'respect locks\' is on; the open slots on those days are filled."'), "held-slot days phrase");
     assert.strictEqual(count("Locked days on file from the start on"), 0, "old 'Locked days on file' phrase remains");
     assert.ok(src.includes("genStart={genStart} genFirstOpenDay={genFirstOpenDay}"), "GeneratePanel receives genStart and genFirstOpenDay");
+  });
+
+  /* ---------------- I2. Item 2 (Faraz 11/1): your own days stand out - the ring, its legend line, "Your next call" ---------------- */
+  console.log("\n[I2] item 2 (Faraz 11/1): the signed-in surgeon's own pills wear a ring; a legend line while the month draws one; his next call in On call now");
+  check("I2 helpers.myNextCallLine: every case's words, read against the 07:00 shift clock (Central instants; CST = UTC-6 after 11/1)", () => {
+    assert.strictEqual(typeof H.myNextCallLine, "function", "helpers.myNextCallLine is exported");
+    const S = { "2026-11-04": { primary: "s3", backup: "s4" }, "2026-11-05": { primary: "s3", backup: "s2" }, "2026-11-06": { primary: "s2", backup: "s5" }, "2026-11-07": { primary: "s2", backup: "s5" }, "2026-11-12": { primary: "s2", backup: "s5" } };
+    // Mine's list (index-source upcomingDaysOf(me, null)): the days he holds from the calendar day on, sorted
+    const upOf = (me, from) => Object.keys(S).sort().filter(d => d >= from && (S[d].primary === me || S[d].backup === me)).map(d => ({ day: d, role: S[d].primary === me ? "primary" : "backup" }));
+    const all = [];
+    const t = (utc, me, through, kind, text) => { const v = H.onCallNow(S, new Date(utc)); const r = H.myNextCallLine(v, me, upOf(me, v.calendarDay), through); all.push(r); assert.ok(r && r.kind === kind && r.text === text, utc + " " + me + ": " + JSON.stringify(r)); return r; };
+    t("2026-11-01T18:00:00Z", "s2", "2027-01-03", "next", "Your next call: Backup Thu 11/5 (in 4 days)");
+    t("2026-11-04T18:00:00Z", "s2", null, "next", "Your next call: Backup Thu 11/5 (tomorrow)");
+    t("2026-11-05T11:30:00Z", "s2", null, "next", "Your next call: Backup Thu 11/5 (today, from 07:00)"); // 05:30: his shift starts at 07:00
+    const now = t("2026-11-05T14:00:00Z", "s2", null, "now", "You're on call now - next: Primary Fri 11/6 (tomorrow)"); // 08:00: the shift on now is his
+    assert.deepStrictEqual([now.role, now.next], ["backup", { day: "2026-11-06", role: "primary" }], "the role he is on now and the next day");
+    t("2026-11-07T09:00:00Z", "s2", null, "now", "You're on call now - next: Primary Sat 11/7 (today, from 07:00)"); // 03:00 Sat: Fri's shift, Sat's from 07:00
+    t("2026-11-07T14:00:00Z", "s2", null, "now", "You're on call now - next: Primary Thu 11/12 (in 5 days)");
+    t("2026-11-12T14:00:00Z", "s2", "2027-01-03", "now", "You're on call now - no later call published through 1/3");
+    t("2026-11-13T11:30:00Z", "s2", "2027-01-03", "now", "You're on call now - no later call published through 1/3"); // 05:30 Fri: still Thu's shift
+    t("2026-11-13T18:00:00Z", "s2", "2027-01-03", "none", "Your next call: none published through 1/3");
+    t("2026-11-13T18:00:00Z", "s2", null, "none", "Your next call: none published");
+    const v = H.onCallNow(S, new Date("2026-11-13T18:00:00Z"));
+    assert.strictEqual(H.myNextCallLine(v, "s2", [null, { day: "x", role: "primary" }, { day: "2026-11-20", role: "other" }, { day: "2026-11-21", role: "backup" }], null).text, "Your next call: Backup Sat 11/21 (in 8 days)", "junk rows are skipped, never a throw");
+    assert.deepStrictEqual([H.myNextCallLine(v, "", [], null), H.myNextCallLine(v, null, [], null), H.myNextCallLine(null, "s2", [], null), H.myNextCallLine({}, "s2", [], null)], [null, null, null, null], "no roster id (the office, a viewer, a follower, an APP, ?public=1) or no clock reading: no line");
+    const ext = H.onCallNow({ "2026-11-05": { primary: null, backup: "s3", externalCover: "Locum" } }, new Date("2026-11-05T14:00:00Z"));
+    assert.strictEqual(H.myNextCallLine(ext, "Locum", [], null).kind, "none", "an external cover is never 'you'");
+    all.forEach(r => assert.ok(!/Khan|Burchett|Acton|Philip|Fierce|Sarkar|East|Davenport|DSG|@|[$]/.test(r.text), "his words only: " + r.text));
+  });
+  check("I2 source pins: SlotLine rings only the signed-in surgeon's own pill (isMine: his roster id, never ?public=1) with its own border + a box-shadow in THEME tokens; the legend line follows the drawn rings; the next-call line sits in On call now (signed-in surgeon only, after the read landed); the exports never see the viewer", () => {
+    assert.strictEqual(count("const isMine = (h) => !isPublicMode && !!mySurgeon && h === mySurgeon;"), 1, "one predicate: the profile's roster link, never ?public=1");
+    assert.strictEqual(count('const mineRing = { borderColor: T.mineRim, boxShadow: "0 0 0 " + (dk ? 1.5 : 1) + "px " + T.mineRing };'), 1, "the ring: the existing 1 px border recoloured + a box-shadow - no padding, width or outline (no pill grows: vis-001)");
+    const sl = src.slice(src.indexOf("          const SlotLine = ({ role, day, holder, locked }) => {"), src.indexOf("          const badge = (solid, color) =>"));
+    assert.ok(sl.includes("const c = colorOf(holder), mine = isMine(holder);") && sl.includes('data-mine={mine ? "1" : undefined}') && sl.includes("...(mine ? mineRing : {})"), "the roster pill reads isMine and wears the ring");
+    assert.ok(sl.includes("...(mine && locked && isScheduler ? { marginRight: 2 } : {})"), "the scheduler's padlock after his own locked pill keeps 2 px off the ring");
+    assert.strictEqual((sl.match(/mineRing/g) || []).length, 1, "only the roster pill wears it - never OPEN, the external cover, the blank past slot or a placeholder");
+    assert.strictEqual(count('const legendMine = gridDays.some(gd => { const g = gridRow(gd); return isMine(dayHolder(g, "primary")) || isMine(dayHolder(g, "backup")); });'), 1, "the legend's gate: the rows the cells read (gridRow - a preview overlaid), through the ring's own predicate");
+    const legend = src.slice(src.indexOf('<div className="cal-legend"'), src.indexOf('<Collapsible css={css} ck="cal_weekrows"'));
+    assert.ok(legend.includes('{legendMine && (() => { const c = colorOf(mySurgeon); return <span data-testid="legend-mine"') && legend.includes("...mineRing}}>") && legend.includes(" = you on call</span>; })()}"), "the legend line: his own pill, ringed, '= you on call'");
+    assert.ok(legend.indexOf('data-testid="legend-mine"') > legend.indexOf("= nobody assigned (today onward)"), "after the always-shown OPEN line, with the drawn-mark lines (10/30)");
+    assert.strictEqual(count("const myNext = !isPublicMode && mySurgeon && daysShown ? myNextCallLine(onCall, mySurgeon, upcomingDaysOf(mySurgeon, null), lastPublishedDay) : null;"), 1, "Mine's list (upcomingDaysOf: the published rows) against the shift on now; his own; never before the read landed");
+    const b0 = src.indexOf('<div data-testid="today-banner"'), b1 = src.indexOf('{offerNoticeBox(offerNotices.filter(n => n.urgent), "calendar")}', b0);
+    const banner = src.slice(b0, b1), m0 = banner.indexOf('{myNext && <div data-testid="my-next-call" data-kind={myNext.kind}');
+    assert.ok(m0 > banner.indexOf('data-testid="today-banner-next"') && m0 < banner.indexOf("{groupCall && ("), "the line: after the On call now pair (and From 07:00), before group call");
+    assert.ok(banner.includes("{myNext.text}</div>}"), "the helper's words, nothing added");
+    for (const f of ["generateShareHTML", "buildPrintableCalendarHTML", "buildErCallPanelsHTML", "buildErCallPanelsText", "buildErCallPanelsDocument", "buildICSEvents", "generateICS", "onCallNowMsg"]) assert.ok(!/mySurgeon|myNextCall|mineRing|mineRim|data-mine/.test(H[f].toString()), f + " reads who is looking");
+    for (const call of ["const buildSharePage = () => generateShareHTML(", "const html = buildPrintableCalendarHTML("]) { const at = src.indexOf(call); assert.ok(at > 0 && !/mySurgeon|isMine|mineRing/.test(src.slice(at, src.indexOf("\n", at))), call + " passes no viewer"); }
+  });
+  check("I2 tokens: THEME.light / THEME.dark mineRing + mineRim; the dark ring and rim are never a literal the dark style sheet repaints (the rim is a span's border-color - the sheet's color-substring match would repaint the pill text)", () => {
+    const TH = require(path.join(ROOT, "app-styles.js")).THEME;
+    assert.deepStrictEqual([TH.light.mineRing, TH.light.mineRim, TH.dark.mineRing, TH.dark.mineRim], ["#1F2A3A", "#1F2A3A", "#E6ECF5", "#0B1A33"]);
+    const REG = require(path.join(ROOT, "test", "ui", "theme-regions.js"));
+    for (const k of ["mineRing", "mineRim"]) assert.ok(!REG.DARK_SHEET.some(r => r.hex === TH.dark[k].toLowerCase()), "dark " + k + " " + TH.dark[k] + " is a literal the dark sheet repaints");
+    const sheet = src.slice(src.indexOf("{darkMode && <style>{`"), src.indexOf("`}</style>}"));
+    const rgb = (hex) => "rgb(" + [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", ") + ")";
+    assert.ok(sheet.length > 1000 && !sheet.includes("color: " + rgb(TH.dark.mineRim)) && !sheet.includes("color: " + rgb(TH.dark.mineRing)), "the dark sheet matches neither dark token");
   });
 
   /* ---------------- TH. theme pins (Prompt 12 items O.1-O.3 + R; O.4 superseded by R) ---------------- */

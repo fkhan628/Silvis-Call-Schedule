@@ -2077,6 +2077,17 @@ const loadWithRetry = async (pg, url, selector, timeout, label) => {
     }
   }
 };
+// item 1 (11/1): at <= 600 px the month select and the year field sit behind the month title - [data-testid=cal-month-toggle], a
+// 44 px button over it, opens them (cal-picks-open) and a second tap closes them; a wide page shows them in the row always (no
+// toggle). Playwright's selectOption / fill wait for a VISIBLE field, so every month pick that can run at <= 600 px opens them
+// first; closeCalPicks closes what it opened, so screenshots show the phone's first screen as a surgeon sees it.
+const openCalPicks = async (pg) => {
+  if (await pg.isVisible("[data-testid=cal-month-select]")) return false;
+  await pg.click("[data-testid=cal-month-toggle]");
+  await pg.waitForSelector("[data-testid=cal-month-select]", { state: "visible", timeout: 3000 });
+  return true;
+};
+const closeCalPicks = async (pg, opened) => { if (opened) await pg.click("[data-testid=cal-month-toggle]"); };
 const waitFor = async (predicate, timeoutMs, stepMs) => {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) { if (await predicate()) return true; await new Promise(r => setTimeout(r, stepMs || 100)); }
@@ -2103,6 +2114,14 @@ try {
   await page.waitForSelector("text=Synced", { timeout: 30000 }).catch(() => fail("header never reached 'Synced' (initial load did not complete)"));
   const unlinked = await page.$("[data-testid=unlinked-banner]");
   if (unlinked) fail("unlinked-account banner shown for a profile that HAS person_id s1"); else ok("no unlinked banner for the linked scheduler profile");
+  // item 1 (11/1): a wide page - On call now opens the calendar card; the month select and the year field show in the row (no
+  // title toggle, no caret) - the reveal is phone-only
+  try {
+    const w1 = await page.evaluate(() => { const b = document.querySelector("[data-testid=today-banner]"), c = b ? b.parentElement : null; const shown = (s) => { const e = document.querySelector(s); return !!e && e.getClientRects().length > 0; };
+      return { first: !!c && c.classList.contains("cal-card") && c.firstElementChild === b, select: shown("[data-testid=cal-month-select]"), year: shown("[data-testid=cal-year-input]"), toggle: shown("[data-testid=cal-month-toggle]"), caret: shown(".cal-caret") }; });
+    if (!w1.first || !w1.select || !w1.year || w1.toggle || w1.caret) fail("item 1 (1180): " + JSON.stringify(w1));
+    else ok("item 1 (1180): On call now opens the calendar card; the month select and the year field show in the row, no title toggle");
+  } catch (e) { fail("item 1 (1180): " + String(e && e.message || e).split("\n")[0]); }
 
   // Do first 3 (review 9/27): the today banner names the pair of shiftDayCentral(new Date()) (the page's helper), the
   // "From 07:00" line shows exactly before the handoff, and Share today's text says "now" (navigator.share stubbed to
@@ -2342,9 +2361,11 @@ try {
   // ---- Calendar helpers (Slice B/C/D) ----
   const showMonth = async (y, m0) => {
     await page.click('button[data-tab="calendar"]');
+    const picks = await openCalPicks(page); // item 1 (11/1): at <= 600 px the pickers open from the month title
     await page.selectOption("[data-testid=cal-month-select]", String(m0));
     if ((await page.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(y)) await page.fill("[data-testid=cal-year-input]", String(y));
     await page.waitForFunction(([y2, m2]) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === m2 + " " + y2; }, [String(y), ["January","February","March","April","May","June","July","August","September","October","November","December"][m0]], { timeout: 5000 });
+    await closeCalPicks(page, picks);
     await page.waitForTimeout(300);
   };
   const readCells = () => page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), b: e.getAttribute("data-backup"), ext: e.getAttribute("data-ext"), open: e.getAttribute("data-open"), text: e.textContent, badges: Array.from(e.querySelectorAll("[data-badge]")).map(x => x.getAttribute("data-badge")) })));
@@ -3229,6 +3250,10 @@ try {
     const SURG_JWT = `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: SURG_UID, role: "authenticated", email: "surgeon@example.com", exp: Math.floor(Date.now() / 1000) + 3600 })}.c2ln`;
     const sp = await context.newPage();
     watchPage(sp, "surgeon");
+    // Item 2 (Faraz 11/1): the schedule_days rows this page is SERVED (paged reads, merged by day) - "Your next call" is restated
+    // from them in Node (helpers.myNextCallLine), never from the live rows read up front (the shared route may differ from them)
+    const servedS2 = new Map();
+    sp.on("response", async (res) => { try { const u = new URL(res.url()); if (u.hostname !== SUPABASE_HOST || res.request().method() !== "GET" || res.status() < 200 || res.status() >= 300 || u.pathname !== "/rest/v1/schedule_days" || u.searchParams.get("day")) return; const b = await res.json(); if (Array.isArray(b)) b.forEach(r => { if (r && r.day) servedS2.set(String(r.day).slice(0, 10), r); }); } catch (e) {} });
     await sp.setViewportSize({ width: 390, height: 844 });
     await sp.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, SURG_JWT);
     await sp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
@@ -3263,9 +3288,11 @@ try {
         await sp.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
         await sp.click('button[data-tab="calendar"]');
         await sp.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
+        const spPicks = await openCalPicks(sp); // item 1 (11/1): at 390 px the pickers open from the month title
         await sp.selectOption("[data-testid=cal-month-select]", "10");
         if ((await sp.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2026") await sp.fill("[data-testid=cal-year-input]", "2026");
         await sp.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "November 2026"; }, null, { timeout: 10000 });
+        await closeCalPicks(sp, spPicks);
         await sp.waitForTimeout(300);
         const themeOn = await sp.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode") === "true" ? "dark" : "light"; } catch (e) { return "?"; } });
         const cellsS = await sp.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), p: e.getAttribute("data-primary"), ext: e.getAttribute("data-ext"), title: e.getAttribute("title") || "", badges: Array.from(e.querySelectorAll("[data-badge]")).map(x => x.getAttribute("data-badge")) })));
@@ -3278,6 +3305,84 @@ try {
         else if (eastCells.length || hoverCells.length) fail(`Item E (surgeon, 390 ${theme}): November 2026 still shows East information to a surgeon - badges on ${eastCells.map(c => c.day + ":" + c.badges.join("")).slice(0, 6).join(", ")}; 'East-derived:' hover on ${hoverCells.length} day(s)`);
         else if (/East-derived/.test(legendS) || /East forecast/.test(legendS)) fail(`Item E (surgeon, 390 ${theme}): the legend still carries the East lines: ${legendS.slice(0, 220)}`);
         else ok(`Item E (surgeon, 390 ${theme}): November 2026 grid has no E / F / f badge and no 'East-derived:' hover bit (${cellsS.length} cells, ${filledS} filled; ${novEastSummary}) and the legend has no 'East-derived' / 'East forecast' line`);
+        // item 1 (11/1): the surgeon's first screen at 390 px - On call now opens the calendar card with Share on its first line;
+        // prev / the month title / next / Today are one row of 44 px targets; the six code chips + only OPEN one row (at 360 px
+        // too); the title opens the month select and the year field (typed key by key, as vis-002 at 1180) and a second tap closes them
+        if (theme === "light") {
+          try {
+            const firstScreen = () => sp.evaluate(() => {
+              const q = (s) => document.querySelector(s);
+              const box = (el) => { if (!el || !el.getClientRects().length) return null; const b = el.getBoundingClientRect(); return { top: Math.round(b.top + scrollY), mid: Math.round((b.top + b.bottom) / 2 + scrollY), h: Math.round(b.height), w: Math.round(b.width) }; };
+              const banner = q("[data-testid=today-banner]"), card = banner ? banner.parentElement : null, only = q("[data-testid=cal-only-open]");
+              return { first: !!card && card.classList.contains("cal-card") && card.firstElementChild === banner && !!card.querySelector("[data-testid=cal-grid]"),
+                label: box(banner && banner.querySelector("strong")), share: box(q("[data-testid=share-today]")),
+                nav: ["button[aria-label='Previous month']", "[data-testid=cal-month-toggle]", "button[aria-label='Next month']", "[data-testid=cal-today]"].map(s => box(q(s))),
+                row: [...document.querySelectorAll("[data-filter]")].map(box).concat([box(only && only.parentElement)]),
+                picks: !!box(q("[data-testid=cal-month-select]")) && !!box(q("[data-testid=cal-year-input]")),
+                gridTop: (box(q("[data-testid=cal-grid]")) || {}).top, pageW: document.documentElement.scrollWidth };
+            });
+            const oneRow = (xs) => xs.length > 0 && xs.every(x => x && Math.abs(x.mid - xs[0].mid) <= 2);
+            const f1 = await firstScreen();
+            if (!f1.first) fail("item 1 (surgeon, 390): On call now is not the first element of the calendar card");
+            else if (!f1.label || !f1.share || Math.abs(f1.share.mid - f1.label.mid) > 4) fail(`item 1 (surgeon, 390): Share is not on the banner's first line (label ${JSON.stringify(f1.label)}, Share ${JSON.stringify(f1.share)})`);
+            else if (!oneRow(f1.nav) || f1.nav.some(b => b.h < 44 || b.w < 44)) fail("item 1 (surgeon, 390): prev / the title / next / Today are not one row of 44 px targets: " + JSON.stringify(f1.nav));
+            else if (f1.row.length !== 7 || !oneRow(f1.row) || f1.row.some(b => b.h < 44)) fail("item 1 (surgeon, 390): the six code chips and only OPEN are not one row of 44 px: " + JSON.stringify(f1.row));
+            else if (f1.picks) fail("item 1 (surgeon, 390): the month select / year field show before the title is tapped");
+            else if (f1.pageW > 392) fail(`item 1 (surgeon, 390): the page scrolls sideways (${f1.pageW})`);
+            else ok(`item 1 (surgeon, 390): On call now opens the card with Share on its first line; the month controls one 44 px row; the six chips + only OPEN one row; the grid starts at ${f1.gridTop} px`);
+            await sp.click("[data-testid=cal-month-toggle]");
+            await sp.click("[data-testid=cal-year-input]");
+            await sp.keyboard.press("Control+A");
+            await sp.keyboard.type("2027", { delay: 40 });
+            const typed = await sp.$eval("[data-testid=cal-month]", el => el.textContent.trim());
+            await sp.keyboard.press("Control+A");
+            await sp.keyboard.type("2026", { delay: 40 });
+            await sp.keyboard.press("Enter");
+            await sp.waitForFunction(() => document.querySelector("[data-testid=cal-month]").textContent.trim() === "November 2026", null, { timeout: 5000 });
+            const f2 = await firstScreen();
+            await sp.click("[data-testid=cal-month-toggle]");
+            const f3 = await firstScreen();
+            if (typed !== "November 2027" || !f2.picks || f3.picks) fail(`item 1 (surgeon, 390): the title should open the pickers (typing 2027 -> '${typed}', open ${f2.picks}) and a second tap close them (closed ${!f3.picks})`);
+            else ok("item 1 (surgeon, 390): the month title opens the month select + year field (typing 2027 key by key moves to November 2027), a second tap closes them");
+            await sp.setViewportSize({ width: 360, height: 780 });
+            await sp.waitForTimeout(250);
+            const f4 = await firstScreen();
+            if (f4.row.length !== 7 || !oneRow(f4.row) || !oneRow(f4.nav) || f4.pageW > 362) fail("item 1 (surgeon, 360): the chips + only OPEN or the month controls left one row: " + JSON.stringify({ row: f4.row, nav: f4.nav, pageW: f4.pageW }));
+            else ok("item 1 (surgeon, 360): the six chips + only OPEN and the month controls each stay one row");
+            await sp.setViewportSize({ width: 390, height: 844 });
+            await sp.waitForTimeout(250);
+          } catch (e) { fail("item 1 (surgeon, 390): " + String(e && e.message || e).split("\n")[0]); }
+        }
+        // Item 2 (Faraz 11/1) on Burchett's page (s2), 390 px, this theme: the ring on his own P / B pills and no other, in THEME
+        // tokens, inside its cell (nothing clipped, no pill grows - vis-001); the legend line with it; "Your next call" =
+        // helpers.myNextCallLine over the rows this page was served, at the page's clock (the app re-reads it every 30 s)
+        try {
+          const i2T = loadTheme().THEME[theme], i2Rgb = (hex) => "rgb(" + hexToRgb(hex).join(", ") + ")", spread = theme === "dark" ? 1.5 : 1;
+          const g2 = await sp.evaluate(() => Array.from(document.querySelectorAll("[data-testid=cal-grid] .cal-cell")).map(cell => {
+            const pills = Array.from(cell.querySelectorAll(".cal-line .cal-pill")), cr = cell.getBoundingClientRect(), l0 = cr.left + cell.clientLeft, t0 = cr.top + cell.clientTop;
+            return { day: cell.getAttribute("data-day"), p: cell.getAttribute("data-primary"), b: cell.getAttribute("data-backup"), mine: pills.map(x => x.getAttribute("data-mine") === "1"),
+              rings: pills.filter(x => x.getAttribute("data-mine") === "1").map(x => { const r = x.getBoundingClientRect(), cs = getComputedStyle(x); return { rim: cs.borderTopColor, shadow: cs.boxShadow, clipped: x.scrollWidth > x.clientWidth + 0.5, room: Math.min(r.left - l0, l0 + cell.clientWidth - r.right, r.top - t0, t0 + cell.clientHeight - r.bottom) }; }) };
+          }));
+          const wrongRing = g2.filter(c => c.mine.length !== 2 || c.mine[0] !== (c.p === "s2") || c.mine[1] !== (c.b === "s2")).map(c => `${c.day} P ${c.p || "-"} B ${c.b || "-"} ringed ${c.mine.join("/")}`);
+          const rings = g2.flatMap(c => c.rings.map(r => ({ day: c.day, ...r }))), wantShadow = i2Rgb(i2T.mineRing) + " 0px 0px 0px " + spread + "px";
+          const badRing = rings.filter(r => r.rim !== i2Rgb(i2T.mineRim) || r.shadow !== wantShadow || r.clipped || r.room < spread - 0.01);
+          const legendMine = !!(await sp.$("[data-testid=legend-mine]"));
+          if (wrongRing.length) fail(`Item 2 (surgeon, 390 ${theme}): the ring is not exactly on s2's own P / B pills: ${wrongRing.slice(0, 6).join("; ")}`);
+          else if (!rings.length) { if (legendMine) fail(`Item 2 (surgeon, 390 ${theme}): the legend says '= you on call' but the month rings no pill`); else console.log(`     (Item 2 (surgeon, 390 ${theme}): November 2026 holds no s2 day on the served rows - the ring is not exercised this run)`); }
+          else if (badRing.length) fail(`Item 2 (surgeon, 390 ${theme}): a ring is off its tokens (rim ${i2T.mineRim}, ${wantShadow}), clips its pill or reaches out of its cell: ${JSON.stringify(badRing.slice(0, 3))}`);
+          else if (!legendMine) fail(`Item 2 (surgeon, 390 ${theme}): ${rings.length} ringed pill(s) but no legend-mine line`);
+          else ok(`Item 2 (surgeon, 390 ${theme}): ${rings.length} pill(s) ringed - exactly s2's P / B days - in ${i2T.mineRim} + ${wantShadow}, none clipped, each ring inside its cell's padding box; the legend line shows with them`);
+          await sp.waitForFunction(() => { const el = document.querySelector("[data-testid=today-banner]"); return !!el && el.getAttribute("data-shift-day") === shiftDayCentral(new Date()); }, null, { timeout: 40000 }).catch(() => {});
+          const S2 = {}; servedS2.forEach((r, d) => { S2[d] = { primary: r.primary_id || null, backup: r.backup_id || null, externalCover: r.external_cover || null }; });
+          const expectAt = (ms) => { const v = HELPERS.onCallNow(S2, ms); return HELPERS.myNextCallLine(v, "s2", Object.keys(S2).sort().filter(d => d >= v.calendarDay && (S2[d].primary === "s2" || S2[d].backup === "s2")).map(d => ({ day: d, role: S2[d].primary === "s2" ? "primary" : "backup" })), HELPERS.suLastContiguousDay(S2)); };
+          const tNow = await sp.evaluate(() => Date.now());
+          const ln = await sp.$eval("[data-testid=today-banner]", el => { const m = el.querySelector("[data-testid=my-next-call]"); return m ? { text: m.textContent, kind: m.getAttribute("data-kind"), day: m.getAttribute("data-next-day") } : null; });
+          const wants = [expectAt(tNow), expectAt(tNow - 31000)].filter(Boolean);
+          if (!servedS2.size) fail(`Item 2 (surgeon, 390 ${theme}): no schedule_days answer was recorded - the next-call line cannot be restated`);
+          else if (!ln) fail(`Item 2 (surgeon, 390 ${theme}): no 'Your next call' line in On call now for a linked surgeon (expected '${wants.length ? wants[0].text : "?"}')`);
+          else if (!wants.some(w => w.text === ln.text && w.kind === ln.kind && (w.next ? w.next.day : "") === ln.day)) fail(`Item 2 (surgeon, 390 ${theme}): the line reads '${ln.text}' (${ln.kind} ${ln.day || "-"}), the served rows give '${wants.map(w => w.text).join("' / '")}'`);
+          else ok(`Item 2 (surgeon, 390 ${theme}): On call now reads '${ln.text}' = helpers.myNextCallLine over the ${servedS2.size} served day row(s)`);
+        } catch (e) { fail(`Item 2 (surgeon, 390 ${theme}): ` + errLine(e)); }
         await sp.screenshot({ path: path.join(OUT, `calendar-nov-2026-surgeon-390-${theme}.png`), fullPage: true });
       }
       ok("screenshots test/ui/out/calendar-nov-2026-surgeon-390-dark.png / -light.png");
@@ -3370,8 +3475,10 @@ try {
     const e3Month = async (pg, y, m0) => {
       if (await pg.$('button[data-tab="calendar"]')) await pg.click('button[data-tab="calendar"]');
       await pg.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
+      const e3Picks = await openCalPicks(pg); // item 1 (11/1): a no-op on a wide page; at <= 600 px the pickers open from the month title
       await pg.selectOption("[data-testid=cal-month-select]", String(m0));
       if ((await pg.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(y)) await pg.fill("[data-testid=cal-year-input]", String(y));
+      await closeCalPicks(pg, e3Picks);
       await pg.waitForFunction((t) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === t; }, E3_MONTHS[m0] + " " + y, { timeout: 8000 });
       await pg.waitForTimeout(300);
     };
@@ -3623,6 +3730,29 @@ try {
         // Prompt 22: the group-call line on this role's Calendar (the office roles were moved to Time off by the role probe)
         if (R.jwt) { await rp.click('button[data-tab="calendar"]').catch(() => {}); await rp.waitForSelector("[data-testid=today-banner]", { timeout: 8000 }).catch(() => {}); }
         await checkGroupCallBanner(rp, T);
+        // Item 2 (Faraz 11/1): the ring, its legend line and "Your next call" are a linked surgeon's own - the office, a viewer and
+        // ?public=1 (no roster id) show none of the three; Burchett (s2) and Khan as a surgeon (s1) read helpers.myNextCallLine over
+        // the page's OWN published rows (the rules context's schedule, found as e3Facts finds it)
+        try {
+          await rp.waitForFunction(() => { const el = document.querySelector("[data-testid=today-banner]"); return !!el && el.getAttribute("data-shift-day") === shiftDayCentral(new Date()); }, null, { timeout: 40000 }).catch(() => {});
+          const i2 = await rp.evaluate((me) => {
+            let ctx = null;
+            if (me) {
+              const rootEl = document.getElementById("root"), ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$")), hostRoot = ck ? rootEl[ck] : null;
+              const stack = hostRoot ? [(hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot] : []; let n = 0;
+              while (stack.length && !ctx && n++ < 500000) { const f = stack.pop(); if (!f) continue; if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } } if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child); }
+            }
+            const S = ctx ? ctx.schedule : null;
+            const wantAt = (ms) => { const v = onCallNow(S, ms); const w = myNextCallLine(v, me, Object.keys(S).sort().filter(d => d >= v.calendarDay && S[d] && (S[d].primary === me || S[d].backup === me)).map(d => ({ day: d, role: S[d].primary === me ? "primary" : "backup" })), suLastContiguousDay(S)); return w ? w.text : null; };
+            const el = document.querySelector("[data-testid=my-next-call]");
+            return { noCtx: !!me && !S, wants: S ? [wantAt(Date.now()), wantAt(Date.now() - 31000)] : [], got: el ? el.textContent : null, ring: document.querySelectorAll("[data-testid=cal-grid] [data-mine]").length, legend: !!document.querySelector("[data-testid=legend-mine]") };
+          }, R.pid || "");
+          if (!R.pid) { if (i2.ring || i2.legend || i2.got !== null) fail(`${T}: Item 2 - a page with no roster id shows the own-days marks (ring ${i2.ring}, legend ${i2.legend}, line ${JSON.stringify(i2.got)})`); else ok(`${T}: Item 2 - no ring, no '= you on call' legend line, no 'Your next call' (no roster id)`); }
+          else if (i2.noCtx) fail(`${T}: Item 2 - the rules context was not found on the page - the line cannot be restated`);
+          else if (!i2.wants.includes(i2.got)) fail(`${T}: Item 2 - 'Your next call' reads ${JSON.stringify(i2.got)}, the page's own rows give ${JSON.stringify(i2.wants[0])}`);
+          else if (i2.legend !== (i2.ring > 0)) fail(`${T}: Item 2 - the legend line (${i2.legend}) does not follow the rings drawn (${i2.ring})`);
+          else ok(`${T}: Item 2 - '${i2.got}'; ${i2.ring} ringed pill(s) this month, the legend line ${i2.legend ? "with them" : "absent with none"}`);
+        } catch (e) { fail(`${T}: Item 2 - ` + errLine(e)); }
         const facts = await e3Facts(rp, [E3_VAC_DAY]);
         if (facts.error) throw new Error("rules context: " + facts.error);
         // the coverage strip
@@ -4494,6 +4624,12 @@ try {
   if (!openPills.length) { const o = liveOpenBetween("2026-10-01", "2026-10-31"); if (o) fail("mobile 390px: no OPEN pill found in October 2026 although the live rows have an open slot on " + o); else console.log("     (mobile 390px: no open slot in October 2026 live - the OPEN pill pin has nothing to check)"); } else if (!openPills.every(p => p.text === "OPEN" && p.fits && p.line)) fail("mobile 390px: OPEN pill truncated: " + JSON.stringify(openPills.filter(p => !(p.fits && p.line)).slice(0, 3))); else ok(`mobile 390px: ${openPills.length} OPEN pill(s) render the full word`);
   const lineOverflow = await page.$$eval("[data-testid=cal-grid] .cal-line", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") : "?") + ":" + e.textContent + (e.querySelector("svg") ? "+lock" : "") + " " + e.scrollWidth + ">" + e.clientWidth; }));
   if (lineOverflow.length) fail(`mobile 390px: ${lineOverflow.length} P/B line(s) overflow their cell, e.g. ${lineOverflow.slice(0, 5).join(", ")}`); else ok("mobile 390px: no P/B line overflows its cell (padlock included)");
+  // Item 2 (Faraz 11/1): the scheduler is Khan (s1) - a padlock after his own (ringed) locked pill keeps clear of the ring: the
+  // pill's 2 px margin + the line's 1 px gap, so the 1 / 1.5 px ring never reaches the lock's box
+  const ringLock = await page.$$eval("[data-testid=cal-grid] .cal-pill[data-mine]", els => els.map(p => { const lk = p.parentElement.querySelector(".cal-lock"); const c = p.closest("[data-day]"); return lk ? { day: c ? c.getAttribute("data-day") : "?", gap: Math.round((lk.getBoundingClientRect().left - p.getBoundingClientRect().right) * 10) / 10 } : null; }).filter(Boolean));
+  if (ringLock.some(x => x.gap < 2.5)) fail(`mobile 390px: a padlock sits on the ring of the scheduler's own pill: ${JSON.stringify(ringLock.filter(x => x.gap < 2.5).slice(0, 4))}`);
+  else if (ringLock.length) ok(`mobile 390px: ${ringLock.length} own locked pill(s) of s1 keep their padlock ${Math.min(...ringLock.map(x => x.gap))}+ px off the pill (the ring takes 1 px)`);
+  else console.log("     (mobile 390px: no locked pill of s1 in October 2026 - the ring / padlock spacing is not exercised)");
   await page.screenshot({ path: path.join(OUT, "calendar-mobile.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-mobile.png");
   // ---- Prompt 11 mobile pass ----
@@ -7878,9 +8014,11 @@ try {
             const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
             const rpShowMonth = async () => {
               await rp.click('button[data-tab="calendar"]');
+              const rpPicks = await openCalPicks(rp); // item 1 (11/1): at 390 px the pickers open from the month title
               await rp.selectOption("[data-testid=cal-month-select]", String(mm - 1));
               if ((await rp.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(yy)) await rp.fill("[data-testid=cal-year-input]", String(yy));
               await rp.waitForFunction((want) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === want; }, MONTHS[mm - 1] + " " + yy, { timeout: 5000 });
+              await closeCalPicks(rp, rpPicks);
               await rp.waitForTimeout(300);
             };
             const cellHolder = () => rp.$eval(`[data-testid=cal-grid] .cal-cell[data-day="${mDay}"]`, (el, a) => el.getAttribute(a), cellAttr).catch(() => null);
@@ -11938,7 +12076,9 @@ try {
     const inactive = document.querySelector('button[data-tab="settings"]');
     // The per-surgeon .ics download buttons (Calendar tools card): roster pills rendered as buttons.
     const ics = Array.from(document.querySelectorAll("[data-testid^=ics-]:not([data-testid=ics-all])")).map(b => ({ code: b.getAttribute("data-testid").slice(4), color: cs(b, "color"), bg: cs(b, "backgroundColor"), border: cs(b, "borderTopStyle") }));
-    return { hdrBg: cs(hdr, "backgroundColor"), h1: cs(h1, "color"), todayBorder: today ? cs(today, "borderTopColor") : null, pills, open: open ? cs(open, "color") : null, tabUnderline: cs(active, "borderBottomColor"), tabColor: cs(active, "color"), inactiveTabColor: cs(inactive, "color"), ics, bodyBg: getComputedStyle(document.body).backgroundColor };
+    // Item 2 (Faraz 11/1): the scheduler's own (s1) pills wear the ring - its rim and shadow, per pill
+    const mine = Array.from(document.querySelectorAll("[data-testid=cal-grid] .cal-pill[data-mine]")).map(x => ({ rim: cs(x, "borderTopColor"), shadow: cs(x, "boxShadow") }));
+    return { hdrBg: cs(hdr, "backgroundColor"), h1: cs(h1, "color"), todayBorder: today ? cs(today, "borderTopColor") : null, pills, open: open ? cs(open, "color") : null, tabUnderline: cs(active, "borderBottomColor"), tabColor: cs(active, "color"), inactiveTabColor: cs(inactive, "color"), ics, bodyBg: getComputedStyle(document.body).backgroundColor, mine };
   }, todayCentral);
   const themeMod = loadTheme();
   const rgbOf = (hex) => "rgb(" + hexToRgb(hex).join(", ") + ")";
@@ -11981,6 +12121,11 @@ try {
       if (!pillIds.length) fail(`month ${theme}: no P pill with a roster holder in the shown month`);
       else if (wrongPills.length) fail(`month ${theme}: pills off the id-keyed table: ` + wrongPills.map(id => `${id} ${JSON.stringify(m.pills[id])}`).join("; "));
       else ok(`month ${theme}: ${pillIds.length} pill colour(s) match the id-keyed table - ` + pillIds.map(id => `${id} ${m.pills[id].color}`).join(", "));
+      const wantRing = rgbOf(themeMod.THEME[theme].mineRing) + " 0px 0px 0px " + (theme === "dark" ? "1.5px" : "1px");
+      const offRing = m.mine.filter(x => x.rim !== rgbOf(themeMod.THEME[theme].mineRim) || x.shadow !== wantRing);
+      if (!m.mine.length) console.log(`     (month ${theme}: no pill of s1 in the shown month - the own-day ring is not measured)`);
+      else if (offRing.length) fail(`month ${theme}: ${offRing.length} own-day ring(s) off THEME.${theme}.mineRim / mineRing (${wantRing}): ${JSON.stringify(offRing.slice(0, 3))}`);
+      else ok(`month ${theme}: ${m.mine.length} own-day ring(s) (s1, the scheduler as Khan) in THEME.${theme}.mineRim + ${wantRing}`);
       if (m.open && m.open !== (theme === "dark" ? "rgb(240, 96, 96)" : "rgb(185, 28, 28)")) fail(`month ${theme}: OPEN pill is ${m.open}, expected ${theme === "dark" ? "#F06060" : "#B91C1C"}`); else if (m.open) ok(`month ${theme}: OPEN pill ${m.open}`);
       const wantBody = theme === "dark" ? "rgb(11, 26, 51)" : "rgb(246, 248, 251)";
       if (m.bodyBg !== wantBody) fail(`month ${theme}: page background ${m.bodyBg}, expected ${wantBody}`); else ok(`month ${theme}: page background ${m.bodyBg}`);
@@ -12065,9 +12210,11 @@ try {
     const showM = async (pg) => {
       const calTab = await pg.$('button[data-tab="calendar"]'); // ?public=1 has no nav
       if (calTab) await calTab.click();
+      const pgPicks = await openCalPicks(pg); // item 1 (11/1): at 390 px the pickers open from the month title (?public=1 too)
       await pg.selectOption("[data-testid=cal-month-select]", String(NM.m - 1));
       if ((await pg.$eval("[data-testid=cal-year-input]", el => el.value)) !== String(NM.y)) await pg.fill("[data-testid=cal-year-input]", String(NM.y));
       await pg.waitForFunction((lab) => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === lab; }, MLABEL, { timeout: 8000 });
+      await closeCalPicks(pg, pgPicks);
       await pg.waitForTimeout(300);
     };
     const toMineM = async (pg) => {
@@ -12339,6 +12486,8 @@ try {
         else if (over.length) fail(`${P} 1 (${theme}): ${over.length} grid line(s) overflow their cell at 390 px: ${over.slice(0, 4).join(", ")}`);
         else if (!legend) fail(`${P} 1 (${theme}): the legend has no APP line although the month has APP days`);
         else ok(`${P} 1 (${theme}): the grid shows '${g10.text}' on ${D10} and ${D11} in ${wantColor}, no line overflows at 390 px, the legend explains it`);
+        const appI2 = await A.pg.evaluate(() => ({ ring: document.querySelectorAll("[data-testid=cal-grid] [data-mine]").length, legend: !!document.querySelector("[data-testid=legend-mine]"), line: !!document.querySelector("[data-testid=my-next-call]") }));
+        if (appI2.ring || appI2.legend || appI2.line) fail(`${P} 1 (${theme}): Item 2's own-days marks on an APP's page (no roster id): ${JSON.stringify(appI2)}`); else ok(`${P} 1 (${theme}): Item 2 - an APP gets no ring, no legend line and no 'Your next call'`);
         // fix/painter-dark-mode (10/3, spec H): at 390 px the NAME is measured, not only its line - the phone label (cal-app-code)
         // shows whole (nothing cut, no ellipsis) in place of the wide grid's name, Appleton and Applegate read apart ("P.App" /
         // "J.App"), and a WEEK with an APP line is never taller than the month's weeks without one (the row height holds). Review
@@ -13003,8 +13152,10 @@ try {
     // Item E (Faraz 9/24; Item E2 9/25): the public link gets the clean grid too - November 2026 (the month whose
     // derived / forecast days the scheduler's day editor was checked on above) carries no E / F / f badge, no
     // "East-derived:" hover bit and no East legend line.
+    const pubPicks = await openCalPicks(pub); // item 1 (11/1): a no-op on a wide page
     await pub.selectOption("[data-testid=cal-month-select]", "10");
     if ((await pub.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2026") await pub.fill("[data-testid=cal-year-input]", "2026");
+    await closeCalPicks(pub, pubPicks);
     await pub.waitForFunction(() => { const el = document.querySelector("[data-testid=cal-month]"); return !!el && el.textContent.trim() === "November 2026"; }, null, { timeout: 10000 });
     await pub.waitForTimeout(300);
     const pubNov = await pub.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), title: e.getAttribute("title") || "", badges: Array.from(e.querySelectorAll("[data-badge]")).map(x => x.getAttribute("data-badge")) })));
@@ -13288,8 +13439,10 @@ try {
       // ---- Prompt 16 B9 (c): at 390 px the fixed banner paints UNDER the day editor - its Save row stays tappable ----
       await p2.setViewportSize({ width: 390, height: 844 });
       await p2.click('button[data-tab="calendar"]');
+      const p2Picks = await openCalPicks(p2); // item 1 (11/1): at 390 px the pickers open from the month title
       await p2.selectOption("[data-testid=cal-month-select]", "9");
       if ((await p2.$eval("[data-testid=cal-year-input]", el => el.value)) !== "2026") await p2.fill("[data-testid=cal-year-input]", "2026");
+      await closeCalPicks(p2, p2Picks);
       await p2.waitForSelector('[data-day="2026-10-15"]', { timeout: 5000 });
       await p2.waitForTimeout(300);
       await p2.click('[data-day="2026-10-15"]');
@@ -14036,6 +14189,7 @@ try {
           through: !!q("[data-testid=cov-published-through]"), lastPub: !!q("[data-testid=cov-last-published]"),
           noDaysLine: /No schedule days in the database yet/.test(document.body.innerText),
           retry: !!q("[data-testid=days-load-retry]"),
+          myNext: !!q("[data-testid=my-next-call]"), rings: qa("[data-testid=cal-grid] [data-mine]").length, // Item 2 (11/1)
         };
       });
       if (failDaysServed < servedBefore + 1) fail(`days-fail: the harness served ${failDaysServed - servedBefore} forced 500(s) on schedule_days, expected at least 1 (the mount read)`);
@@ -14047,6 +14201,8 @@ try {
       else if (st.msg !== "Silvis call now: schedule not loaded" || st.shareDisabled !== true) fail(`days-fail: banner message '${st.msg}', Share today disabled ${st.shareDisabled}`);
       else if (st.covCount !== "" || st.through || st.lastPub || st.noDaysLine) fail(`days-fail: the coverage strip / empty-schedule line spoke about an unread schedule (count '${st.covCount}', published through ${st.through}, last published ${st.lastPub}, 'No schedule days' ${st.noDaysLine})`);
       else ok(`days-fail: the first schedule_days read answered 500 - banner "${st.banner.slice(0, 70)}", header 'Schedule not loaded', ${st.unreadSlots} unread-slot placeholder(s), no OPEN, Share today disabled, no coverage count`);
+      if (st.myNext || st.rings) fail(`days-fail: Item 2 - the own-days marks spoke about an unread schedule ('Your next call' ${st.myNext}, ${st.rings} ringed pill(s))`);
+      else ok("days-fail: Item 2 - no 'Your next call' and no ring while the schedule is unread");
       // Prompt 22: the group-call line names no one over the unread schedule (HolderTag's "not loaded", never a name or OPEN)
       const gcDf = await pdf.evaluate(() => { const el = document.querySelector("[data-testid=today-banner] [data-testid=group-call]"); return el ? { text: el.textContent.replace(/\s+/g, " ").trim(), unread: !!el.querySelector("[data-testid=unread-holder]") } : null; });
       const gcNames = onCallRosterEarly ? Object.values(onCallRosterEarly).filter(Boolean) : [];
@@ -15106,6 +15262,10 @@ try {
         if (!mineTab || !/^Following/.test(mineTab[1])) fail(`F3 follower (${theme}): the Mine tab should show and read 'Following', got ${JSON.stringify(tabs)}`);
         else if (tabs.some(([k]) => k === "setup") || paintNav || banner) fail(`F3 follower (${theme}): Setup (${tabs.some(([k]) => k === "setup")}) / Paint offers (${!!paintNav}) / the unlinked banner (${!!banner}) shown to a follower`);
         else ok(`F3 follower (${theme}): nav = ${tabs.map(([, l]) => l.replace(/\d+$/, "")).join(", ")} - the Mine tab reads 'Following'; no Setup, no Paint offers, no unlinked banner`);
+        // Item 2 (Faraz 11/1): a follower has no roster id - no ring (not even on the followed surgeons' pills), no legend line, no 'Your next call'
+        await pf.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 });
+        const fI2 = await pf.evaluate(() => ({ ring: document.querySelectorAll("[data-testid=cal-grid] [data-mine]").length, legend: !!document.querySelector("[data-testid=legend-mine]"), line: !!document.querySelector("[data-testid=my-next-call]") }));
+        if (fI2.ring || fI2.legend || fI2.line) fail(`F3 follower (${theme}): Item 2's own-days marks on a follower's page: ${JSON.stringify(fI2)}`); else ok(`F3 follower (${theme}): Item 2 - no ring, no legend line, no 'Your next call' (no roster id)`);
         // (b) Following
         await pf.click('button[data-tab="myschedule"]');
         await pf.waitForSelector("[data-testid=following-card]", { timeout: 8000 });

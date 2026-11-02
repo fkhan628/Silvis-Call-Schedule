@@ -61,6 +61,14 @@ const THEME = {
     // The calendar's vacation bar (10/21): who is off that day, at the bottom of the day cell (Davenport's look). Light vacText
     // 7.93:1 on vacBar; dark 8.16 (test/ui/contrast.mjs measures both).
     vacBar: "#D3DAE3", vacText: "#2F3C4F",
+    // Item 2 (Faraz 11/1): the ring around the signed-in surgeon's own P / B pills on the month grid - the pill's own 1 px border
+    // (mineRim) and a box-shadow outside it (mineRing; 1 px in light, 1.5 px in dark). A pill keeps its light tint in both themes,
+    // so light rings it in one ink and dark in a light ring with a dark rim between (a light ring alone melts into the tint, 1.0:1).
+    // Never orange (the today outline, the over-soft badge) or violet (a Generate preview). The dark rim is written as a span's
+    // border-color, so it must never be a light literal the dark <style> sheet repaints (its color-substring match would repaint the
+    // pill's text) - data-layer [I2]. WCAG 1.4.11 (test/ui/contrast.mjs): light 14.48:1 on the card, 12.88 weekend, 13.37 holiday,
+    // >= 12.32 on every pill tint; dark ring 12.22 / 13.48 / 10.50 and 14.62 on its rim, the rim >= 14.78 on every tint.
+    mineRing: "#1F2A3A", mineRim: "#1F2A3A",
     // The painters' orange words (fix/painter-dark-mode, 10/3): "unsaved", "will clear", "will lift No primary", a one-role
     // reason ("backup only - ..."), the hint, the paste preview, the weekend day name, "range starts here", the unsaved count - in
     // the offer painter, the vacation painter and on My APP days (its unsaved mark). The light value is the literal the painters
@@ -87,6 +95,7 @@ const THEME = {
     noticeText: "#F2D08A", noticeBg: "#2E2612", noticeBorder: "#7A5A20",
     appText: "#DDAFC2", appTint: "#3A2232",
     vacBar: "#2A3A5C", vacText: "#D2DCEA",
+    mineRing: "#E6ECF5", mineRim: "#0B1A33",
     paintText: "#FF8A4C",
     paintOpen: "#FF8A8A",
   },
