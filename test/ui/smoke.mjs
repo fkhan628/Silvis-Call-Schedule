@@ -1379,24 +1379,55 @@ const eastFeedRows = async (route, req, ranges) => {
   });
 };
 let schedFeed = null; // Prompt 19 S5: { page, rows } - the notifications feed served to the scheduler's page during the give check
+// 11/2: NOTICE_OP / NOTICE_SRC sit here (they were with the offer deadline notice below) - the served offer period's move reads
+// the app's preset lead from them.
+// 9/30 (TASK 2): the served blob's groupRules.offerPeriods first (the page reads the live blob, and live settings move
+// ahead of the seed - Cowork set noticeDaysBeforeClose 42 -> 14 in Setup on 10/1 before the seed mirrored it), the
+// seed's only when the up-front blob read failed or carried no offerPeriods.
+const NOTICE_OP = (() => {
+  const served = gcBlobEarly.read && gcBlobEarly.groupRules && gcBlobEarly.groupRules.offerPeriods;
+  if (served && typeof served === "object" && !Array.isArray(served)) return served;
+  console.log(`     (offer deadline notice: ${gcBlobEarly.read ? "the served blob carries no groupRules.offerPeriods" : "the up-front blob read failed"} - the seed's values are used)`);
+  try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules.offerPeriods || {}; } catch (e) { return {}; }
+})();
+const NOTICE_SRC = (() => { const s = gcBlobEarly.read && gcBlobEarly.groupRules && gcBlobEarly.groupRules.offerPeriods; return s && typeof s === "object" && !Array.isArray(s) ? "the served blob" : "the seed"; })();
 // Prompt 14 part 3a (the offer painter): call_offers / call_periods are authenticated-only tables, so the anon
 // passthrough would answer [] - the harness serves them: ONE period (the seed's first offerPeriods entry with a
-// fake uuid; s1 is on its rulesOnly list, exactly as the seed says) served OPEN - status 'upcoming' whatever the
+// fake uuid; s1 is on its rulesOnly list, exactly as the seed says) served with status 'upcoming' whatever the
 // seed's lifecycle status reads (PD 9/23: the seed marks it published after the 9/23 publish; the painter, mode and
 // Periods steps below exercise the open-period UI, the lifecycle belongs to the live row) - and an offer store seeded with one OTHER
 // surgeon's row (so "1 other offered" can be seen). rpc/save_offers and rpc/set_offer_mode are answered like the
 // SQL functions would (validation tokens included); every call is recorded in writes. failSaveOffers makes the
 // next save_offers answer a 400 with the OF002 vacation token (the "nothing was saved" path).
+// 11/2 (date bombs): the seed's period is served MOVED forward by the fewest whole weeks that keep its end at least 7 x
+// closeWeeksBeforeStart days (the app's preset lead) after today - through 11/22 it is the seed's row as it stands. It keeps its
+// length (63 days, Mon-Sun), its 31-day close-before-start lead (frozen for surgeons, open for the scheduler, as the seed's row has
+// been since 10/2) and its rulesOnly / offerModes; only its four dates move (its label by the app's prdLabelFor rule). So on any
+// date the period contains today, the Periods card and the painter keep it, and the period the Periods step creates after it is
+// open on creation. (An OPEN served period could not contain today: the DB requires close <= start.)
+const opWeeks = (k, dflt) => (typeof NOTICE_OP[k] === "number" && isFinite(NOTICE_OP[k]) && NOTICE_OP[k] > 0 ? NOTICE_OP[k] : dflt);
+const OFFER_LEAD_DAYS = 7 * opWeeks("closeWeeksBeforeStart", 6), OFFER_PUBLISH_LEAD_DAYS = 7 * opWeeks("publishWeeksBeforeStart", 4); // the app's preset leads
+const PRD_MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const prdLabelOf = (s, e) => { const a = PRD_MON3[+s.slice(5, 7) - 1] + " " + s.slice(0, 4), b = PRD_MON3[+e.slice(5, 7) - 1] + " " + e.slice(0, 4); return a === b ? a : a + " - " + b; }; // index-source.html prdLabelFor
 const offerPeriod = (() => {
   const p = (JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).offerPeriods || [])[0];
-  return p ? { id: "00000000-0000-4000-8000-00000000a0f1", label: p.label, start_day: p.start, end_day: p.end, offers_close_at: p.offersCloseAt, publish_by: p.publishBy, status: "upcoming", rules_only_ids: (p.rulesOnly || []).slice(), offer_modes: { ...(p.offerModes || {}) }, created_by: "harness", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" } : null;
+  if (!p) return null;
+  const dayN = (d) => Date.parse(String(d).slice(0, 10) + "T00:00:00Z") / 86400000;
+  const span = dayN(p.end) - dayN(p.start);
+  if (OFFER_LEAD_DAYS > span) fail(`offer period: the seed's ${span + 1}-day period cannot hold today and leave the period the Periods step creates open with the ${OFFER_LEAD_DAYS}-day lead (groupRules.offerPeriods.closeWeeksBeforeStart) - the served period's move needs a longer seed period`);
+  const short = dayN(isoPlus(todayCentral, OFFER_LEAD_DAYS)) - dayN(p.end);
+  const k = short > 0 ? Math.ceil(short / 7) : 0;
+  const mv = (d) => (d ? isoPlus(String(d).slice(0, 10), 7 * k) : d);
+  const row = { id: "00000000-0000-4000-8000-00000000a0f1", label: k ? prdLabelOf(mv(p.start), mv(p.end)) : p.label, start_day: mv(p.start), end_day: mv(p.end), offers_close_at: mv(p.offersCloseAt), publish_by: mv(p.publishBy), status: "upcoming", rules_only_ids: (p.rulesOnly || []).slice(), offer_modes: { ...(p.offerModes || {}) }, created_by: "harness", created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z" };
+  console.log(`     (offer period: ${k ? `the seed's '${p.label}' ${p.start}..${p.end} served ${k} week(s) later as '${row.label}' ${row.start_day}..${row.end_day} (offers closed ${row.offers_close_at}, publish by ${row.publish_by})` : `the seed's '${p.label}' ${p.start}..${p.end} as it stands`} - its end is at least ${OFFER_LEAD_DAYS} days after today ${todayCentral}; rulesOnly / offerModes as the seed)`);
+  return row;
 })();
 const periodStore = offerPeriod ? [offerPeriod] : []; // Prompt 14 part 3b (U3b): GET call_periods serves this list; the Periods section's POST / PATCH move it (route below)
 const OTHER_OFFER_DAY = "2026-10-14";
 // Prompt 14 part 3c (U3c): two offers INSIDE the seed period so the day editor has labels to read - s3 (Acton,
 // 'preferred' per the seed's offerModes) on the first in-period day on/after today that he HOLDS in the live rows
 // (in his role there, so the My-offers pill reads "(placed)" and the upcoming row carries the "offered" chip; the
-// fallback when he holds none - fixture mode, a wiped table - is start + 8 as primary), and s4 (Philip,
+// fallback when he holds none - fixture mode, a wiped table - is from + 8 as primary, from = the later of the start and today), and s4 (Philip,
 // 'exhaustive') 'either' on the SAME day. On the day after, s3 reads "not offered - preferred days: penalty" and s4
 // "not offered - only these days: ineligible" (the editor greys him with the hard not-offered). s4 is thereby
 // submitted / exhaustive for the whole period in the harness: no later step needs him eligible inside it (the
@@ -1404,10 +1435,11 @@ const OTHER_OFFER_DAY = "2026-10-14";
 const U3C = (() => {
   if (!offerPeriod) return null;
   const from = offerPeriod.start_day > todayCentral ? offerPeriod.start_day : todayCentral;
+  if (from > offerPeriod.end_day) { console.log(`     (U3c: ${offerPeriod.label} ends before today - the offer-label steps are not exercised)`); return null; }
   let day = null, role = "primary";
   for (let d = from; d <= offerPeriod.end_day && !day; d = isoPlus(d, 1)) { const r = liveEarlyByDay[d]; if (r && r.primary_id === "s3") { day = d; role = "primary"; } else if (r && r.backup_id === "s3") { day = d; role = "backup"; } }
   const heldEarly = !!day;
-  if (!day) day = isoPlus(offerPeriod.start_day, 8) <= offerPeriod.end_day ? isoPlus(offerPeriod.start_day, 8) : offerPeriod.start_day;
+  if (!day) day = isoPlus(from, 8) <= offerPeriod.end_day ? isoPlus(from, 8) : from; // 11/2: never a day before today (the My offers card lists day >= today only)
   // the "day after": the first later in-period day with a slot that is NOT locked in the live rows (a locked slot
   // puts 'slot-locked:<id>' first for everyone and the option text shows hard[0] only) - primary preferred
   let next = null, nextRole = "primary";
@@ -1445,16 +1477,6 @@ const offerStore = [{ id: crypto.randomUUID(), person_id: "s2", day: OTHER_OFFER
 // `periods` defaults to periodStore; the notice step passes its own list (periodStore + three synthetic periods), its own
 // offers (`opts.offers`, the harness store + one s2 offer that page alone is served) and its own window (`opts.op`, the
 // served values with noticeDaysBeforeClose raised - that page's blob GET answers the same).
-// 9/30 (TASK 2): the served blob's groupRules.offerPeriods first (the page reads the live blob, and live settings move
-// ahead of the seed - Cowork set noticeDaysBeforeClose 42 -> 14 in Setup on 10/1 before the seed mirrored it), the
-// seed's only when the up-front blob read failed or carried no offerPeriods.
-const NOTICE_OP = (() => {
-  const served = gcBlobEarly.read && gcBlobEarly.groupRules && gcBlobEarly.groupRules.offerPeriods;
-  if (served && typeof served === "object" && !Array.isArray(served)) return served;
-  console.log(`     (offer deadline notice: ${gcBlobEarly.read ? "the served blob carries no groupRules.offerPeriods" : "the up-front blob read failed"} - the seed's values are used)`);
-  try { return JSON.parse(fs.readFileSync(SEED_PATH, "utf8")).groupRules.offerPeriods || {}; } catch (e) { return {}; }
-})();
-const NOTICE_SRC = (() => { const s = gcBlobEarly.read && gcBlobEarly.groupRules && gcBlobEarly.groupRules.offerPeriods; return s && typeof s === "object" && !Array.isArray(s) ? "the served blob" : "the seed"; })();
 const noticeIsoDiff = (a, b) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
 const expOfferNotices = (person, periods, opts) => {
   const op = (opts && opts.op) || NOTICE_OP;
@@ -6969,7 +6991,7 @@ try {
     const stateOf = async (day) => page.$eval(`[data-testid=ofp-day][data-day="${day}"]`, el => ({ state: el.getAttribute("data-state"), offer: el.getAttribute("data-offer") }));
     // Prompt 28: np = data-noprimary ("own" / "range" / "") - a live No primary day of the painted person is never picked below,
     // so his own marks never change this step's picture (a Primary / Either tap there would lift it after a question)
-    const readRows = () => page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), state: e.getAttribute("data-state"), why: e.getAttribute("data-why"), np: e.getAttribute("data-noprimary") || "", disabled: e.disabled, h: e.getBoundingClientRect().height })));
+    const readRows = () => page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), state: e.getAttribute("data-state"), why: e.getAttribute("data-why"), np: e.getAttribute("data-noprimary") || "", disabled: e.disabled, h: e.getBoundingClientRect().height, others: ((e.querySelector("[data-testid=ofp-others]") || {}).textContent || "").trim() })));
     try {
       await page.setViewportSize({ width: 390, height: 844 });
       await page.click('button[data-tab="myschedule"]');
@@ -7060,9 +7082,15 @@ try {
       ok(`Offer painter: ${monthLabel} has ${freeDays.length} paintable rows for s1 (${allRows.filter(r => r.state === "blocked").length} greyed, ${allRows.filter(r => r.state === "free" && r.why).length} one-role)`);
       const oneRole = allRows.find(r => r.state === "free" && r.why);
       if (oneRole) ok(`Offer painter: a one-role row says why (${oneRole.day}: '${oneRole.why}')`);
-      if (allRows.some(r => r.day === OTHER_OFFER_DAY)) {
-        const others = await page.$eval(`[data-testid=ofp-day][data-day="${OTHER_OFFER_DAY}"] [data-testid=ofp-others]`, el => el.textContent.trim()).catch(() => null);
-        if (others !== "1 other offered") fail(`Offer painter: ${OTHER_OFFER_DAY} should read '1 other offered' (the harness's s2 row), got ${JSON.stringify(others)}`); else ok(`Offer painter: ${OTHER_OFFER_DAY} reads '1 other offered' (s2's row)`);
+      // 11/2 (date bombs, M1): the 'N other(s) offered' counts restated from the served offers on both months the step reads - the
+      // current month (rows0) and the painted one. The fixed OTHER_OFFER_DAY (10/14, s2's offer outside every period) left the
+      // painter's window on 11/1 and the old leg went quiet without a word; with U3c's s3 / s4 offers the count usually shows here.
+      {
+        const othersWant = (d) => { const n = offerStore.filter(o => o.person_id !== "s1" && String(o.day).slice(0, 10) === d).length; return n ? `${n} other${n === 1 ? "" : "s"} offered` : ""; };
+        const oRows = rows0.concat(allRows), oBad = oRows.filter(r => (r.others || "") !== othersWant(r.day)), oHit = oRows.filter(r => othersWant(r.day));
+        if (oBad.length) fail(`Offer painter: the 'N other(s) offered' counts are off the served offers: ${JSON.stringify(oBad.slice(0, 5).map(r => ({ day: r.day, got: r.others, want: othersWant(r.day) })))}`);
+        else if (!oHit.length) console.log(`     (Offer painter: no other surgeon's offer falls in ${month0} or ${monthLabel} - the 'other(s) offered' count is not exercised this run)`);
+        else ok(`Offer painter: the 'other(s) offered' counts match the served offers on all ${oRows.length} rows of ${month0} / ${monthLabel} - ${oHit.map(r => r.day + " '" + r.others + "'").join(", ")}`);
       }
       // arm Primary: gradient + white text (the dark sheet exempts gradient buttons)
       await page.click("[data-testid=ofp-brush-primary]");
@@ -7814,7 +7842,7 @@ try {
     try { await page.screenshot({ path: path.join(OUT, "failure-u3c.png"), fullPage: false }); } catch (e2) {}
     if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
     await page.setViewportSize({ width: 1180, height: 900 });
-  } else console.log("     (U3c: the seed carries no offerPeriods[0] - the offer-label steps are skipped)");
+  } else console.log("     (U3c: no served offer period with a day on/after today - the offer-label steps are skipped)");
 
   // ---- Time off: refused over a published day (client-side, no write); clean range writes once ----
   try {
@@ -10705,24 +10733,28 @@ try {
         } catch (e) { fail("Periods lead (a2): " + String(e && e.message || e).split("\n")[0]); }
         // (b) Remind on a pool surgeon = ONE send-notification offers_reminder and nothing else. Prompt 26: any status - a
         // rules_only / submitted row is picked when there is one (it had no Remind before), never the scheduler's own row
-        if (expRemind.length) {
-          const who = expRemind.filter(id => id !== SELF).sort((a, b) => (expStatus(a, per) === "not_started" ? 1 : 0) - (expStatus(b, per) === "not_started" ? 1 : 0))[0];
+        // 11/2 (date bombs, #3): one Remind leg for the served period and the new one - the new period's leg asserts everything (b) does
+        const remindLeg = async (p, who, tag) => {
           const b0 = writes.length;
-          await page.click(`${boxSel(per.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
+          await page.click(`${boxSel(p.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
           await waitFor(() => writesSince(b0).some(w => /send-notification/.test(w.path)), 8000);
           await page.waitForTimeout(400);
           const mails = writesSince(b0).filter(w => /send-notification/.test(w.path)).map(bodyOf);
           const others = writesSince(b0).filter(w => !/send-notification/.test(w.path));
           const m = mails[0];
-          const note = await page.$eval(`${boxSel(per.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind-note]`, el => el.textContent.trim()).catch(() => null);
-          if (mails.length !== 1 || !m || m.type !== "offers_reminder" || JSON.stringify(m.targetIds) !== JSON.stringify([who])) fail(`Periods Remind: expected exactly ONE send-notification { type offers_reminder, targetIds [${who}] }: ${JSON.stringify(mails).slice(0, 400)}`);
+          const note = await page.$eval(`${boxSel(p.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind-note]`, el => el.textContent.trim()).catch(() => null);
+          if (mails.length !== 1 || !m || m.type !== "offers_reminder" || JSON.stringify(m.targetIds) !== JSON.stringify([who])) fail(`Periods Remind${tag}: expected exactly ONE send-notification { type offers_reminder, targetIds [${who}] }: ${JSON.stringify(mails).slice(0, 400)}`);
           // pin moved deliberately 9/30 (Prompt 26): the words are the heads-up (the cron's first reminder) - subject 'Silvis call -
           // the <label> schedule is built from your rules on <Mon 11/23>', the body word for word as the message's first paragraph
-          else if (!m.data || String(m.data.subject) !== headsUpSubject(per) || !String(m.data.message).startsWith(headsUpBody(per) + "\n\nSent now by ") || /Choose your shifts|go by my rules|not started|never answered/i.test(String(m.data.subject) + String(m.data.message)) || !/#offers$/.test(String(m.data.detail))) fail(`Periods Remind (${who}, ${expStatus(who, per)}): the composed words must be the heads-up - subject '${headsUpSubject(per)}', message '${headsUpBody(per)}' + the sender line, the #offers deep link as detail: ` + JSON.stringify(m.data).slice(0, 500));
-          else if (others.length) fail("Periods Remind: nothing but the e-mail call may be written: " + JSON.stringify(others.map(w => w.method + " " + w.path)));
-          else if (!noAddress(JSON.stringify(m))) fail("Periods Remind: the payload carries an e-mail address");
-          else if (!note || !/^reminded /.test(note)) fail(`Periods Remind: the row should read 'reminded <time>' after the 200, got ${JSON.stringify(note)}`);
-          else ok(`Periods Remind (${who}, ${expStatus(who, per)}): ONE send-notification offers_reminder -> targetIds [${who}], subject "${m.data.subject}", the heads-up body, nothing else written; row reads '${note}'`);
+          else if (!m.data || String(m.data.subject) !== headsUpSubject(p) || !String(m.data.message).startsWith(headsUpBody(p) + "\n\nSent now by ") || /Choose your shifts|go by my rules|not started|never answered/i.test(String(m.data.subject) + String(m.data.message)) || !/#offers$/.test(String(m.data.detail))) fail(`Periods Remind${tag} (${who}, ${expStatus(who, p)}): the composed words must be the heads-up - subject '${headsUpSubject(p)}', message '${headsUpBody(p)}' + the sender line, the #offers deep link as detail: ` + JSON.stringify(m.data).slice(0, 500));
+          else if (others.length) fail(`Periods Remind${tag}: nothing but the e-mail call may be written: ` + JSON.stringify(others.map(w => w.method + " " + w.path)));
+          else if (!noAddress(JSON.stringify(m))) fail(`Periods Remind${tag}: the payload carries an e-mail address`);
+          else if (!note || !/^reminded /.test(note)) fail(`Periods Remind${tag}: the row should read 'reminded <time>' after the 200, got ${JSON.stringify(note)}`);
+          else ok(`Periods Remind${tag} (${who}, ${expStatus(who, p)}): ONE send-notification offers_reminder -> targetIds [${who}], subject "${m.data.subject}", the heads-up body, nothing else written; row reads '${note}'`);
+        };
+        if (expRemind.length) {
+          const who = expRemind.filter(id => id !== SELF).sort((a, b) => (expStatus(a, per) === "not_started" ? 1 : 0) - (expStatus(b, per) === "not_started" ? 1 : 0))[0];
+          await remindLeg(per, who, "");
         } else console.log(`     (today ${todayCentral} is past ${per.label}'s close ${per.offers_close_at} - the Remind call is exercised on the new period below)`);
         // (c) New period: a start inside the seed period is refused with zero writes; the 3-month preset fills the dates
         const expDefaultStart = isoAddDays(per.end_day, 1) > todayCentral ? isoAddDays(periodStore.slice().sort((a, b) => a.start_day < b.start_day ? -1 : 1).pop().end_day, 1) : todayCentral;
@@ -10745,7 +10777,7 @@ try {
         const idx3 = sm + 2, ey = sy + Math.floor((idx3 - 1) / 12), em = ((idx3 - 1) % 12) + 1;
         let expEnd = utcDay(Date.UTC(ey, em, 0));
         if (dow(expEnd) === 5 || dow(expEnd) === 6) expEnd = sundayOnOrAfter(expEnd);
-        const expClose = isoAddDays(expDefaultStart, -42), expPublish = isoAddDays(expDefaultStart, -28);
+        const expClose = isoAddDays(expDefaultStart, -OFFER_LEAD_DAYS), expPublish = isoAddDays(expDefaultStart, -OFFER_PUBLISH_LEAD_DAYS); // 11/2: the served rules' leads (42 / 28 today)
         const expLabel = `${MON[sm - 1]} ${sy} - ${MON[+expEnd.slice(5, 7) - 1]} ${expEnd.slice(0, 4)}`;
         if (f.start !== expDefaultStart || f.end !== expEnd || f.close !== expClose || f.publish !== expPublish || f.label !== expLabel) fail(`Periods form (3-month preset from ${expDefaultStart}): expected end ${expEnd}, close ${expClose}, publish ${expPublish}, label '${expLabel}'; got ${JSON.stringify(f)}`);
         else ok(`Periods form: 3-month preset from ${expDefaultStart} -> end ${f.end}, offers close ${f.close} (start - 6 weeks), publish by ${f.publish} (start - 4 weeks), label '${f.label}'`);
@@ -10767,9 +10799,9 @@ try {
         await page.click("[data-testid=prd-preset-3]");
         await page.waitForTimeout(150);
         const f4 = await readForm();
-        if (f2.close !== handClose || f2.start !== nudged || f2.publish !== isoAddDays(nudged, -28) || f2.label !== expLabel) fail(`Periods form: after a hand-set close ${handClose} and Start nudged to ${nudged}, the close must survive and only publish (start - 4 weeks) re-derive; got ${JSON.stringify(f2)}`);
+        if (f2.close !== handClose || f2.start !== nudged || f2.publish !== isoAddDays(nudged, -OFFER_PUBLISH_LEAD_DAYS) || f2.label !== expLabel) fail(`Periods form: after a hand-set close ${handClose} and Start nudged to ${nudged}, the close must survive and only publish (start - 4 weeks) re-derive; got ${JSON.stringify(f2)}`);
         else if (!formGone || !f3 || f3.close !== handClose || f3.start !== nudged || writesSince(bCol).length) fail(`Periods form: collapsing the Generate card must keep the draft (form hidden while closed, back with close ${handClose} / start ${nudged} when reopened, zero writes); got hidden=${formGone}, ${JSON.stringify(f3)}, writes ${writesSince(bCol).length}`);
-        else if (f4.close !== isoAddDays(nudged, -42) || f4.start !== nudged || f4.publish !== isoAddDays(nudged, -28)) fail(`Periods form: a preset click must refill every date from the rules (close ${isoAddDays(nudged, -42)}), got ${JSON.stringify(f4)}`);
+        else if (f4.close !== isoAddDays(nudged, -OFFER_LEAD_DAYS) || f4.start !== nudged || f4.publish !== isoAddDays(nudged, -OFFER_PUBLISH_LEAD_DAYS)) fail(`Periods form: a preset click must refill every date from the rules (close ${isoAddDays(nudged, -OFFER_LEAD_DAYS)}), got ${JSON.stringify(f4)}`);
         else ok(`Periods form: hand-set close ${handClose} survived Start -> ${nudged} (publish re-derived ${f2.publish}); the draft survived the card collapsing / reopening; the 3-month preset refilled every date`);
         // (c3) 9/27: the draft's short-lead warning is STRICT - the preset's start - 42 (f4) reads no "Offers close only";
         // start - 41 does (only while that close is still after today: the "close has passed" warning outranks it)
@@ -10824,15 +10856,9 @@ try {
             else if (nx1 ? !(nt1 && nt1.includes(`from ${mdOf(nx1.from)}`)) : nt1 !== null) fail(`Periods lead (create): 'Create the next period' should be ${nx1 ? "shown from " + mdOf(nx1.from) : "absent (a period now follows)"}, got ${JSON.stringify(nt1)}`);
             else ok(`Periods lead (create): '${expLabel}' has no short-lead line; 'Create the next period' ${nx1 ? "moved to " + mdOf(nx1.from) : "absent"}`);
           } catch (e) { fail("Periods lead (create): " + String(e && e.message || e).split("\n")[0]); }
-          if (!expRemind.length) { // the seed period was frozen: exercise Remind here instead
-            const who = "s3"; const b0 = writes.length;
-            await page.click(`${boxSel(created.id)} [data-testid=prd-row][data-person=${who}] [data-testid=prd-remind]`);
-            await waitFor(() => writesSince(b0).some(w => /send-notification/.test(w.path)), 8000);
-            const mails = writesSince(b0).filter(w => /send-notification/.test(w.path)).map(bodyOf);
-            // pin moved deliberately 9/30 (Prompt 26): the heads-up's subject and body, the freeze spelled 'Mon 11/23'
-            const expP = { label: expLabel, offers_close_at: expClose };
-            if (mails.length !== 1 || mails[0].type !== "offers_reminder" || JSON.stringify(mails[0].targetIds) !== JSON.stringify([who]) || String(mails[0].data && mails[0].data.subject) !== headsUpSubject(expP) || !String(mails[0].data && mails[0].data.message).startsWith(headsUpBody(expP))) fail("Periods Remind (new period): expected ONE offers_reminder to " + who + " with the heads-up '" + headsUpSubject(expP) + "': " + JSON.stringify(mails).slice(0, 400));
-            else ok(`Periods Remind (new period, ${who}): ONE send-notification offers_reminder - '${headsUpSubject(expP)}'`);
+          if (!expRemind.length) { // the served period is frozen: exercise Remind on the new one instead
+            if (!isOpen(created)) fail(`Periods Remind (new period) premise: '${expLabel}' freezes ${created.offers_close_at}, not after today ${todayCentral}, and ${per.label} is frozen - no box has Remind (the served period's move keeps its end at least ${OFFER_LEAD_DAYS} days after today)`);
+            else await remindLeg(created, "s3", " (new period)");
           }
           // (e) Close now: dismissed = zero writes; confirmed = ONE CAS PATCH + ONE audit period.close
           const bD = writes.length;
