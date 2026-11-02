@@ -415,6 +415,38 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { contrastTable, formatTable, regionTable, formatRegionTable, loadTheme, hexToRgb, contrastRatio } from "./contrast.mjs";
 
+// ---- Time travel (SMOKE_FAKE_NOW, 11/2): the whole run on another date ----
+// SMOKE_FAKE_NOW=<ISO date-time with a zone> (e.g. 2027-01-04T18:00:00Z, noon Central) moves this process's clock there and lets
+// it run at real speed: every argless new Date() / Date() / Date.now() in Node - this file and every module it loads (helpers.js
+// todayCentral, importer.js, rules.js, the in-process Playwright server) - reads the real clock + TT.offsetMs. It is the first
+// statement of the module body (the imports above read no clock), so todayCentral, the midnight guard, every JWT exp, every
+// route-handler timestamp and every toast wait share one timeline. Every BrowserContext gets the same clock (the newContext
+// wrapper after chromium.launch) and so does the Generate worker (TT_WORKER_PRELUDE). Unset: TT is null and nothing below
+// changes. A time-travel run is NEVER the merge gate's run (it also overwrites test/ui/out screenshots).
+const TT = (() => {
+  const raw = process.env.SMOKE_FAKE_NOW;
+  if (!raw) return null;
+  const RealDate = globalThis.Date;
+  const fakeStart = RealDate.parse(raw);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(raw) || !Number.isFinite(fakeStart)) {
+    console.error(`FAIL: SMOKE_FAKE_NOW=${raw} is not an ISO date-time with a zone (e.g. 2027-01-04T18:00:00Z)`);
+    process.exit(1);
+  }
+  const offsetMs = fakeStart - RealDate.now();
+  const now = () => RealDate.now() + offsetMs;
+  function FakeDate(...a) {
+    if (!new.target) return new RealDate(now()).toString(); // Date() called as a function
+    return a.length ? new RealDate(...a) : new RealDate(now());
+  }
+  FakeDate.prototype = RealDate.prototype; // instanceof Date, every method and toJSON stay the real ones
+  FakeDate.now = now;
+  FakeDate.parse = RealDate.parse;
+  FakeDate.UTC = RealDate.UTC;
+  globalThis.Date = FakeDate;
+  return { offsetMs, realNow: () => RealDate.now(), fakeStartIso: new RealDate(fakeStart).toISOString() };
+})();
+if (TT) console.log(`TIME TRAVEL: SMOKE_FAKE_NOW=${TT.fakeStartIso} - Node, every page and the Generate worker run ${(TT.offsetMs / 86400000).toFixed(2)} day(s) off the real clock`);
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
 const OUT = path.join(__dirname, "out");
@@ -691,6 +723,12 @@ const servedHits = new Map();
 // can register workers at the origin root, inside the app folder and in a sibling folder. Silvis itself has neither file.
 const XR_APP_PREFIX = "/Silvis-Call-Schedule/";
 const XR_WORKER_JS = "// smoke harness: a do-nothing service worker (no fetch handler)\nself.addEventListener('install', function () { self.skipWaiting(); });\n";
+// Time travel: Playwright's clock fakes frames only, never a dedicated worker - and the Generate worker's rules.js buildContext
+// reads its own clock for ctx.today (ctxInputs carries no today), so it would measure hardNeverWeekdaysNoticeDays from the real
+// date while the page measures from the faked one. helpers.js - the page's own script and the worker's first importScripts, one
+// URL - is served with this one-line prelude in front (helpers.js keeps its line numbers): in a worker scope it installs the faked
+// Date; in a window it returns at once.
+const TT_WORKER_PRELUDE = TT ? `/* smoke time travel */(function (off) { if (typeof WorkerGlobalScope === "undefined" || !(self instanceof WorkerGlobalScope) || self.Date.__smokeTT) return; var R = self.Date; function D() { if (!new.target) return new R(R.now() + off).toString(); return arguments.length ? new R(...arguments) : new R(R.now() + off); } D.prototype = R.prototype; D.now = function () { return R.now() + off; }; D.parse = R.parse; D.UTC = R.UTC; D.__smokeTT = true; self.Date = D; })(${TT.offsetMs});` : "";
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
   if (/\/(xr-sw|OneSignalSDKWorker)\.js$/.test(urlPath)) { res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" }); res.end(XR_WORKER_JS); return; }
@@ -703,7 +741,7 @@ const server = http.createServer((req, res) => {
   }
   servedHits.set(rel, (servedHits.get(rel) || 0) + 1);
   res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-store" });
-  res.end(servedCache.get(file));
+  res.end(TT_WORKER_PRELUDE && rel === "helpers.js" ? Buffer.concat([Buffer.from(TT_WORKER_PRELUDE), servedCache.get(file)]) : servedCache.get(file));
 });
 await new Promise(r => server.listen(0, "127.0.0.1", r));
 const PORT = server.address().port;
@@ -928,6 +966,12 @@ const liveRowsEarly = await (async () => {
 const liveEarlyByDay = {}; liveRowsEarly.forEach(r => { liveEarlyByDay[r.day] = r; });
 // the app's holder rule: an external cover stands in for a primary; a day with no row is open in both roles
 const liveOpenEarly = (d, role) => { const r = liveEarlyByDay[d]; return role === "primary" ? !(r && (r.primary_id || r.external_cover)) : !(r && r.backup_id); };
+// Time travel: where today sits against the rows read up front - past the last one, a check that needs a published day on/after
+// today has nothing to read (no future schedule yet), which is not a date bomb
+if (TT) {
+  const lastRow = liveRowsEarly.reduce((m, r) => (r && r.day > m ? r.day : m), "");
+  console.log(`TIME TRAVEL: today ${todayCentral} (real ${new Date(TT.realNow()).toLocaleDateString("en-CA", { timeZone: "America/Chicago" })}); the ${fixture ? "fixture" : "live"} schedule_days rows run to ${lastRow || "(none)"}` + (lastRow && todayCentral > lastRow ? " - today is past them: a FAIL or 'not exercised' that needs a published day on/after today means no future schedule yet, not a date bomb" : ""));
+}
 // 11/2: an .ics download is all-day - past its DTSTAMP lines (the generation time to the minute, seconds "00": during the
 // 07:00 UTC minute it reads "...T070000Z", which the old /TZID=|T070000/ checks took for a timed stamp) no date-time and no zone
 const icsTimedOrZoned = (t) => /TZID|VTIMEZONE|DTSTART:|DTEND:|\d{8}T\d{6}/.test(String(t).replace(/DTSTAMP:\d{8}T\d{6}Z/g, "DTSTAMP:X"));
@@ -1068,6 +1112,41 @@ const fixtureAnswer = (url) => {
 };
 
 const browser = await chromium.launch({ headless: !process.env.HEADFUL });
+// Time travel (SMOKE_FAKE_NOW): every BrowserContext - the browser.newContext calls below (Browser.newPage calls this.newContext
+// too) - gets Playwright's clock at Node's faked now, running at real speed, before its first page exists. Playwright runs IN this
+// process (playwright-core/index.js: coreBundle.inprocess), so its Clock stamps the replay log it hands every new document with
+// Date.now() - the FAKED one - and a document opened later (a page, a popup, a reload, a navigation) would replay to the install
+// moment and never catch up (its catch-up against the browser's REAL clock is negative and clamped). The init script after
+// resume() re-anchors every document at the browser's real clock + TT.offsetMs, the value Node's Date.now() reads; ttCheckDoc
+// reads Date.now() on every http(s) document load and the end of the run fails on a skew over 2 s.
+const ttSkews = [];
+let ttDocsChecked = 0;
+const ttCheckDoc = (p) => {
+  let where;
+  try { const u = new URL(p.url()); if (!/^https?:$/.test(u.protocol)) return; where = u.pathname; } catch (e) { return; }
+  const t0 = Date.now();
+  p.evaluate(() => Date.now()).then((pt) => {
+    const t1 = Date.now();
+    if (t1 - t0 > 1000) return; // a busy page (a dialog, a long task): no reading for this load
+    ttDocsChecked++;
+    const skew = pt - (t0 + t1) / 2;
+    if (Math.abs(skew) > 2000) ttSkews.push(`${where} ${(skew / 1000).toFixed(1)} s`);
+  }).catch(() => {});
+};
+if (TT) {
+  const newContextReal = browser.newContext.bind(browser);
+  browser.newContext = async (...args) => {
+    const ctx = await newContextReal(...args);
+    await ctx.clock.install({ time: Date.now() });
+    await ctx.clock.resume();
+    await ctx.addInitScript((off) => {
+      const c = globalThis.__pwClock;
+      if (c && c.controller && typeof c.controller.setSystemTime === "function" && c.builtins && c.builtins.Date) c.controller.setSystemTime(c.builtins.Date.now() + off);
+    }, TT.offsetMs);
+    ctx.on("page", (p) => p.on("load", () => ttCheckDoc(p)));
+    return ctx;
+  };
+}
 const context = await browser.newContext({ viewport: { width: 1180, height: 900 } });
 await context.addInitScript(({ token, version }) => {
   try {
@@ -2195,6 +2274,21 @@ try {
   ok(`header 'Silvis Call Schedule' rendered (auth gate passed with the mocked session${attempts > 1 ? ", on retry" : ""})`);
   await page.waitForSelector("[data-testid=cal-month]", { timeout: 15000 });
   ok("calendar view is the landing view");
+  // Time travel: the Generate worker's clock - a blob: Worker built like helpers.js genWorkerSource (importScripts the page's own
+  // helpers.js?v=) reads Date.now() and todayCentral(); both must be Node's
+  if (TT) {
+    try {
+      const wk = await page.evaluate(async (v) => {
+        const src = "importScripts(" + JSON.stringify(new URL("helpers.js?v=" + v, location.href).href) + "); postMessage({ now: Date.now(), today: todayCentral() });";
+        const u = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+        try { return await new Promise((res, rej) => { const w = new Worker(u); w.onmessage = (e) => { w.terminate(); res(e.data); }; w.onerror = (e) => { w.terminate(); rej(new Error((e && e.message) || "worker error")); }; }); }
+        finally { URL.revokeObjectURL(u); }
+      }, APP_VERSION);
+      const skew = wk.now - Date.now();
+      if (Math.abs(skew) > 2000 || wk.today !== todayCentral) fail(`time travel: a dedicated worker (importScripts helpers.js, like the Generate worker) reads ${new Date(wk.now).toISOString()} / today ${wk.today}, Node ${new Date().toISOString()} / today ${todayCentral} - the helpers.js worker prelude did not take`);
+      else ok(`time travel: a dedicated worker (importScripts helpers.js, like the Generate worker) reads the faked clock - today ${wk.today}, ${Math.round(skew)} ms off Node`);
+    } catch (e) { fail("time travel: the worker clock probe failed: " + String(e && e.message || e).split("\n")[0]); }
+  }
   // Wait for the data load to settle (header shows Synced once loaded).
   await page.waitForSelector("text=Synced", { timeout: 30000 }).catch(() => fail("header never reached 'Synced' (initial load did not complete)"));
   const unlinked = await page.$("[data-testid=unlinked-banner]");
@@ -5427,7 +5521,7 @@ try {
     const parseBody = (w) => { try { return JSON.parse(w.body); } catch (e) { return null; } };
     const noAddr = (s) => !/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(String(s || ""));
     // Review screenshots carry no harness artefacts: dismiss the app toast (click closes it) before each shot.
-    const shotStart = Date.now();
+    const shotStart = TT ? TT.realNow() : Date.now(); // the files' mtimes are the OS clock - time travel moves only the JS clocks
     const clearToast = async () => { await page.evaluate(() => { const t = document.querySelector("[data-testid=toast]"); if (t) t.click(); }); await page.waitForTimeout(150); };
     const plusDays = (d, k) => utcDay(Date.parse(d + "T12:00:00Z") + k * 86400000);
     const openIn = (d) => { const r = liveByDay[d]; return { p: !(r && (r.primary_id || r.external_cover)), b: !(r && r.backup_id) }; };
@@ -16027,6 +16121,13 @@ if (cdnRequests.length) fail(`${cdnRequests.length} request(s) went to a CDN hos
   }
 }
 
+// Time travel: every http(s) document load read Node's faked clock (ttCheckDoc); the run says it is not the gate
+if (TT) {
+  if (ttSkews.length) fail(`time travel: ${ttSkews.length} document load(s) read a clock more than 2 s off Node's faked one - the per-document re-anchor did not take (a Playwright upgrade?): ${ttSkews.slice(0, 5).join("; ")}`);
+  else if (!ttDocsChecked) fail("time travel: no document load was checked against Node's faked clock");
+  else ok(`time travel: ${ttDocsChecked} document load(s) read Node's faked clock (within 2 s)`);
+  console.log(`\nTIME TRAVEL RUN - SMOKE_FAKE_NOW=${TT.fakeStartIso}, today ${todayCentral}; the served offer period ${offerPeriod ? offerPeriod.start_day + ".." + offerPeriod.end_day : "(none)"}. Not a merge-gate run: diff its FAIL / 'not exercised' / 'skipped' lines against a control run inside the published range before calling one a date bomb`);
+}
 console.log(`\ncdn cache: ${cdnHits} hit(s), ${cdnMisses} miss(es) (${path.relative(ROOT, CDN_CACHE)})`);
 console.log(`writes intercepted (${writes.length}):`);
 writes.forEach(w => console.log(`  ${w.method} ${w.path}${w.public ? " [public]" : ""}`));
