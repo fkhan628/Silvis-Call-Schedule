@@ -7416,19 +7416,28 @@ try {
       ok("screenshot test/ui/out/offers-saved-390.png");
       await page.waitForTimeout(3300);
       if (await page.$("[data-testid=ofp-saved]")) fail("Offer painter: the saved note did not clear after 3 s"); else ok("Offer painter: the saved note cleared after 3 s");
-      // tap-again on a saved day drafts a clear; Close on a dirty draft confirms (dismissed = the sheet stays); Discard restores
-      await page.click("[data-testid=ofp-brush-primary]"); await tap(d1);
-      const clearState = await stateOf(d1);
-      ofpDismissNext = true; const dlgN = dialogs.length;
-      await page.click("[data-testid=ofp-close]"); await page.waitForTimeout(200);
-      const stillOpen = !!(await page.$("[data-testid=ofp-sheet]"));
-      const closeAsk = dialogs[dlgN] || "";
-      await page.click("[data-testid=ofp-discard]"); await page.waitForTimeout(200);
-      const afterDiscard = await stateOf(d1);
-      if (clearState.state !== "draft" || clearState.offer !== "") fail(`Offer painter: tapping the saved ${d1} with Primary should draft a clear, got ${JSON.stringify(clearState)}`);
-      else if (!stillOpen || !/Discard 1 unsaved change and close\?/.test(closeAsk)) fail(`Offer painter: Close on a dirty draft must confirm and stay when dismissed (open=${stillOpen}, dialog '${closeAsk}')`);
-      else if (afterDiscard.state !== "saved" || afterDiscard.offer !== "primary") fail("Offer painter: Discard did not restore the saved row: " + JSON.stringify(afterDiscard));
-      else ok(`Offer painter: tap-again on saved ${d1} = 'will clear' draft; Close asked '${closeAsk}' and stayed when dismissed; Discard (confirmed) restored the saved row`);
+      // tap-again on a saved day drafts a clear; Close on a dirty draft confirms (dismissed = the sheet stays); Discard restores.
+      // 11/2 (time travel 1/4/2027): the saved d1 can read 'blocked' (grey) after the save - the Primary brush then does nothing
+      // (canTap), Close shut the clean sheet and the Discard click waited 30 s. A greyed saved offer is cleared with the Clear brush
+      // (the app's path for it, data-clearable); its grey reason is printed, so a wrong grey stays visible
+      const d1Cell = await page.$eval(`[data-testid=ofp-day][data-day="${d1}"]`, el => ({ state: el.getAttribute("data-state"), why: el.getAttribute("data-why") || "", clearable: el.getAttribute("data-clearable") }));
+      const d1Brush = d1Cell.state === "blocked" ? "clear" : "primary";
+      if (d1Cell.state === "blocked" && d1Cell.clearable !== "1") fail(`Offer painter: the saved ${d1} reads blocked and not clearable after the save ('${d1Cell.why}') - the tap-again / Close / Discard step cannot run`);
+      else {
+        if (d1Brush === "clear") console.log(`     (Offer painter: the saved ${d1} reads blocked after the save ('${d1Cell.why}') - the tap-again step clears it with the Clear brush)`);
+        await page.click(`[data-testid=ofp-brush-${d1Brush}]`); await tap(d1);
+        const clearState = await stateOf(d1);
+        ofpDismissNext = true; const dlgN = dialogs.length;
+        await page.click("[data-testid=ofp-close]"); await page.waitForTimeout(200);
+        const stillOpen = !!(await page.$("[data-testid=ofp-sheet]"));
+        const closeAsk = dialogs[dlgN] || "";
+        await page.click("[data-testid=ofp-discard]"); await page.waitForTimeout(200);
+        const afterDiscard = await stateOf(d1);
+        if (clearState.state !== "draft" || clearState.offer !== "") fail(`Offer painter: tapping the saved ${d1} with ${d1Brush === "clear" ? "Clear (it reads blocked)" : "Primary"} should draft a clear, got ${JSON.stringify(clearState)}`);
+        else if (!stillOpen || !/Discard 1 unsaved change and close\?/.test(closeAsk)) fail(`Offer painter: Close on a dirty draft must confirm and stay when dismissed (open=${stillOpen}, dialog '${closeAsk}')`);
+        else if (afterDiscard.state !== (d1Brush === "clear" ? "blocked" : "saved") || afterDiscard.offer !== "primary") fail("Offer painter: Discard did not restore the saved row: " + JSON.stringify(afterDiscard));
+        else ok(`Offer painter: tap-again on saved ${d1}${d1Brush === "clear" ? " (Clear brush: it reads blocked)" : ""} = 'will clear' draft; Close asked '${closeAsk}' and stayed when dismissed; Discard (confirmed) restored the saved row`);
+      }
       await page.click("[data-testid=ofp-close]");
       await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
       // the scheduler relays for Fierce: "Go by my rules" = one mode call + one audit
