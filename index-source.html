@@ -4154,8 +4154,9 @@ function CallSchedule() {
     const d = parse(day);
     setCalMonth(d.getMonth()); setCalYear(d.getFullYear());
     // 11/1: the editor never opens over a phone sheet (More, Alerts) or Recent errors - a day a notification queued opens once
-    // the data loaded, maybe after one was opened; no other caller is reachable while one is up (their backdrops cover the page)
-    setMoreOpen(false); setShowNotifs(false); setShowErrorLog(false);
+    // the data loaded, maybe after one was opened; no other caller is reachable while one is up (their backdrops cover the
+    // page). The wide Alerts panel has no backdrop and sits under the editor: it stays open, as it always did (fix check 11/1).
+    setMoreOpen(false); if (tabBarShownRef.current) setShowNotifs(false); setShowErrorLog(false);
     setEditorDay(day);
   };
   // --- Generate (preview -> Accept & Publish) ---
@@ -6617,8 +6618,9 @@ function CallSchedule() {
   const [obNoticeBusy, setObNoticeBusy] = useState(false);
   // Both dialogs render inside the Open shifts view and their backdrops cover both navs, so only a notification tap moves the
   // view while one is up: their state goes with the view (review 11/1 - a stale claim sheet came back on the next visit, and
-  // the toast read it as a dialog over the phone sheets). A claim or a send in flight keeps its own copy and closes itself.
-  useEffect(() => { if (view !== "openshifts") { setClaimSheet(null); setObNotice(null); } }, [view]);
+  // the toast read it as a dialog over the phone sheets) - unless a claim or a send is in flight: that dialog stays (busy) for
+  // a return to the board, so no second one opens under its unconditional close (fix check 11/1), and closes itself.
+  useEffect(() => { if (view === "openshifts") return; if (!claimBusy) setClaimSheet(null); if (!obNoticeBusy) setObNotice(null); }, [view, claimBusy, obNoticeBusy]);
   const obCancelRef = useRef(null);                    // the preview dialog's Cancel button - focused when the dialog opens
   const obEmailBtnRef = useRef(null);                  // the 'Email the group now' button - focus goes back to it when the dialog closes
   const claimCancelRef = useRef(null);                 // the sheet's Cancel button - focused when the sheet opens

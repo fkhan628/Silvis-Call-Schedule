@@ -13671,9 +13671,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(SRC0.link.includes("    if (r.tab && !setView(r.tab)) return;") && SRC0.link.indexOf("if (r.tab && !setView(r.tab)) return;") < SRC0.link.indexOf("setPushDay("), "the deep link stops on false before it queues a day");
       // instance(S, o): o = { view, appTaps, editorDay, editorDirty, answers, sheet, phone } - answers are the person's replies in
       // order; sheet: the phone sheet open when the tap comes ("more" / "alerts" - 11/1; setMoreOpen / setShowNotifs /
-      // setShowErrorLog record their calls); phone: tabBarShownRef.current (scrollTopNow records "scroll top")
+      // setShowErrorLog record their calls); phone: tabBarShown (st.phone), mirrored into tabBarShownRef on every render as the
+      // component does (scrollTopNow records "scroll top")
       const instance = (S, o) => {
-        const st = { view: o.view, editorDay: o.editorDay || null, pushDay: null, calMonth: null, moreOpen: o.sheet === "more", showNotifs: o.sheet === "alerts", errorsOpen: false };
+        const st = { view: o.view, editorDay: o.editorDay || null, pushDay: null, calMonth: null, moreOpen: o.sheet === "more", showNotifs: o.sheet === "alerts", errorsOpen: false, phone: !!o.phone };
         const ev = [], answers = (o.answers || []).slice(), refs = {};
         const appDaysDirtyRef = { current: o.appTaps || 0 };
         const editorDayRef = { current: st.editorDay }, editorDirtyRef = { current: !!o.editorDirty };
@@ -13690,7 +13691,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         const setMoreOpen = (v) => { st.moreOpen = v; ev.push("more " + v); };
         const setShowNotifs = (v) => { st.showNotifs = v; ev.push("notifs " + v); };
         const setShowErrorLog = (v) => { st.errorsOpen = v; ev.push("errors " + v); };
-        const tabBarShownRef = { current: !!o.phone };
+        const tabBarShownRef = { current: st.phone };
         const scrollTopNow = () => ev.push("scroll top");
         const useRef = (init) => refs.view || (refs.view = { current: init });
         let prev = null, cur = null;
@@ -13702,10 +13703,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
           }
           prev = { view: st.view, editorDay: st.editorDay };
           editorDayRef.current = st.editorDay;
+          tabBarShownRef.current = st.phone; // the component's "tabBarShownRef.current = tabBarShown;" (pinned in "review 11/1")
           const g = new Function("view", "useRef", "appDaysDirtyRef", "confirm", "appDaysLeaveWords", "setViewState", S.guard + "\nreturn { setView, leaveMineOk };")(st.view, useRef, appDaysDirtyRef, confirm, H.appDaysLeaveWords, setViewState);
           const k = new Function("pushTapLeavesDraft", "editorDayRef", "editorDirtyRef", "confirm", "showToast", "setEditorDay", S.keep + "\n" + S.drop + "\nreturn { pushTapKeepsDraft, pushTapDropDraft };")(H.pushTapLeavesDraft, editorDayRef, editorDirtyRef, confirm, showToast, setEditorDay);
-          const goToDay = new Function("suIsIso", "refuseUnreadDay", "setView", "parse", "setCalMonth", "setCalYear", "setMoreOpen", "setShowNotifs", "setShowErrorLog", "setEditorDay", S.go + "\nreturn goToDay;")(H.suIsIso, () => false, g.setView, H.parse, (m) => { st.calMonth = m; }, () => {}, setMoreOpen, setShowNotifs, setShowErrorLog, setEditorDay);
-          const onMsg = new Function("pushOpenMessage", "pushTapKeepsDraft", "pushTapDropDraft", "setView", "setMoreOpen", "setShowNotifs", "tabBarShownRef", "scrollTopNow", "setPushDay", S.msg + "\nreturn onMsg;")(H.pushOpenMessage, k.pushTapKeepsDraft, k.pushTapDropDraft, g.setView, setMoreOpen, setShowNotifs, tabBarShownRef, scrollTopNow, setPushDay);
+          const goToDay = new Function("suIsIso", "refuseUnreadDay", "setView", "parse", "setCalMonth", "setCalYear", "setMoreOpen", "tabBarShownRef", "setShowNotifs", "setShowErrorLog", "setEditorDay", S.go + "\nreturn goToDay;")(H.suIsIso, () => false, g.setView, H.parse, (m) => { st.calMonth = m; }, () => {}, setMoreOpen, tabBarShownRef, setShowNotifs, setShowErrorLog, setEditorDay);
+          // tabBarShown: this render's value, captured by the listener made now (only a mutant reads it - the code reads the ref)
+          const onMsg = new Function("pushOpenMessage", "pushTapKeepsDraft", "pushTapDropDraft", "setView", "setMoreOpen", "setShowNotifs", "tabBarShownRef", "tabBarShown", "scrollTopNow", "setPushDay", S.msg + "\nreturn onMsg;")(H.pushOpenMessage, k.pushTapKeepsDraft, k.pushTapDropDraft, g.setView, setMoreOpen, setShowNotifs, tabBarShownRef, st.phone, scrollTopNow, setPushDay);
           const queued = new Function("loaded", "pushDay", "setPushDay", "pushTapKeepsDraft", "goToDay", S.queued);
           const link = new Function("isPublicMode", "pushLinkReady", "pushLinkDoneRef", "pushDeepLink", "window", "console", "setView", "setPushDay", S.link);
           cur = { onMsg, runQueued: () => queued(true, st.pushDay, setPushDay, k.pushTapKeepsDraft, goToDay),
@@ -13809,10 +13812,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         x = sheetTap({ data: { type: "silvis-push-open", tab: "evil" } }, [], "more");
         assert.deepStrictEqual([x.ev, x.sheet], [[], "more"], "(d) a non-whitelisted message leaves the sheet open");
         // (d2) review 11/1: the day opens later than the tap (the queued day waits for `loaded`; the deep link queues it at start) -
-        //      a sheet opened in between (More, Alerts) or Recent errors closes as goToDay opens the editor; goToDay's own Cancel
-        //      closes nothing (kept() above)
-        const deferred = (fire, open) => {
-          const I = instance(S, { view: "calendar", answers: [] });
+        //      on a phone a sheet opened in between (More, Alerts) or Recent errors closes as goToDay opens the editor; goToDay's
+        //      own Cancel closes nothing (kept() above). Fix check 11/1: on a wide screen the Alerts panel (no backdrop, under the
+        //      editor) stays open, as it does for every goToDay caller; Recent errors still closes
+        const deferred = (fire, open, phone) => {
+          const I = instance(S, { view: "calendar", answers: [], phone: phone !== false });
           fire(I.render()); I.render();
           if (open === "more") I.st.moreOpen = true; else if (open === "alerts") I.st.showNotifs = true; else I.st.errorsOpen = true;
           I.ev.length = 0;
@@ -13826,6 +13830,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
             assert.ok(x.sheet === null && x.errorsOpen === false && iE > 0 && ["more false", "notifs false", "errors false"].every(e => x.ev.indexOf(e) >= 0 && x.ev.indexOf(e) < iE), "(d2) " + how + ", " + open + " opened before the day opened: it closes as the editor opens: " + JSON.stringify(x));
           }
         }
+        x = deferred((c) => c.onMsg(msg("calendar", D)), "alerts", false);
+        assert.ok(x.sheet === "alerts" && x.editorDay === D && !x.ev.includes("notifs false"), "(d2) a wide screen: the Alerts panel stays open under the editor: " + JSON.stringify(x));
+        x = deferred((c) => c.runLink("?tab=calendar&day=" + D), "errors", false);
+        assert.ok(x.errorsOpen === false && x.editorDay === D && x.ev.indexOf("errors false") < x.ev.indexOf("editor " + D), "(d2) a wide screen: Recent errors closes as the editor opens: " + JSON.stringify(x));
         // (d3) review 11/1: a phone shows the target from its top, as a bar tap does (tabBarShownRef - the closure is an old
         //      render's): an accepted tap scrolls after the switch; a Cancel and a wide screen do not
         x = sheetTap(msg("timeoff"), [], "more", { phone: true });
@@ -13834,6 +13842,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         assert.ok(x.view === "myschedule" && !x.ev.includes("scroll top"), "(d3) phone, APP Cancel: no scroll: " + JSON.stringify(x));
         x = sheetTap(msg("timeoff"), [], "alerts");
         assert.ok(x.view === "timeoff" && x.sheet === null && !x.ev.includes("scroll top"), "(d3) a wide screen: the panel closes, no scroll: " + JSON.stringify(x));
+        // fix check 11/1: the listener is made once per account - one made on a wide render and fired after the page went phone-width
+        // still scrolls (it reads the ref every render refreshes, not the value of the render that made it)
+        {
+          const I = instance(S, { view: "calendar", answers: [] });
+          const stale = I.render().onMsg;
+          I.st.phone = true; I.render();
+          stale(msg("timeoff")); I.settle();
+          x = I.out();
+          assert.ok(x.view === "timeoff" && x.ev.includes("scroll top"), "(d3) a listener made wide, fired on a phone: it scrolls: " + JSON.stringify(x));
+        }
       };
       scenarios(SRC0);
       // mutants: each must turn a scenario red with an assertion (a crash would prove nothing)
@@ -13844,10 +13862,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         ["onMsg leaving the open sheet behind the day editor (the 11/1 leftover)", "msg", "      setMoreOpen(false); setShowNotifs(false);", ""],
         ["onMsg closing More but not the Alerts sheet", "msg", " setShowNotifs(false);", ""],
         ["onMsg closing the sheets before spec F's question", "msg", "      if (!setView(r.tab)) return;", "      setMoreOpen(false); setShowNotifs(false);\n      if (!setView(r.tab)) return;"],
-        ["goToDay opening the editor over a sheet opened after the tap (review 11/1)", "go", "    setMoreOpen(false); setShowNotifs(false); setShowErrorLog(false);\n", ""],
-        ["goToDay closing the sheets before spec F's question", "go", "    if (!setView(\"calendar\")) return;", "    setMoreOpen(false); setShowNotifs(false); setShowErrorLog(false);\n    if (!setView(\"calendar\")) return;"],
+        ["goToDay opening the editor over a sheet opened after the tap (review 11/1)", "go", "    setMoreOpen(false); if (tabBarShownRef.current) setShowNotifs(false); setShowErrorLog(false);\n", ""],
+        ["goToDay closing the sheets before spec F's question", "go", "    if (!setView(\"calendar\")) return;", "    setMoreOpen(false); if (tabBarShownRef.current) setShowNotifs(false); setShowErrorLog(false);\n    if (!setView(\"calendar\")) return;"],
+        ["goToDay closing the wide Alerts panel too (fix check 11/1)", "go", "if (tabBarShownRef.current) setShowNotifs(false);", "setShowNotifs(false);"],
         ["onMsg scrolling a wide screen too", "msg", "      if (tabBarShownRef.current) scrollTopNow();", "      scrollTopNow();"],
         ["onMsg not scrolling the phone to the top", "msg", "      if (tabBarShownRef.current) scrollTopNow();", ""],
+        ["onMsg reading the render's tabBarShown (an old listener would not scroll - fix check 11/1)", "msg", "      if (tabBarShownRef.current) scrollTopNow();", "      if (tabBarShown) scrollTopNow();"],
         ["pushTapKeepsDraft closing the editor on OK (Prompt 30's pre-merge body)", "keep", "    return false;\n  };", "    editorDirtyRef.current = false;\n    editorDayRef.current = null;\n    setEditorDay(null);\n    return false;\n  };"],
         ["the deep link ignoring setView's answer", "link", "    if (r.tab && !setView(r.tab)) return;", "    if (r.tab) setView(r.tab);"],
         ["goToDay ignoring setView's answer", "go", "    if (!setView(\"calendar\")) return;", "    setView(\"calendar\");"],
@@ -13866,18 +13886,26 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // review 11/1: the claim sheet and the e-mail preview render inside the Open shifts view and their backdrops cover both navs,
     // so only a notification tap moves the view while one is up - their state goes with the view (the effect lifted and run), so
     // no stale sheet comes back on the next visit and the toast never reads one as a dialog over the phone sheets; the claim
-    // sheet's one opener is the board's Take. And the 340 px month row keeps 4 px gaps (the 320 px title's room - the smoke
-    // measures it).
-    check("review 11/1 (BEHAVIOUR): the claim sheet / e-mail preview state goes with the Open shifts view; the 340 px row's 4 px gaps", () => {
-      const line = '  useEffect(() => { if (view !== "openshifts") { setClaimSheet(null); setObNotice(null); } }, [view]);';
-      assert.strictEqual(cntP(PSRC, line), 1, "one effect, keyed on the view");
-      assert.ok(PSRC.indexOf(line) > PSRC.indexOf("  const [obNotice, setObNotice] = useState(null);"), "after both states");
-      const body = line.slice(line.indexOf("{ if"), line.lastIndexOf("}, [view]") + 1);
+    // sheet's one opener is the board's Take. Fix check 11/1: a dialog whose claim / send is in flight stays (busy) for a return
+    // to the board - its flight's unconditional close would otherwise shut a second one opened meanwhile. The 340 px month row
+    // keeps 4 px gaps (the 320 px title's room - the smoke measures it); every render mirrors tabBarShown into the ref the sw
+    // message handler reads.
+    check("review 11/1 (BEHAVIOUR): the claim sheet / e-mail preview state goes with the Open shifts view unless its claim / send is in flight; the 340 px row's 4 px gaps; tabBarShownRef mirrored every render", () => {
+      const line = '  useEffect(() => { if (view === "openshifts") return; if (!claimBusy) setClaimSheet(null); if (!obNoticeBusy) setObNotice(null); }, [view, claimBusy, obNoticeBusy]);';
+      assert.strictEqual(cntP(PSRC, line), 1, "one effect, keyed on the view and both busy flags");
+      assert.ok(PSRC.indexOf(line) > PSRC.indexOf("  const [obNoticeBusy, setObNoticeBusy] = useState(false);"), "after the states and the busy flags");
+      const body = line.slice(line.indexOf("{ if"), line.lastIndexOf("}, [view") + 1);
       for (const v of ["calendar", "myschedule", "timeoff", "settings", "totals", "setup", "openshifts"]) {
-        const calls = [];
-        new Function("view", "setClaimSheet", "setObNotice", body)(v, (x) => calls.push("claim " + x), (x) => calls.push("notice " + x));
-        assert.deepStrictEqual(calls, v === "openshifts" ? [] : ["claim null", "notice null"], v + ": " + JSON.stringify(calls));
+        for (const [cb, nb] of [[false, false], [true, false], [false, true], [true, true]]) {
+          const calls = [];
+          new Function("view", "claimBusy", "obNoticeBusy", "setClaimSheet", "setObNotice", body)(v, cb, nb, (x) => calls.push("claim " + x), (x) => calls.push("notice " + x));
+          const want = v === "openshifts" ? [] : (cb ? [] : ["claim null"]).concat(nb ? [] : ["notice null"]);
+          assert.deepStrictEqual(calls, want, v + (cb ? ", a claim in flight" : "") + (nb ? ", a send in flight" : "") + ": " + JSON.stringify(calls));
+        }
       }
+      assert.ok(PSRC.includes("    const s = claimSheet;\n    if (!s || claimBusy || !mySurgeon) return;") && PSRC.includes("    const n = obNotice;\n    if (!n || obNoticeBusy) return;"), "a claim / a send reads its own copy first");
+      assert.strictEqual(cntP(PSRC, "  const tabBarShownRef = useRef(false);"), 1, "one ref");
+      assert.ok(PSRC.includes("  const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !paintSheet && !offerSheet;\n  tabBarShownRef.current = tabBarShown;\n"), "every render mirrors tabBarShown into the ref, where it is computed");
       assert.strictEqual(cntP(PSRC, "openClaimSheet("), 1, "openClaimSheet's one caller is the board's Take - nothing opens the sheet from another view");
       assert.ok(PSRC.includes('data-testid="ob-take" onClick={(e) => openClaimSheet(s, e.currentTarget)}'), "the board's Take");
       assert.ok(PSRC.includes("(moreOpen || showNotifs) && !editorDay && !claimSheet ? css.topToast : css.aboveTabBar(24)"), "the toast rule it keeps honest");

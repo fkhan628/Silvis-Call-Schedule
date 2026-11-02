@@ -1094,7 +1094,7 @@ const fetches = (b, re) => b.calls.filter(c => re.test(c.path));
     assert.ok(iK > 0 && iK < eff.indexOf("goToDay(d);"), "the queued day passes the same guard before goToDay");
     const de = S.index.slice(S.index.indexOf("function DayEditor(props) {"), S.index.indexOf("const requestClose = () => {", S.index.indexOf("function DayEditor(props) {")));
     assert.ok(de.includes('React.useEffect(() => { if (typeof onDirtyChange === "function") onDirtyChange(dirty); }, [dirty]);') && de.includes('React.useEffect(() => () => { if (typeof onDirtyChange === "function") onDirtyChange(false); }, []);'), "the DayEditor reports its dirty flag (and false on unmount)");
-    assert.ok(S.index.includes("onDirtyChange={(d) => { editorDirtyRef.current = !!d; }}") && S.index.includes("editorDayRef.current = editorDay;"), "the parent keeps the refs the handler reads");
+    assert.ok(S.index.includes("onDirtyChange={(d) => { editorDirtyRef.current = !!d; }}") && S.index.includes("editorDayRef.current = editorDay;") && S.index.includes("\n  tabBarShownRef.current = tabBarShown;\n"), "the parent keeps the refs the handler reads (11/1: tabBarShownRef too)");
   };
   await check("a tap on an open window (onMsg + pushTapKeepsDraft lifted and run): a dirty day draft is never dropped silently - the editor's own question, Cancel keeps it, OK closes it first - review 10/3", draftGuardCheck);
   await check("source pins: the re-arm effect (once per account, isPublicMode-guarded, never requestPermission), the deep link (pushDeepLink once + history.replaceState, isPublicMode-guarded), the sw message listener, adoptSignedInUser's dropForeign, the card's testids and words, the manual_edit day, the corrected addNotification comment", (S) => {
