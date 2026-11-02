@@ -4521,17 +4521,23 @@ try {
         //  for both roles). e4Confirm reads the result on the reloaded page either way.
         const BUSY_OK = ["east-busy", "east-forecast-busy", "hard-never-weekday", "weekday-not-allowed"], SOFT_OK = ["east-forecast-busy", "hard-never-weekday", "weekday-not-allowed"];
         const why = {};
-        const rank = (days, o, keys) => days.map(d => ({ d, e: elig(d, "primary", "s1", o) }))
-          .filter(x => x.e.ok || ((x.e.hard || []).length > 0 && x.e.hard.every(c => keys.includes(key(c)))))
+        // a SOFT candidate the pattern alone blocks (not 'free') must also clear what eligibility() checks after its pattern
+        // block - it returns at the first failed block, so those codes never show here, and the overlay's home day lifts only
+        // the pattern: the derived (East) locks, the other role, his own days on either side (max-consecutive). BUSY needs
+        // 'east-busy' FIRST only (11/2, time travel 11/23: T_SOFT 12/01 hid 'holds-other-role' behind 'hard-never-weekday:Tue')
+        const addD = (d, n) => new Date(Date.parse(d + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+        const clearBeyond = (d) => { const e = ctx.schedule[d] || {}, P = ctx.per.s1 || {}, ds = (ctx.derivedByDay || {})[d]; return e.backup !== "s1" && !(P.derived && P.derived[d]) && !(ds && ds.primary && ds.primary !== "s1") && ![addD(d, -1), addD(d, 1)].some(n => { const x = ctx.schedule[n] || {}; return x.primary === "s1" || x.backup === "s1"; }); };
+        const rank = (days, o, keys, guard) => days.map(d => ({ d, e: elig(d, "primary", "s1", o) }))
+          .filter(x => x.e.ok || ((x.e.hard || []).length > 0 && x.e.hard.every(c => keys.includes(key(c))) && (!guard || guard(x.d))))
           .sort((a, b) => ((a.e.ok ? 0 : 1) - (b.e.ok ? 0 : 1)) || (a.d < b.d ? -1 : a.d > b.d ? 1 : 0))
           .map(x => { why[x.d] = x.e.ok ? "free" : x.e.hard.join(","); return x.d; });
         const rows = Object.keys(ctx.schedule).sort().filter(d => { const e = ctx.schedule[d] || {}; return plain(d) && !!e.primary && e.primary !== "s1" && e.backup !== "s1" && !e.primaryLocked && !e.externalCover; });
-        const softRows = rank(rows, { claim: true }, SOFT_OK), soft = softRows[0] || null;
+        const softRows = rank(rows, { claim: true }, SOFT_OK, clearBeyond), soft = softRows[0] || null;
         const busyRows = rank(rows.filter(d => d !== soft), { claim: true }, BUSY_OK), busy = busyRows[0] || null;
         // Khan not the backup (11/2, time travel 11/23): eligibility() returns at the first failed pattern rule, so a
         // 'hard-never-weekday' day hid 'holds-other-role' until the overlay's home day lifted the pattern
         const tDays = args.values.map(v => v.split("|")).filter(([d, role]) => role === "primary" && plain(d) && d !== busy && d !== soft && (ctx.schedule[d] || {}).backup !== "s1").map(([d]) => d);
-        const tSoftList = rank(tDays.filter(d => !near(d, soft)), { ignoreLocks: true, claim: true }, SOFT_OK), tSoft = tSoftList[0] || null;
+        const tSoftList = rank(tDays.filter(d => !near(d, soft)), { ignoreLocks: true, claim: true }, SOFT_OK, clearBeyond), tSoft = tSoftList[0] || null;
         const tHardList = rank(tDays.filter(d => d !== tSoft), { ignoreLocks: true, claim: true }, BUSY_OK), tHard = tHardList[0] || null;
         const w = (d) => d ? d + " (" + why[d] + ")" : "none";
         return { rows: rows.length, softN: softRows.length, busyN: busyRows.length, tDays: tDays.length, tSoftN: tSoftList.length, tHardN: tHardList.length, busy, soft, tHard, tSoft, text: { busy: w(busy), soft: w(soft), tHard: w(tHard), tSoft: w(tSoft) } };
@@ -5757,15 +5763,22 @@ try {
     await clearToast();
     await page.screenshot({ path: path.join(OUT, "openshifts.png"), fullPage: true });
     // Copy list: one openSlotsLine per visible row, written with navigator.clipboard.writeText (mocked to record; delegated to the real clipboard).
-    await page.evaluate(() => { window.__obClip = []; const real = navigator.clipboard.writeText.bind(navigator.clipboard); navigator.clipboard.writeText = async (t) => { window.__obClip.push(t); try { await real(t); } catch (e) {} }; });
-    await page.click("[data-testid=ob-copy]");
-    await page.waitForTimeout(300);
-    const clip = await page.evaluate(() => window.__obClip);
-    const lines = (clip[0] || "").split("\n").filter(Boolean);
-    if (clip.length !== 1 || lines.length !== all.rows.length) fail(`Open shifts: Copy list wrote ${clip.length} time(s), ${lines.length} line(s) for ${all.rows.length} row(s)`);
-    else if (!lines.every(l => /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l))) fail("Open shifts: a Copy list line is not 'Ddd MM/DD - role (unit) - open': " + lines.find(l => !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)));
-    else if (!noAddr(clip[0])) fail("Open shifts: the Copy list carries an email address");
-    else ok(`Open shifts: Copy list -> ${lines.length} line(s), e.g. "${lines[0]}"${lines.length > 1 ? ` ... "${lines[lines.length - 1]}"` : ""}`);
+    // 11/2 (time travel 12/31): Copy list is disabled={!rows.length} like Email - on an empty board the click waited out 30 s
+    if (!all.rows.length) {
+      const copyDis = await page.$eval("[data-testid=ob-copy]", el => el.disabled).catch(() => null);
+      if (copyDis !== true) fail(`Open shifts: with an empty board Copy list must be disabled - nothing to copy - but disabled=${copyDis}`);
+      else console.log("     (Open shifts: the board is empty - Copy list is disabled, as it must be; its lines are not exercised this run)");
+    } else {
+      await page.evaluate(() => { window.__obClip = []; const real = navigator.clipboard.writeText.bind(navigator.clipboard); navigator.clipboard.writeText = async (t) => { window.__obClip.push(t); try { await real(t); } catch (e) {} }; });
+      await page.click("[data-testid=ob-copy]");
+      await page.waitForTimeout(300);
+      const clip = await page.evaluate(() => window.__obClip);
+      const lines = (clip[0] || "").split("\n").filter(Boolean);
+      if (clip.length !== 1 || lines.length !== all.rows.length) fail(`Open shifts: Copy list wrote ${clip.length} time(s), ${lines.length} line(s) for ${all.rows.length} row(s)`);
+      else if (!lines.every(l => /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l))) fail("Open shifts: a Copy list line is not 'Ddd MM/DD - role (unit) - open': " + lines.find(l => !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}\/\d{2} - (primary|backup)( \([^)]*\))? - open/.test(l)));
+      else if (!noAddr(clip[0])) fail("Open shifts: the Copy list carries an email address");
+      else ok(`Open shifts: Copy list -> ${lines.length} line(s), e.g. "${lines[0]}"${lines.length > 1 ? ` ... "${lines[lines.length - 1]}"` : ""}`);
+    }
     // Email the group now (scheduler): a confirm dialog PREVIEWS the composed e-mail (Prompt 13 part 5b: subject 'N open shifts through M/D',
     // the slots grouped by Monday week, the #openshifts deep link) and writes NOTHING until Send -> feed row open_shifts (data.slots = the
     // whole range, title = the subject) + broadcast send-notification { subject, message, detail } + audit openshifts.notify; 'last announced' fills.
