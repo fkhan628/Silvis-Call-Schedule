@@ -66,10 +66,33 @@ const khan = H.buildICSEvents(schedule, "s1", roster, {});
 const khanIcs = H.generateICS(khan, "Silvis Call - Khan");
 const allIcs = H.generateICS(all, "Silvis Call - All");
 
+// 11/2: DTSTAMP is the generation time to the minute (seconds always "00"), so during the 07:00 UTC minute it reads
+// "...T070000Z" - the old /TZID|T070000|VTIMEZONE|DTSTART:/ test matched it and failed the 11/2 deploy's build at 07:00:57Z.
+// timedOrZoned looks past the DTSTAMP lines (the codebase's DTSTAMP:X idiom) and then refuses ANY date-time, TZID, VTIMEZONE or
+// bare DTSTART / DTEND - an all-day file has none.
+const icsNoStamp = (t) => t.replace(/DTSTAMP:\d{8}T\d{6}Z/g, "DTSTAMP:X");
+const timedOrZoned = (t) => /TZID|VTIMEZONE|DTSTART:|DTEND:|\d{8}T\d{6}/.test(icsNoStamp(t));
 check("ICS all-day runs: each event is DTSTART;VALUE=DATE the first day and DTEND;VALUE=DATE the day after the last (exclusive) - Khan's 10/31-11/2 run (across the fall-back) is ONE event 20261031 -> 20261103; no TZID, no timed stamp, no VTIMEZONE", () => {
   assert.deepStrictEqual(khan.map(x => [x.day, x.last, x.role, x.start, x.end, x.allDay]), [["2026-10-31", "2026-11-02", "primary", "20261031", "20261103", true], ["2026-11-26", "2026-11-26", "primary", "20261126", "20261127", true]]);
   assert.ok(khanIcs.includes("\r\nDTSTART;VALUE=DATE:20261031\r\nDTEND;VALUE=DATE:20261103\r\n"), "the all-day lines");
-  assert.ok(!/TZID|T070000|VTIMEZONE|DTSTART:/.test(khanIcs), "no timed stamp, no zone");
+  assert.ok(!timedOrZoned(khanIcs), "no timed stamp, no zone (DTSTAMP aside - the generation time)");
+});
+check("ICS 'no timed stamp' reads past DTSTAMP at any clock - generated at 07:00, 12:00, 13:00 and 00:00 UTC the all-day file still reads all-day; a timed or a zoned file is still caught (11/2: the old /T070000/ check failed during the 07:00 UTC minute)", () => {
+  const withClock = (iso, fn) => {
+    const Real = Date, t = Real.parse(iso);
+    global.Date = class extends Real { constructor(...a) { super(...(a.length ? a : [t])); } static now() { return t; } };
+    try { return fn(); } finally { global.Date = Real; }
+  };
+  for (const iso of ["2026-11-02T07:00:30Z", "2026-11-02T12:00:30Z", "2026-11-02T13:00:30Z", "2026-11-02T00:00:30Z"]) {
+    const ics = withClock(iso, () => H.generateICS(khan, "Silvis Call - Khan"));
+    const stamp = iso.slice(0, 16).replace(/[-:]/g, "") + "00Z";
+    assert.ok(ics.includes("\r\nDTSTAMP:" + stamp + "\r\n"), "the stubbed clock reached generateICS: " + iso);
+    assert.ok(!timedOrZoned(ics), "generated at " + iso + ": the all-day file reads all-day");
+  }
+  const timed = H.generateICS([{ uid: "a@silvis-call", start: "20261031T070000", end: "20261101T070000", summary: "x", desc: "y" }], "Timed");
+  const zoned = H.generateICS([{ uid: "b@silvis-call", tzid: "America/Chicago", start: "20261031T070000", end: "20261101T070000", summary: "x", desc: "y" }], "Zoned");
+  const utcTimed = H.generateICS([{ uid: "c@silvis-call", start: "20261031T120000Z", end: "20261101T130000Z", summary: "x", desc: "y" }], "UTC");
+  assert.ok(timedOrZoned(timed) && timedOrZoned(zoned) && timedOrZoned(utcTimed), "a timed (local or UTC) or a zoned file is still caught");
 });
 check("ICS UID stability: 'silvis-<start>-<role>@silvis-call' per surgeon, 'silvis-<start>-group@silvis-call' for the group; identical across builds, unique", () => {
   assert.deepStrictEqual(khan.map(x => x.uid), ["silvis-2026-10-31-primary@silvis-call", "silvis-2026-11-26-primary@silvis-call"]);

@@ -911,6 +911,9 @@ const liveRowsEarly = await (async () => {
 const liveEarlyByDay = {}; liveRowsEarly.forEach(r => { liveEarlyByDay[r.day] = r; });
 // the app's holder rule: an external cover stands in for a primary; a day with no row is open in both roles
 const liveOpenEarly = (d, role) => { const r = liveEarlyByDay[d]; return role === "primary" ? !(r && (r.primary_id || r.external_cover)) : !(r && r.backup_id); };
+// 11/2: an .ics download is all-day - past its DTSTAMP lines (the generation time to the minute, seconds "00": during the
+// 07:00 UTC minute it reads "...T070000Z", which the old /TZID=|T070000/ checks took for a timed stamp) no date-time and no zone
+const icsTimedOrZoned = (t) => /TZID|VTIMEZONE|DTSTART:|DTEND:|\d{8}T\d{6}/.test(String(t).replace(/DTSTAMP:\d{8}T\d{6}Z/g, "DTSTAMP:X"));
 const isoPlus = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + n * 86400000).toISOString().slice(0, 10);
 // Do first 3 (review 9/27): the today banner and Share today name the pair on call NOW - the 07:00 -> 07:00 shift
 // covering this moment (helpers.js shiftClockCentral / onCallNow; before 07:00 Central the previous calendar day's
@@ -2830,7 +2833,7 @@ try {
     const n = (g.text.match(/BEGIN:VEVENT/g) || []).length;
     if (g.name !== "silvis-call-all.ics") fail("group ics filename: " + g.name);
     // all-day runs since 9/25: DTSTART;VALUE=DATE / DTEND;VALUE=DATE, 'P <Name> \u00b7 B <Name>', UID silvis-<start>-group, no timed stamp
-    else if (!g.text.startsWith("BEGIN:VCALENDAR\r\n") || !/DTSTART;VALUE=DATE:\d{8}\r\nDTEND;VALUE=DATE:\d{8}\r\n/.test(g.text) || /TZID=|T070000/.test(g.text) || !/SUMMARY:P [\w() ]+ \u00b7 B [\w() ]+\r\n/.test(g.text) || !/UID:silvis-\d{4}-\d{2}-\d{2}-group@silvis-call/.test(g.text)) fail("group ics content wrong: " + g.text.slice(0, 400).replace(/\r\n/g, " | "));
+    else if (!g.text.startsWith("BEGIN:VCALENDAR\r\n") || !/DTSTART;VALUE=DATE:\d{8}\r\nDTEND;VALUE=DATE:\d{8}\r\n/.test(g.text) || icsTimedOrZoned(g.text) || !/SUMMARY:P [\w() ]+ \u00b7 B [\w() ]+\r\n/.test(g.text) || !/UID:silvis-\d{4}-\d{2}-\d{2}-group@silvis-call/.test(g.text)) fail("group ics content wrong: " + g.text.slice(0, 400).replace(/\r\n/g, " | "));
     else ok(`group ics: ${g.name} (${n} all-day run events, 'P <Name> \u00b7 B <Name>', UIDs silvis-<start>-group)`);
   } catch (e) { fail("group ics download: " + errLine(e)); }
   // (b) per-surgeon .ics from the tools card (Khan)
@@ -3040,7 +3043,7 @@ try {
     await page.waitForSelector("[data-testid=download-my-calendar]", { timeout: 5000 });
     const mine = await saveDownload(() => page.click("[data-testid=download-my-calendar]"));
     const n = (mine.text.match(/BEGIN:VEVENT/g) || []).length;
-    if (mine.name !== "silvis-call-khan.ics" || !mine.text.startsWith("BEGIN:VCALENDAR\r\n") || /TZID=|T070000/.test(mine.text) || (n > 0 && (!/UID:silvis-\d{4}-\d{2}-\d{2}-(primary|backup)@silvis-call/.test(mine.text) || !/DTSTART;VALUE=DATE:\d{8}\r\n/.test(mine.text)))) fail("My schedule ics wrong: " + mine.name + " " + mine.text.slice(0, 200).replace(/\r\n/g, " | ")); else ok(`My schedule: ${mine.name} (${n} all-day run events, stable UIDs silvis-<start>-<role>)`);
+    if (mine.name !== "silvis-call-khan.ics" || !mine.text.startsWith("BEGIN:VCALENDAR\r\n") || icsTimedOrZoned(mine.text) || (n > 0 && (!/UID:silvis-\d{4}-\d{2}-\d{2}-(primary|backup)@silvis-call/.test(mine.text) || !/DTSTART;VALUE=DATE:\d{8}\r\n/.test(mine.text)))) fail("My schedule ics wrong: " + mine.name + " " + mine.text.slice(0, 200).replace(/\r\n/g, " | ")); else ok(`My schedule: ${mine.name} (${n} all-day run events, stable UIDs silvis-<start>-<role>)`);
     await page.screenshot({ path: path.join(OUT, "myschedule-export.png"), fullPage: false });
   } catch (e) { fail("My schedule ics: " + errLine(e)); }
   await showMonth(2026, 9);
