@@ -30,6 +30,8 @@ const REGIONS = [
   // now). Their rows' own tints are app-styles.js PAINT_ROWS, which contrast.mjs measures the text tokens against.
   { key: "offer-painter", label: "Paint my offers (the offer painter sheet)", start: "function OfferPainterSheet(", end: "// Reusable collapsible section.", surface: { light: "#FFFFFF", dark: "#13294B" } },
   { key: "vacation-painter", label: "Paint vacations (the vacation painter sheet)", start: "function MonthPainterSheet(", end: "// Per-device panel state.", surface: { light: "#FFFFFF", dark: "#13294B" } },
+  // 11/1 item 6: the phone's bottom tab bar (navy in both themes) and its More sheet (T.surface) - theme tokens only.
+  { key: "tab-bar", label: "Phone tab bar + More sheet (11/1 item 6)", start: "{/* --- Phone tab bar + More sheet (11/1 item 6) ---", end: "{/* --- end of the phone tab bar --- */}", surface: { light: "#13294B", dark: "#13294B" } },
 ];
 
 // The literal greys / red the six regions carried before B2 (the "old set"); the data-layer pin names each.

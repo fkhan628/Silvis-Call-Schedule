@@ -2104,6 +2104,60 @@ const openNotifSettings = async (pg) => {
   }
   return (await pg.getAttribute("[data-testid=notif-settings-toggle]", "aria-expanded").catch(() => null)) === "true";
 };
+// ---- 11/1 item 6: the phone's bottom tab bar ----
+// At <= 600 px the header nav gives way to a bottom tab bar: Calendar, Mine (Following), Open shifts, Time off (each where the
+// role has it) and More, whose sheet holds Totals, Paint offers, Settings, Alerts, Setup and Undo. The sheet stays MOUNTED while
+// the bar shows (hidden when closed), so a read of button[data-tab] sees every destination once at any width; a click on a More
+// row waits for it to show, so the helpers below open More first. Keyed on what the page shows, never a viewport number: on a
+// wide page, or for a bar tab, they are the plain click they replace.
+const MORE_BTN = "[data-testid=tabbar-more]", MORE_SHEET = "[data-testid=more-sheet]", ALERTS_BTN = 'button[aria-label="Notifications"]';
+const openMoreSheet = async (pg) => { if (!(await pg.isVisible(MORE_SHEET))) await pg.click(MORE_BTN); await pg.waitForSelector(MORE_SHEET, { state: "visible", timeout: 5000 }); };
+const closeMoreSheet = async (pg) => { if (await pg.isVisible(MORE_SHEET)) { await pg.keyboard.press("Escape"); await pg.waitForSelector(MORE_SHEET, { state: "hidden", timeout: 5000 }); } };
+const clickNav = async (pg, sel) => { if (!(await pg.isVisible(sel)) && (await pg.isVisible(MORE_BTN))) await openMoreSheet(pg); await pg.click(sel); };
+const clickTab = (pg, key) => clickNav(pg, `button[data-tab="${key}"]`);
+// The phone nav as a page shows it, read without opening anything: the bar's buttons in order (data-tab, or tabbar-more), their
+// labels, the More sheet's rows in order (data-tab / testid / alerts), More's badge and the Alerts row's count; null off a phone.
+const phoneNavModel = (pg) => pg.evaluate(() => {
+  const bar = document.querySelector("[data-testid=tabbar]");
+  if (!bar) return null;
+  const sheet = document.querySelector("[data-testid=more-sheet]");
+  const key = (b) => b.getAttribute("data-tab") || b.getAttribute("data-testid") || (b.getAttribute("aria-label") === "Notifications" ? "alerts" : "?");
+  const label = (b) => { const l = b.querySelector(".tabbar-label"); return (l ? l.textContent : b.textContent).trim(); };
+  const rows = sheet ? Array.from(sheet.querySelectorAll("[data-more-item]")) : [];
+  const alertsRow = rows.find(b => b.getAttribute("aria-label") === "Notifications");
+  const badge = document.querySelector("[data-testid=more-badge]");
+  return { bar: Array.from(bar.children).map(key), labels: Array.from(bar.children).map(label), more: rows.map(key), moreBadge: badge ? badge.textContent.trim() : "",
+    alertsCount: alertsRow ? ((alertsRow.querySelector("span") || { textContent: "" }).textContent || "").trim() : "", sheetMounted: !!sheet, sheetHidden: !!sheet && sheet.hidden,
+    text: (bar.innerText + " " + (sheet ? sheet.textContent : "")).replace(/\s+/g, " ") };
+});
+// Nothing hides behind the bar: the page's last content (app-main's last child) ends above the bar's top once scrolled to the end.
+const lastAboveBar = (pg) => pg.evaluate(() => {
+  const bar = document.querySelector("[data-testid=tabbar]"), main = document.querySelector("[data-testid=app-main]");
+  if (!bar || !main) return null;
+  window.scrollTo(0, document.documentElement.scrollHeight);
+  const kids = Array.from(main.children).filter(k => k.getClientRects().length);
+  const last = kids[kids.length - 1];
+  const out = { lastBottom: last ? Math.round(last.getBoundingClientRect().bottom) : null, mainBottom: Math.round(main.getBoundingClientRect().bottom), barTop: Math.round(bar.getBoundingClientRect().top) };
+  window.scrollTo(0, 0);
+  return out;
+});
+// One role's phone nav (Faraz 11/1): the bar's slots and labels, More's rows (Undo aside - the scheduler's, with history), More's
+// badge = the Alerts row's count, no East / Davenport / DSG word on either and, for a role with no pay UI, no $ or "pay".
+const checkPhoneNav = async (pg, tag, want, noPay) => {
+  const m = await phoneNavModel(pg);
+  if (!m) { fail(`${tag}: 11/1 item 6 - no tab bar at this width`); return; }
+  const bad = [];
+  if (m.bar.join(",") !== want.bar.join(",")) bad.push("bar " + m.bar.join(","));
+  if (m.labels.join("|") !== want.labels.join("|")) bad.push("labels " + m.labels.join("|"));
+  if (m.more.filter(k => k !== "undo-btn").join(",") !== want.more.join(",")) bad.push("More " + m.more.join(","));
+  if (!m.sheetMounted || !m.sheetHidden) bad.push(`the More sheet mounted ${m.sheetMounted}, hidden ${m.sheetHidden}`);
+  if (m.moreBadge !== m.alertsCount) bad.push(`More's badge '${m.moreBadge}' vs the Alerts row's '${m.alertsCount}'`);
+  if (/\beast\b|davenport|\bdsg\b/i.test(m.text)) bad.push("an East word: " + m.text.slice(0, 120));
+  if (noPay && /\$|\bpay\b/i.test(m.text)) bad.push("pay words: " + m.text.slice(0, 120));
+  if (bad.length) fail(`${tag}: 11/1 item 6 phone nav - ${bad.join(" | ")}`);
+  else ok(`${tag}: 11/1 item 6 phone nav - bar ${m.labels.join(", ")}; More ${m.more.join(", ")}${m.moreBadge ? "; More's badge " + m.moreBadge : ""}`);
+};
+const NAV_SURGEON = { bar: ["calendar", "myschedule", "openshifts", "timeoff", "tabbar-more"], labels: ["Calendar", "Mine", "Open shifts", "Time off", "More"], more: ["totals", "nav-paint-offers", "settings", "alerts"] };
 
 try {
   const attempts = await loadWithRetry(page, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "main page");
@@ -2239,6 +2293,12 @@ try {
   const tabs = await page.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
   const expectedTabs = ["setup", "calendar", "openshifts", "myschedule", "timeoff", "totals", "settings"];
   if (JSON.stringify(tabs) !== JSON.stringify(expectedTabs)) fail(`nav tabs are ${JSON.stringify(tabs)}, expected ${JSON.stringify(expectedTabs)}`); else ok("nav tabs: " + tabs.join(", "));
+  // 11/1 item 6: a wide page keeps the header nav - no bottom tab bar, no More sheet, no spacer
+  {
+    const wb = await page.evaluate(() => ({ bar: !!document.querySelector("[data-testid=tabbar]"), sheet: !!document.querySelector("[data-testid=more-sheet]"), spacer: !!document.querySelector(".tabbar-spacer"), headerTabs: document.querySelectorAll("[data-testid=app-header] button[data-tab]").length }));
+    if (wb.bar || wb.sheet || wb.spacer || wb.headerTabs !== expectedTabs.length) fail("11/1 item 6 (1180): a wide page must keep the header nav and show no tab bar: " + JSON.stringify(wb));
+    else ok(`11/1 item 6 (1180): the header nav (${wb.headerTabs} tabs), no bottom tab bar, no More sheet`);
+  }
   for (const t of tabs) {
     const before = pageErrors.length;
     await page.click(`button[data-tab="${t}"]`);
@@ -2247,7 +2307,7 @@ try {
     if (pageErrors.length > before) fail(`tab ${t}: pageerror ${pageErrors.slice(before).join(" | ")}`); else ok(`tab ${t}: rendered, screenshot ${path.relative(ROOT, path.join(OUT, t + ".png"))}`);
   }
   // Settings: open the collapsible cards so their render paths run too.
-  await page.click('button[data-tab="settings"]');
+  await clickTab(page, "settings");
   for (const title of ["Activity log", "Client versions", "Office notifications", "Restore from snapshot"]) {
     const el = await page.$(`text=${title}`);
     if (el) { await el.click(); await page.waitForTimeout(200); }
@@ -2560,7 +2620,7 @@ try {
       else ok(`Item A week start ${where}: header ${got.join(" ")}, weekend tint on columns ${wkCols.join(",")}, no header label, ${cells.length} cells from ${cells[0].day}, data-week-start + localStorage '${mode}'`);
     };
     await expectHdr("sun", "default (October 2026, nothing stored yet but the effect wrote 'sun')");
-    const setWeekStart = async (mode) => { await page.click('button[data-tab="settings"]'); await page.click(`[data-testid=week-start-${mode}]`); await page.waitForTimeout(150); const p = await pressed(); if (p !== (mode === "mon" ? "sun:false,mon:true" : "sun:true,mon:false")) fail(`Item A Settings control after ${mode}: aria-pressed reads ${p}`); await showMonth(2026, 9); };
+    const setWeekStart = async (mode) => { await clickTab(page, "settings"); await page.click(`[data-testid=week-start-${mode}]`); await page.waitForTimeout(150); const p = await pressed(); if (p !== (mode === "mon" ? "sun:false,mon:true" : "sun:true,mon:false")) fail(`Item A Settings control after ${mode}: aria-pressed reads ${p}`); await showMonth(2026, 9); };
     await setWeekStart("mon");
     await expectHdr("mon", "after Settings > Week starts on: Monday");
     const octMon = await readCells();
@@ -3265,10 +3325,11 @@ try {
       await sp.waitForTimeout(800);
       const tabsS = await sp.$$eval("button[data-tab]", els => els.map(e => e.getAttribute("data-tab")));
       if (tabsS.includes("setup")) fail("Item E (surgeon): the mocked surgeon page shows a Setup tab - it is being treated as the scheduler, so the clean-grid checks below prove nothing: " + tabsS.join(","));
+      await checkPhoneNav(sp, "Item E (surgeon, 390)", NAV_SURGEON, false); // 11/1 item 6
       // Settings declutter (9/27): a surgeon sees only his own cards - no group heading at all, no 'Scheduler tools' -
       // and keeps his calendar-sync card (he has a roster link).
       try {
-        await sp.click('button[data-tab="settings"]');
+        await clickTab(sp, "settings");
         await sp.waitForTimeout(400);
         const sdS = await sp.evaluate(() => ({ heads: document.querySelectorAll("[data-testid=settings-group]").length, tools: /Scheduler tools/i.test(document.body.innerText || ""),
           sync: !!document.querySelector("[data-testid=calsync-card]"), exp: !!document.querySelector("[data-testid=export-backup]"), pageW: document.documentElement.scrollWidth }));
@@ -3284,7 +3345,7 @@ try {
         else ok(`Settings declutter (surgeon, 390): the inline 'How' toggle is ${mt.w} x ${mt.h} (its note is ${mt.ph} px at a ${mt.lh} px line height)`);
       } catch (e) { fail("Settings declutter (surgeon): " + String(e && e.message || e).split("\n")[0]); }
       for (const theme of ["dark", "light"]) {
-        await sp.click('button[data-tab="settings"]');
+        await clickTab(sp, "settings");
         await sp.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
         await sp.click('button[data-tab="calendar"]');
         await sp.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
@@ -3383,6 +3444,15 @@ try {
           else if (!wants.some(w => w.text === ln.text && w.kind === ln.kind && (w.next ? w.next.day : "") === ln.day)) fail(`Item 2 (surgeon, 390 ${theme}): the line reads '${ln.text}' (${ln.kind} ${ln.day || "-"}), the served rows give '${wants.map(w => w.text).join("' / '")}'`);
           else ok(`Item 2 (surgeon, 390 ${theme}): On call now reads '${ln.text}' = helpers.myNextCallLine over the ${servedS2.size} served day row(s)`);
         } catch (e) { fail(`Item 2 (surgeon, 390 ${theme}): ` + errLine(e)); }
+        // 11/1 (items 1 + 6): the first screen at 390 x 844 - the header's title row, On call now and the month controls leave the
+        // grid's first TWO weeks on screen above the tab bar (on 10/30 the grid began at the first screen's fold)
+        if (theme === "light") {
+          try {
+            const fs1 = await sp.evaluate(() => { window.scrollTo(0, 0); const cells = document.querySelectorAll("[data-testid=cal-grid] .cal-cell"), bar = document.querySelector("[data-testid=tabbar]"); return cells.length >= 14 && bar ? { week2Bottom: Math.round(cells[13].getBoundingClientRect().bottom), gridTop: Math.round(cells[0].getBoundingClientRect().top), barTop: Math.round(bar.getBoundingClientRect().top) } : null; });
+            if (!fs1 || fs1.week2Bottom > fs1.barTop) fail("first screen (surgeon, 390 x 844): the grid's second week should end above the tab bar: " + JSON.stringify(fs1));
+            else ok(`first screen (surgeon, 390 x 844): the grid starts at ${fs1.gridTop} px and its second week ends at ${fs1.week2Bottom}, above the tab bar (${fs1.barTop})`);
+          } catch (e) { fail("first screen (surgeon, 390 x 844): " + errLine(e)); }
+        }
         await sp.screenshot({ path: path.join(OUT, `calendar-nov-2026-surgeon-390-${theme}.png`), fullPage: true });
       }
       ok("screenshots test/ui/out/calendar-nov-2026-surgeon-390-dark.png / -light.png");
@@ -3547,7 +3617,7 @@ try {
       return out;
     });
     const e3Totals = async (pg, shot) => {
-      await pg.click('button[data-tab="totals"]');
+      await clickTab(pg, "totals");
       await pg.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
       await pg.click("[data-testid=totals-mode-month]");
       await pg.selectOption("[data-testid=totals-year]", "2026");
@@ -3967,7 +4037,7 @@ try {
             try {
               payMock = (url) => url.pathname.endsWith("/call_pay_settings") ? { status: 500, body: { message: "harness: settings read failed" } } : { status: 200, body: [] };
               await rp.click('button[data-tab="calendar"]');
-              await rp.click('button[data-tab="totals"]');
+              await clickTab(rp, "totals");
               await rp.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
               const modeBtnF = await rp.$("[data-testid=totals-mode-pay]");
               if (!modeBtnF) fail(`${T}: Totals has no Pay mode button (settings-failed step)`);
@@ -3987,7 +4057,7 @@ try {
             try {
               payMock = (url) => url.pathname.endsWith("/call_pay_settings") ? { status: 200, body: [{ id: "main" }] } : { status: 200, body: [] };
               await rp.click('button[data-tab="calendar"]');
-              await rp.click('button[data-tab="totals"]');
+              await clickTab(rp, "totals");
               await rp.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
               const modeBtn = await rp.$("[data-testid=totals-mode-pay]");
               if (!modeBtn) fail(`${T}: Totals has no Pay mode button (the office reads Totals > Pay, read-only)`);
@@ -4630,6 +4700,87 @@ try {
   if (ringLock.some(x => x.gap < 2.5)) fail(`mobile 390px: a padlock sits on the ring of the scheduler's own pill: ${JSON.stringify(ringLock.filter(x => x.gap < 2.5).slice(0, 4))}`);
   else if (ringLock.length) ok(`mobile 390px: ${ringLock.length} own locked pill(s) of s1 keep their padlock ${Math.min(...ringLock.map(x => x.gap))}+ px off the pill (the ring takes 1 px)`);
   else console.log("     (mobile 390px: no locked pill of s1 in October 2026 - the ring / padlock spacing is not exercised)");
+  // ---- 11/1 item 6: the phone's bottom tab bar, on the scheduler's page at 390 px ----
+  // One nav in the DOM (no header tab, every data-tab key once); the bar's slots and More's rows (Faraz 11/1); the bar on the
+  // viewport's bottom edge, every slot a 44 px target with its label unclipped (390 / 360 / 320); More as a modal sheet standing
+  // on the bar (focus in, Escape back to More, its backdrop closes it); every view reached through the bar / More renders with
+  // no page error, closes More and marks exactly one destination current; the page's last content ends above the bar; 600 px
+  // shows the bar and 601 the header nav. Screenshot tabbar-390.png.
+  {
+    const N6 = "11/1 item 6 tab bar (scheduler 390)";
+    try {
+      const geo = () => page.evaluate(() => {
+        const bar = document.querySelector("[data-testid=tabbar]");
+        const keys = Array.from(document.querySelectorAll("button[data-tab]")).map(b => b.getAttribute("data-tab"));
+        const dup = keys.filter((k, i) => keys.indexOf(k) !== i);
+        if (!bar) return { bar: false, headerTabs: document.querySelectorAll("[data-testid=app-header] button[data-tab]").length, dup, pageW: document.documentElement.scrollWidth };
+        const r = bar.getBoundingClientRect();
+        const slots = Array.from(bar.children).map(b => { const bb = b.getBoundingClientRect(), l = b.querySelector(".tabbar-label"); return { k: b.getAttribute("data-tab") || b.getAttribute("data-testid"), w: Math.round(bb.width), h: Math.round(bb.height), clipped: !!l && l.scrollWidth > l.clientWidth + 0.5 }; });
+        return { bar: true, top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height), vh: window.innerHeight, slots, headerTabs: document.querySelectorAll("[data-testid=app-header] button[data-tab]").length, dup, pageW: document.documentElement.scrollWidth };
+      });
+      const g = await geo();
+      const bad = [];
+      if (!g.bar) bad.push("no tab bar at 390 px");
+      else {
+        if (g.headerTabs || g.dup.length) bad.push(`the header still holds ${g.headerTabs} tab(s) / duplicated keys ${g.dup.join(",")}`);
+        if (g.slots.map(s => s.k).join(",") !== "calendar,myschedule,openshifts,timeoff,tabbar-more") bad.push("the bar's slots read " + g.slots.map(s => s.k).join(","));
+        if (g.bottom !== g.vh || g.h !== 56) bad.push(`the bar is ${g.h} px tall at ${g.top}..${g.bottom} of ${g.vh}`);
+        if (g.slots.some(s => s.w < 44 || s.h < 44 || s.clipped)) bad.push("a slot under 44 px or a clipped label: " + JSON.stringify(g.slots));
+        if (g.pageW > 392) bad.push(`the page scrolls sideways (${g.pageW})`);
+      }
+      const m = await phoneNavModel(page);
+      const wantMore = ["totals", "nav-paint-offers", "settings", "alerts", "setup"];
+      if (!m || m.more.slice(0, 5).join(",") !== wantMore.join(",") || m.more.slice(5).some(k => k !== "undo-btn") || !m.sheetMounted || !m.sheetHidden) bad.push("More's rows / state: " + JSON.stringify(m && { more: m.more, mounted: m.sheetMounted, hidden: m.sheetHidden }));
+      const parity = m ? m.bar.filter(k => k !== "tabbar-more").concat(m.more.filter(k => ["setup", "totals", "settings"].includes(k))).sort().join(",") : "";
+      if (parity !== expectedTabs.slice().sort().join(",")) bad.push(`the bar + More reach ${parity}, the 1180 nav ${expectedTabs.slice().sort().join(",")}`);
+      if (m && /\beast\b|davenport|\bdsg\b/i.test(m.text)) bad.push("an East word on the bar / in More: " + m.text.slice(0, 160));
+      // More: a modal sheet on the bar, the focus inside; Escape closes it back to More; its backdrop closes it
+      await openMoreSheet(page);
+      const s1 = await page.evaluate(() => { const sh = document.querySelector("[data-testid=more-sheet]"), bar = document.querySelector("[data-testid=tabbar]"), mb = document.querySelector("[data-testid=tabbar-more]"); return { focusIn: sh.contains(document.activeElement), gap: Math.round(bar.getBoundingClientRect().top - sh.getBoundingClientRect().bottom), expanded: mb.getAttribute("aria-expanded"), modal: sh.getAttribute("aria-modal") }; });
+      await page.waitForFunction(() => document.querySelector("[data-testid=more-sheet]").contains(document.activeElement), null, { timeout: 2000 }).catch(() => {});
+      const focusIn = await page.evaluate(() => document.querySelector("[data-testid=more-sheet]").contains(document.activeElement));
+      if (!focusIn || s1.gap !== 0 || s1.expanded !== "true" || s1.modal !== "true") bad.push("the open More sheet: " + JSON.stringify({ ...s1, focusIn }));
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(MORE_SHEET, { state: "hidden", timeout: 3000 });
+      const back = await page.evaluate(() => (document.activeElement && document.activeElement.getAttribute("data-testid")) || "");
+      if (back !== "tabbar-more") bad.push("Escape left the focus on '" + back + "', not More");
+      await openMoreSheet(page);
+      await page.mouse.click(195, 120);
+      const byBackdrop = await page.waitForSelector(MORE_SHEET, { state: "hidden", timeout: 3000 }).then(() => true, () => false);
+      if (!byBackdrop) bad.push("a tap on the backdrop left More open");
+      // every view through the bar / More: renders, More closed, one current destination, the page's end above the bar
+      for (const k of ["calendar", "myschedule", "openshifts", "timeoff", "totals", "settings", "setup"]) {
+        const before = pageErrors.length;
+        await clickTab(page, k);
+        await page.waitForTimeout(400);
+        const st = await page.evaluate((key) => ({ sheetHidden: document.querySelector("[data-testid=more-sheet]").hidden, current: Array.from(document.querySelectorAll("[data-testid=tabbar] [aria-current=page], [data-testid=more-sheet] [aria-current=page]")).map(b => b.getAttribute("data-tab")), y: Math.round(window.scrollY) }), k);
+        const end = await lastAboveBar(page);
+        if (pageErrors.length > before) bad.push(`${k}: a page error`);
+        if (!st.sheetHidden || st.current.join(",") !== k || st.y !== 0) bad.push(`${k}: ${JSON.stringify(st)}`);
+        if (!end || end.lastBottom === null || end.lastBottom > end.barTop) bad.push(`${k}: the page's last content ends under the bar ${JSON.stringify(end)}`);
+      }
+      const mark = await page.evaluate(() => !!document.querySelector("[data-testid=tabbar-more] > span[aria-hidden=true]"));
+      if (!mark) bad.push("More carries no current mark while Setup (a More view) is shown");
+      // the label sizes at 360 and 320; 600 shows the bar, 601 the header nav
+      for (const [w, h] of [[360, 780], [320, 640]]) {
+        await page.setViewportSize({ width: w, height: h }); await page.waitForTimeout(250);
+        const gw = await geo();
+        if (!gw.bar || gw.slots.some(s => s.w < 44 || s.h < 44 || s.clipped) || gw.pageW > w + 2) bad.push(`${w} px: ${JSON.stringify(gw.slots || gw)}`);
+      }
+      await page.setViewportSize({ width: 600, height: 844 }); await page.waitForTimeout(250);
+      const g600 = await geo();
+      await page.setViewportSize({ width: 601, height: 844 }); await page.waitForTimeout(250);
+      const g601 = await geo();
+      if (!g600.bar || g600.headerTabs) bad.push(`600 px: bar ${g600.bar}, header tabs ${g600.headerTabs}`);
+      if (g601.bar || g601.headerTabs !== expectedTabs.length) bad.push(`601 px: bar ${g601.bar}, header tabs ${g601.headerTabs}`);
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(250);
+      await clickTab(page, "calendar");
+      await page.screenshot({ path: path.join(OUT, "tabbar-390.png"), fullPage: false });
+      if (bad.length) fail(N6 + ": " + bad.slice(0, 6).join(" | "));
+      else ok(`${N6}: one nav (the bar ${g.slots.map(s => s.k).join(", ")}; More ${m.more.join(", ")}), the bar ${g.h} px on the bottom edge with 44 px+ slots and unclipped labels at 390 / 360 / 320; More a modal sheet on the bar (focus in, Escape and its backdrop close it, the focus back on More); seven views through the bar / More, each with one current mark and its end above the bar; 600 px bar, 601 px header nav`);
+    } catch (e) { fail(N6 + ": " + errLine(e)); try { await page.setViewportSize({ width: 390, height: 844 }); await closeMoreSheet(page); } catch (e2) {} }
+    await showMonth(2026, 9);
+  }
   await page.screenshot({ path: path.join(OUT, "calendar-mobile.png"), fullPage: true });
   ok("screenshot test/ui/out/calendar-mobile.png");
   // ---- Prompt 11 mobile pass ----
@@ -4722,6 +4873,12 @@ try {
       else if (saMeta.theme.join() !== "#FF5F05") fail("safe area: the theme-color meta moved: " + JSON.stringify(saMeta.theme));
       else if (saHdr.padTop !== "61px" || saHdr.padBottom !== "14px" || saHdr.top !== 0) fail(`safe area: under a 47px top inset the header should pad 47 + 14 = 61px at the top and 14px below, from the very top (computed ${JSON.stringify(saHdr)})`);
       else ok(`safe area (390 x 844, insets 47 / 34): viewport-fit=cover, theme-color kept, header padding-top ${saHdr.padTop} / bottom ${saHdr.padBottom}`);
+      // 11/1 item 6: the bottom tab bar under the 34 px home-indicator band - on the bottom edge, padded by the inset (56 + 34 =
+      // 90 px), its tabs ending above the band
+      const saBar = await page.$eval("[data-testid=tabbar]", el => { const cs = getComputedStyle(el), r = el.getBoundingClientRect(), b = el.querySelector("button").getBoundingClientRect(); return { padBottom: cs.paddingBottom, h: Math.round(r.height), bottom: Math.round(r.bottom), btnBottom: Math.round(b.bottom), vh: window.innerHeight }; }).catch(() => null);
+      if (!saBar) fail("safe area: 11/1 item 6 - no tab bar at 390 px");
+      else if (saBar.padBottom !== "34px" || saBar.h !== 90 || saBar.bottom !== saBar.vh || saBar.btnBottom > saBar.vh - 34) fail("safe area: 11/1 item 6 - the tab bar should stand on the bottom edge, 90 px with 34 px of inset padding, its tabs above the band: " + JSON.stringify(saBar));
+      else ok(`safe area: 11/1 item 6 - the tab bar is ${saBar.h} px on the bottom edge (padding-bottom ${saBar.padBottom}); its tabs end at ${saBar.btnBottom} of ${saBar.vh}, above the 34 px band`);
       await page.evaluate(() => { const t = document.querySelector("[data-testid=toast]"); if (t) t.click(); });
       await page.waitForTimeout(150);
       await page.screenshot({ path: path.join(OUT, "calendar-390-standalone.png"), fullPage: false });
@@ -4831,7 +4988,7 @@ try {
   // surgeon side is checked, on a grid that actually loaded (cells and filled cells > 0). Light is restored before the
   // viewport goes back to 1180 so the theme flow below is unchanged.
   {
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Dark')");
     await showMonth(2026, 10);
     const themeSched = await page.evaluate(() => { try { return localStorage.getItem("silvis-dark-mode") === "true" ? "dark" : "light"; } catch (e) { return "?"; } });
@@ -4847,7 +5004,7 @@ try {
     else ok(`Item E2 (scheduler, 390 dark): November 2026 grid has no E / F / f badge and no 'East-derived:' hover bit (${nov390.length} cells, ${filled390} filled) and the legend has no 'East-derived week' / 'East forecast' line`);
     await page.screenshot({ path: path.join(OUT, "calendar-nov-2026-390-dark.png"), fullPage: true });
     ok("screenshot test/ui/out/calendar-nov-2026-390-dark.png");
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Light')");
     await page.click('button[data-tab="calendar"]');
   }
@@ -4914,7 +5071,7 @@ try {
     const vacBars = Array.from(document.querySelectorAll("[data-testid=cal-grid] [data-testid=cal-vac]")).map(b => { const fg = parseRgb(getComputedStyle(b).color), bg = parseRgb(getComputedStyle(b).backgroundColor); return { day: b.closest("[data-day]").getAttribute("data-day"), who: b.getAttribute("data-vac-ids"), ratio: fg && bg ? Math.round(ratio(fg, bg) * 100) / 100 : null }; });
     return { h1: probe(document.querySelector("h1")), rows: byName, bodyBg: getComputedStyle(document.body).backgroundColor, vacBars };
   });
-  await page.click('button[data-tab="settings"]');
+  await clickTab(page, "settings");
   await page.click("button:has-text('Dark')");
   await showMonth(2026, 9);
   await page.waitForTimeout(300);
@@ -4944,7 +5101,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await b9EditorGuard("dark");
   await page.setViewportSize({ width: 1180, height: 900 });
-  await page.click('button[data-tab="settings"]');
+  await clickTab(page, "settings");
   await page.click("button:has-text('Light')");
   await showMonth(2026, 9);
   const lightProbe = await contrastProbe();
@@ -5431,7 +5588,7 @@ try {
     await clearToast();
     await page.screenshot({ path: path.join(OUT, "openshifts-390.png"), fullPage: true });
     await page.setViewportSize({ width: 1180, height: 900 });
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Dark')");
     await openBoard();
     await page.waitForTimeout(300);
@@ -5472,7 +5629,7 @@ try {
     if (badShots.length) fail("screenshots missing or stale: " + badShots.map(s => `${s.f} ${s.why}`).join(", "));
     else ok("screenshots test/ui/out/" + shotState.map(s => `${s.f} (${Math.round(s.size / 1024)} KB)`).join(", ") + " - all from this run, all under 300 KB");
     await page.setViewportSize({ width: 1180, height: 900 });
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Light')");
     await page.click('button[data-tab="calendar"]');
     await page.waitForTimeout(200);
@@ -5803,7 +5960,7 @@ try {
 
   // ---- Publish dialog: the diff line shows a real arrow, not the text "\u2192" ----
   if (day) {
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     const btn = page.locator("button:has-text('Publish and notify office')");
     if (!(await btn.isVisible().catch(() => false))) { await page.click("text=Office notifications"); }
     await btn.click();
@@ -5889,7 +6046,7 @@ try {
   // Deviation columns are exercised; cleared again in the finally below.
   const ACTON_TARGET = 10;
   const setActonTarget = async (value) => {
-    await page.click('button[data-tab="setup"]');
+    await clickTab(page, "setup");
     await openCard("setup_rules");
     await page.click("[data-testid=rules-pick-s3]");
     await page.waitForSelector("[data-testid=rules-summary]", { timeout: 5000 });
@@ -5900,7 +6057,7 @@ try {
     if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) { await page.click("[data-testid=rules-save]"); await page.waitForTimeout(1200); }
   };
   const gotoTotalsOct = async () => {
-    await page.click('button[data-tab="totals"]');
+    await clickTab(page, "totals");
     await page.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
     if (!(await page.$("[data-testid=totals-table]"))) await page.click("[data-testid=totals-mode-month]");
     await page.selectOption("[data-testid=totals-year]", "2026");
@@ -5996,7 +6153,7 @@ try {
     if (!light.over.length) fail("Totals: no cell is flagged over (expected at least the over-cap caps and Acton's deviation in October 2026)");
     else if (!light.over.every(o => o.color === "rgb(192, 64, 64)")) fail("Totals light: flagged cells are not red #c04040: " + JSON.stringify(light.over));
     else ok(`Totals light: ${light.over.length} flagged cell(s) red - ` + light.over.map(o => `${o.row} ${o.col}`).join(", "));
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Dark')");
     await gotoTotalsOct();
     const dark = await colourProbe();
@@ -6023,7 +6180,7 @@ try {
       }
     }
     await page.screenshot({ path: path.join(OUT, "fairness-dark.png"), fullPage: true });
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Light')");
     await gotoTotalsOct();
     // Phone width: the page must not scroll sideways; the table scrolls inside its wrapper.
@@ -6093,7 +6250,7 @@ try {
     if (targetSet) {
       try {
         await setActonTarget(null);
-        await page.click('button[data-tab="totals"]');
+        await clickTab(page, "totals");
         await page.waitForSelector("[data-testid=totals-card]", { timeout: 8000 });
         const stillTarget = await page.$eval("[data-testid=totals-row-s3] td[data-col=target]", el => el.textContent.trim()).catch(() => null);
         // 10/30: with no target in any row the four target columns are not drawn at all - an absent column is "cleared" too
@@ -6231,7 +6388,7 @@ try {
   // The word was a literal #7a5a20 the dark sheet never repainted (2.29:1 on #13294B); it is T.backupText now.
   // Measured on computed colours: the role span against the first opaque background up its ancestors.
   try {
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Dark')");
     await page.click('button[data-tab="myschedule"]');
     await page.waitForSelector("[data-testid=mine-card]", { timeout: 8000 });
@@ -6256,11 +6413,11 @@ try {
     else if (!bw) console.log("     (dark Backup role word: not exercised - s1 has no backup row in the next 90 days)");
     else if (bw.ratio === null || bw.ratio < 4.5) fail(`My schedule dark: the Backup role word on ${bw.day} reads ${bw.ratio}:1 (${bw.color} on ${bw.bg}), below 4.5:1`);
     else ok(`My schedule dark: the Backup role word on ${bw.day} '${bw.text}' ${bw.color} on ${bw.bg} = ${bw.ratio}:1`);
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Light')");
   } catch (e) {
     fail("My schedule dark role-word harness exception: " + errLine(e));
-    try { await page.click('button[data-tab="settings"]'); await page.click("button:has-text('Light')"); } catch (_) { /* the next block reports its own state */ }
+    try { await clickTab(page, "settings"); await page.click("button:has-text('Light')"); } catch (_) { /* the next block reports its own state */ }
   }
 
   // ---- Item D (2026-09-24): Settings (scheduler) shows Khan's combined Silvis + Davenport feed link with Copy at 390 px, light + dark ----
@@ -6269,7 +6426,7 @@ try {
   // (navigator.clipboard.writeText mocked to record, delegated to the real one); the office note names Outlook.
   try {
     await page.setViewportSize({ width: 1180, height: 900 });
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.waitForSelector("[data-testid=combined-sync-url]", { timeout: 8000 });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(300);
@@ -6464,7 +6621,7 @@ try {
         else if (exp[0].status === "not_started" && !/following your rules/.test(line)) fail(`Offer deadline notice: the painter's period line must read 'following your rules' for s2 (not_started on ${exp[0].label}) - got '${line.slice(0, 120)}'`);
         else ok(`Offer deadline notice: Paint days (optional) opened the painter for s2 on '${exp[0].label}' (period line '${line.slice(0, 90)}'), zero writes`);
         if (sheet) { await np.click("[data-testid=ofp-close]"); await np.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 }).catch(() => {}); }
-        await np.click('button[data-tab="settings"]');
+        await clickTab(np, "settings");
         await np.click("button:has-text('Dark')");
         await np.click('button[data-tab="myschedule"]');
         await np.waitForSelector("[data-testid=offer-deadline-notice]", { timeout: 5000 });
@@ -6473,7 +6630,7 @@ try {
         else ok(`Offer deadline notice (dark): text ${dk.c} on ${dk.bg} (THEME.dark noticeText / noticeBg)`);
         await np.locator("[data-testid=mine-offers]").scrollIntoViewIfNeeded();
         await np.screenshot({ path: path.join(OUT, "offer-notice-390-dark.png"), fullPage: false });
-        await np.click('button[data-tab="settings"]');
+        await clickTab(np, "settings");
         await np.click("button:has-text('Light')");
         ok("screenshots test/ui/out/offer-notice-390.png / -dark.png");
       }
@@ -6919,14 +7076,14 @@ try {
       await page.selectOption("[data-testid=mine-person]", "s1");
       // desktop light (nav action), then dark at 1180 and 390
       await page.setViewportSize({ width: 1180, height: 900 });
-      await page.click("[data-testid=nav-paint-offers]");
+      await clickNav(page, "[data-testid=nav-paint-offers]");
       await page.waitForSelector("[data-testid=ofp-sheet][data-person=s1]", { timeout: 5000 });
       await page.waitForTimeout(200);
       await page.screenshot({ path: path.join(OUT, "offers-desktop.png"), fullPage: false });
       ok("screenshot test/ui/out/offers-desktop.png (opened from the nav action)");
       await page.click("[data-testid=ofp-close]");
       await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
-      await page.click('button[data-tab="settings"]');
+      await clickTab(page, "settings");
       await page.click("button:has-text('Dark')");
       await page.click('button[data-tab="myschedule"]');
       await page.waitForSelector("[data-testid=paint-offers]", { timeout: 5000 });
@@ -7034,7 +7191,7 @@ try {
       // ---- fix/painter-dark-mode (10/3): the vacation painter (Setup > Vacations > Paint month) in DARK mode - a free weekday row
       //      is the dark surface (data-surface), not #2E5090 ----
       try {
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await page.click("[data-testid=card-setup_vacations] button:has-text('Paint month')");
         await page.waitForSelector("[data-testid=vacp-day]", { timeout: 5000 });
         const vp = await page.evaluate(() => { const dow = (d) => new Date(d + "T12:00:00Z").getUTCDay(); const rows = Array.from(document.querySelectorAll("[data-testid=vacp-day]")); const r = rows.find(e => dow(e.getAttribute("data-day")) % 6 !== 0 && !e.textContent.includes("unsaved") && !e.textContent.includes("range starts here")); return r ? { day: r.getAttribute("data-day"), bg: getComputedStyle(r).backgroundColor, surface: r.getAttribute("data-surface") } : null; });
@@ -7044,7 +7201,7 @@ try {
         await page.waitForSelector("[data-testid=vacp-day]", { state: "detached", timeout: 3000 });
       } catch (e) { fail("Painter dark (fix/painter-dark-mode): the vacation painter step - " + errLine(e)); }
       await page.setViewportSize({ width: 1180, height: 900 });
-      await page.click('button[data-tab="settings"]');
+      await clickTab(page, "settings");
       await page.click("button:has-text('Light')");
     } finally {
       page.off("dialog", onOfpDialog);
@@ -7085,7 +7242,7 @@ try {
     const lastEnd = servedEnds.length ? servedEnds[servedEnds.length - 1] : todayCentral;
     const target = (() => { const y = +lastEnd.slice(0, 4), m = +lastEnd.slice(5, 7); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; })();
     const openAt = async (ym) => {
-      await npp.click("[data-testid=nav-paint-offers]");
+      await clickNav(npp, "[data-testid=nav-paint-offers]");
       await npp.waitForSelector("[data-testid=ofp-sheet][data-person=s2]", { timeout: 8000 });
       await npp.waitForTimeout(300);
       for (let k = 0; k < 36; k++) { const m = await npp.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month")); if (m >= ym) break; await npp.click("[data-testid=ofp-next]"); await npp.waitForTimeout(100); }
@@ -7445,7 +7602,7 @@ try {
     ok("screenshot test/ui/out/myschedule-offers-390.png");
     // dark: My schedule at 390, the editor at 1180 (the offers line takes the dark sub colour, never the light one)
     await page.setViewportSize({ width: 1180, height: 900 });
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Dark')");
     await page.click('button[data-tab="myschedule"]');
     await page.waitForSelector("[data-testid=mine-offers]", { timeout: 5000 });
@@ -7464,7 +7621,7 @@ try {
     await page.screenshot({ path: path.join(OUT, "day-editor-offers-dark.png"), fullPage: false });
     ok("screenshot test/ui/out/day-editor-offers-dark.png");
     await closeEditor();
-    await page.click('button[data-tab="settings"]');
+    await clickTab(page, "settings");
     await page.click("button:has-text('Light')");
     await page.click('button[data-tab="myschedule"]');
     await page.waitForSelector("[data-testid=mine-person]", { timeout: 5000 });
@@ -8066,7 +8223,7 @@ try {
               else if (wt.pendingRows !== 1 || wt.anyRows !== 1) fail(`Give (receiver, waiting on you): the Pending card must keep exactly one trade-row for the give (got ${wt.pendingRows} in Pending, ${wt.anyRows} in the page)`);
               else ok(`Give (receiver, waiting on you): trades-waiting is the first card, lists the give with Accept / Decline (${wt.rows} row(s)); the tab badge reads ${wt.badge}; the Pending card keeps its single trade-row`);
             } catch (e) { fail("Give (receiver, waiting on you): " + errLine(e)); }
-            await rp.click('button[aria-label="Notifications"]');
+            await clickNav(rp, ALERTS_BTN);
             await rp.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
             const nLine = await rp.$eval("[data-testid=notif-give-line]", el => el.textContent.trim()).catch(() => "");
             const nBtns = await rp.$$eval("[data-testid=notif-give-accept], [data-testid=notif-give-decline]", els => els.map(e => e.getAttribute("data-testid")));
@@ -8150,7 +8307,7 @@ try {
               schedFeed = { page, rows: [schedRow] };
               try {
                 if (!rtSendRow("notifications", schedRow, "INSERT")) throw new Error("the scheduler page's realtime channel is not joined - the feed refresh cannot be triggered");
-                await page.click('button[aria-label="Notifications"]');
+                await clickNav(page, ALERTS_BTN);
                 await page.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
                 const seen = await page.waitForFunction((msg) => Array.from(document.querySelectorAll("[data-testid=notif-row][data-type=trade_applied]")).some(e => e.textContent.includes(msg) && e.textContent.includes("Give applied")), appN.message, { timeout: 8000 }).then(() => true, () => false);
                 await page.click('button[aria-label="Close notifications"]').catch(() => {});
@@ -8560,7 +8717,7 @@ try {
     // ---- (4) Setup -> Rules: the 'Prefers' select (was 'Primary contribution') writes surgeonRules.<id>.primaryContribution ----
     // Prompt 24 (moved deliberately 10/1): only the rules s1 uses are on the form - Monthly target (his is null = equal share)
     // and, should the live rules drop it, Prefers come from the "Add a rule" menu first (neither writes anything by appearing).
-    await page.click('button[data-tab="setup"]');
+    await clickTab(page, "setup");
     await openCard("setup_rules");
     await page.click("[data-testid=rules-pick-s1]");
     await page.waitForSelector("[data-testid=rules-summary]", { timeout: 5000 });
@@ -8612,7 +8769,7 @@ try {
   const SETUP_CARDS = ["setup_issues", "setup_roster", "setup_users", "setup_rules", "setup_availability", "setup_vacations", "setup_holidays", "setup_pay", "setup_east", "setup_generate", "setup_import", "setup_office", "setup_clear"];
   // (openCard is defined above, before the Totals section that also needs it.)
   try {
-    await page.click('button[data-tab="setup"]');
+    await clickTab(page, "setup");
     await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 8000 });
     // Setup declutter (9/27): three quiet headings - 'Every cycle' (issues, Generate, Vacations), 'Configuration'
     // (Roster .. Office contacts), 'Rarely used' (Import seed, Clear schedule) - and a one-line summary on a closed
@@ -9241,7 +9398,7 @@ try {
         const drift = [prev, vacD].filter(d => obs[d].primary !== curDay(d).primary || obs[d].backup !== curDay(d).backup);
         if (drift.length) console.log(`     (vacation conflict: the grid differs from the live rows on ${drift.join(", ")} - the expected items follow the grid)`);
         console.log(`     (vacation conflict fixture: ${rosterNameOf(vacX)} (${vacX}) on ${vacD} - primary on ${prev} per the ${drift.length ? "grid" : "live rows"}; expected items ${vacItemsE.map(i => mdOf(i.day) + " " + i.role).join(", ")})`);
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
       }
       await openCard("setup_vacations");
@@ -9285,7 +9442,7 @@ try {
           if (!edT.includes(wantT)) fail(`'go to day' did not open the day editor on ${vacD} (want '${wantT}'): ` + edT); else ok(`'go to day' on ${mdOf(vacD)} opens the calendar day editor on ${edT.trim()}`);
           await page.keyboard.press("Escape");
         }
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
       }
     }
@@ -9362,7 +9519,7 @@ try {
           if (!hpExact) console.log(`     (holiday plan: the East inputs reach a ${HP_Y} unit day (${hpReach.slice(0, 4).join("; ")}) - the restatement cannot know those refusals; the rendered plan is checked for shape only this run)`);
           // a fresh poll interval: the Plan .. Re-check sequence reads the app's map and must not race the 60 s poll
           await freshPollWindow("holiday plan");
-          await page.click('button[data-tab="setup"]');
+          await clickTab(page, "setup");
           await openCard("setup_holidays");
           await page.waitForSelector("[data-testid=holplan]", { timeout: 8000 });
           const hpYears = await page.$$eval("[data-testid=holplan-year] option", os => os.map(o => o.value));
@@ -9720,7 +9877,7 @@ try {
     try {
       const EV = EASTVAC_RANGES;
       const want = [["unreviewed", EV[0]], ["away", EV[1]], ["home", EV[2]]];
-      await page.click('button[data-tab="setup"]');
+      await clickTab(page, "setup");
       await openCard("setup_east");
       await page.waitForSelector("[data-testid=eastvac-list]", { timeout: 8000 });
       const readRanges = (listSel) => page.$$eval(`${listSel} [data-testid^=eastvac-range-]`, els => els.map(e => ({ start: e.getAttribute("data-start"), end: e.getAttribute("data-end"), state: e.getAttribute("data-state"), buttons: Array.from(e.querySelectorAll("[data-testid^=eastvac-set-]")).map(b => ({ st: b.getAttribute("data-testid").slice("eastvac-set-".length), pressed: b.getAttribute("aria-pressed"), h: b.getBoundingClientRect().height })) })));
@@ -9793,7 +9950,7 @@ try {
       if (m390.pageW > 392 || m390.offscreen || m390.minBtn < 32) fail("East vacations panel 390px: the page scrolls sideways or a control is off screen / short: " + JSON.stringify(m390)); else ok(`East vacations panel 390px: no horizontal page scroll (${m390.pageW}), every control on screen and >= 32px (${m390.minBtn})`);
       await shotPanel("eastvac-panel-390.png");
       await page.setViewportSize({ width: 1180, height: 900 });
-      const setTheme = async (dark) => { await page.click('button[data-tab="settings"]'); await page.click(`button:has-text('${dark ? "Dark" : "Light"}')`); await page.click('button[data-tab="setup"]'); await openCard("setup_east"); await page.waitForSelector("[data-testid=eastvac-list]", { timeout: 8000 }); await page.waitForTimeout(300); };
+      const setTheme = async (dark) => { await clickTab(page, "settings"); await page.click(`button:has-text('${dark ? "Dark" : "Light"}')`); await clickTab(page, "setup"); await openCard("setup_east"); await page.waitForSelector("[data-testid=eastvac-list]", { timeout: 8000 }); await page.waitForTimeout(300); };
       await setTheme(true);
       const darkSeg = await page.evaluate(() => {
         const on = document.querySelector("[data-testid=eastvac-card] [data-testid^=eastvac-set-][aria-pressed=true]"); const cs = on ? getComputedStyle(on) : null;
@@ -9935,7 +10092,7 @@ try {
       //      EV[0] gets an away row first (the row that must survive), then the mocked Davenport time_off and the east_feed
       //      overlay the reload reads answer EV[0] unchanged, EV[1] ending one day later (changed) and EV[2] gone (removed).
       {
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await openCard("setup_east");
         await page.waitForSelector("[data-testid=eastvac-list]", { timeout: 8000 });
         await page.click(`${row0} [data-testid=eastvac-set-away]`);
@@ -9972,7 +10129,7 @@ try {
         else ok(`East refresh reset: ${EV[1].start}..${EV[1].end} moved + ${EV[2].start}..${EV[2].end} removed from Davenport -> ONE POST rpc/east_vacation_reset_stale { p_from: ${rd.from} } (the database's reset; no client DELETE, no client eastvac.review row); toast '${wantToast}'; audit reviewResets 2 via rpc; the unchanged ${EV[0].start} range kept its away row; panel lists 2 ranges (away, moved unreviewed)`);
         eastVacFeed = EASTVAC_RANGES; // restore for whatever follows (the app's cache picture follows on its next reload)
       }
-      await page.click('button[data-tab="setup"]');
+      await clickTab(page, "setup");
       await page.waitForTimeout(300);
     } catch (e) { fail("East vacations (Prompt 15 part 3) harness exception: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-eastvac.png"), fullPage: true }); } catch (e2) {} eastVacFeed = EASTVAC_RANGES; await page.setViewportSize({ width: 1180, height: 900 }).catch(() => {}); }
 
@@ -10046,7 +10203,7 @@ try {
         await page.keyboard.press("Escape");
         await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
         // Setup > East feed: the box lists the day; the last-refresh line
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await openCard("setup_east");
         await page.waitForSelector("[data-testid=eastvac-warnings]", { timeout: 8000 });
         const box = await page.$eval("[data-testid=eastvac-warnings]", el => ({ n: Number(el.getAttribute("data-count")), rows: Array.from(el.querySelectorAll("[data-testid=eastvac-warning]")).map(r => ({ who: r.getAttribute("data-person"), start: r.getAttribute("data-start"), short: r.getAttribute("data-short"), text: r.innerText.replace(/\s+/g, " ").trim() })) }));
@@ -10148,7 +10305,7 @@ try {
     // between here and the Accept & Publish pin edits the map, and the app's polls only reconcile it toward
     // the live rows, so the picture settled here also serves the write-set derivation below.
     await settleMapToLive("live-state premise");
-    await page.click('button[data-tab="setup"]');
+    await clickTab(page, "setup");
     await page.waitForTimeout(300);
     await openCard("setup_generate");
     let genRangeStart = null; // SM2: the derived default start, reused as the preview range's start below
@@ -10558,9 +10715,9 @@ try {
         await secLoc.screenshot({ path: path.join(OUT, "periods-390.png") });
         ok("screenshot test/ui/out/periods-390.png");
         await page.setViewportSize({ width: 1180, height: 900 });
-        await page.click('button[data-tab="settings"]');
+        await clickTab(page, "settings");
         await page.click("button:has-text('Dark')");
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await openCard("setup_generate");
         await page.waitForSelector("[data-testid=periods-section]", { timeout: 5000 });
         await page.waitForTimeout(200);
@@ -10573,9 +10730,9 @@ try {
         await page.locator("[data-testid=periods-section]").screenshot({ path: path.join(OUT, "periods-390-dark.png") });
         ok("screenshot test/ui/out/periods-390-dark.png");
         await page.setViewportSize({ width: 1180, height: 900 });
-        await page.click('button[data-tab="settings"]');
+        await clickTab(page, "settings");
         await page.click("button:has-text('Light')");
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await openCard("setup_generate");
         await page.waitForSelector("[data-testid=gen-run]", { timeout: 5000 });
       } finally {
@@ -10743,7 +10900,7 @@ try {
     await page.locator("[data-testid=cal-grid]").screenshot({ path: path.join(OUT, "mobile-calendar-generate-preview-grid.png") });
     await page.setViewportSize({ width: 1180, height: 900 });
     await page.waitForTimeout(200);
-    await page.click('button[data-tab="setup"]');
+    await clickTab(page, "setup");
     await page.waitForSelector("[data-testid=gen-accept]", { timeout: 5000 });
 
     // RF2 a: Accept names every HELD but UNLOCKED slot the merge replaces (a manual / trade / claim / generated /
@@ -10963,7 +11120,7 @@ try {
         else ok(`Accept & Publish: blob autosave carries data.lastGenerate { at, range ${lg.range.start}..${lg.range.end}, ${slots.length} open slot(s), ${Object.keys(lg.weekendKinds).length} weekend kind(s) } - every reason operational (${slots.slice(0, 2).map(s => s.day + " " + s.role + ": " + s.reason).join("; ") || "none open"}), none naming East (Item E3), past the importer denylist`);
       }
     }
-    await page.click('button[data-tab="setup"]');
+    await clickTab(page, "setup");
     await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 });
     // The seed's schedule_days range (the days the importer compares): the
     // board scenario's claimed day(s) inside it are app-edited (source 'claim')
@@ -11057,7 +11214,7 @@ try {
         else ok(`Day editor: ${extDay} -> ${extWrite.method} schedule_days { primary_id: x1, primary_locked: true, source: manual-external }`);
         if ((await cellAttr(extDay, "data-primary")) !== "x1") fail("Calendar: the cell does not show x1 as primary after the save"); else ok("Calendar: the cell shows Locum as primary");
         // Totals: the 'Outside surgeons' section for that month, and never a pool-table row
-        await page.click('button[data-tab="totals"]');
+        await clickTab(page, "totals");
         await page.waitForSelector("[data-testid=totals-card]", { timeout: 5000 });
         await page.selectOption("[data-testid=totals-year]", ey);
         await page.selectOption("[data-testid=totals-month]", String(Number(em) - 1));
@@ -11073,7 +11230,7 @@ try {
         // an editor left open intercepts every later click - close it so a failure here stays one FAIL (SM2 review)
         if (await page.$("[data-testid=day-editor]")) { await page.keyboard.press("Escape").catch(() => {}); await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
       }
-      await page.click('button[data-tab="setup"]').catch(() => {});
+      await clickTab(page, "setup").catch(() => {});
       await page.waitForSelector("[data-testid=card-setup_issues]", { timeout: 5000 }).catch(() => {});
     }
 
@@ -11339,7 +11496,7 @@ try {
         if (unreadable.length) fail(`Import apply premise: ${unreadable.length} plan day(s) not readable in the grid: ${unreadable.slice(0, 5).join(", ")}`);
         if (!polled) fail(`Import apply premise: no schedule_days GET answered after this run's last schedule_days write within two waits - the kept count ${expKept} is derived from the cells as observed, but a holders-unchanged in-session write may still sit in the map`);
         console.log(`     (Import apply, restated over the plan's ${planDays.length} days: ${keptNotOwned.length} not seed-owned live (published / edited in the app since the import), ${keptDirty.length} still carrying this run's edits${keptDirty.length ? " (" + keptDirty.join(", ") + ")" : ""} -> kept ${expKept}, updated ${expUpdated}, inserted ${expInserted}; availability: plan ${plan3.availabilityRows.length} rows, ${expAvIns.length} missing live -> inserted ${expAvIns.length}, skipped ${expAvSkip}; time_off: plan ${plan3.timeOffRows.length} rows -> inserted ${expToIns.length}, skipped ${expToSkip})`);
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         await openCard("setup_import");
         await page.waitForSelector("[data-testid=seed-apply]", { timeout: 5000 });
         const onDialog = (d) => d.accept();
@@ -11488,7 +11645,7 @@ try {
     try {
       for (const theme of ["light", "dark"]) {
         await page.setViewportSize({ width: 1180, height: 900 });
-        await page.click('button[data-tab="settings"]');
+        await clickTab(page, "settings");
         await page.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
         await page.setViewportSize({ width: 390, height: 844 });
         await page.waitForTimeout(300);
@@ -11524,7 +11681,7 @@ try {
         await page.locator("[data-testid=notif-pref], [data-testid=notif-prefs-load-failed]").first().scrollIntoViewIfNeeded().catch(() => {});
         await page.waitForTimeout(150);
         await page.screenshot({ path: path.join(OUT, `b2-settings-${theme}-390.png`), fullPage: true });
-        await page.click('button[data-tab="setup"]');
+        await clickTab(page, "setup");
         const genCard = page.locator("[data-testid=card-setup_generate]");
         if ((await genCard.count()) && (await genCard.getAttribute("data-open")) !== "1") { await page.click("[data-testid=card-toggle-setup_generate]"); await page.waitForTimeout(250); }
         judge(`${theme} 390 SuCheck labels (Setup > Generate)`, await measure("label[data-sucheck]"));
@@ -11552,7 +11709,7 @@ try {
       ok("screenshots test/ui/out/b2-settings-{light,dark}-390.png, b2-openshifts-{light,dark}-390.png");
     } catch (e) { fail("B2 computed-colour probe: " + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-b2.png"), fullPage: true }); } catch (e2) {} }
     await page.setViewportSize({ width: 1180, height: 900 });
-    try { await page.click('button[data-tab="settings"]'); await page.click("button:has-text('Light')"); await page.click('button[data-tab="calendar"]'); await page.waitForTimeout(300); } catch (e) { fail("B2 probe: could not restore light / calendar: " + errLine(e)); }
+    try { await clickTab(page, "settings"); await page.click("button:has-text('Light')"); await page.click('button[data-tab="calendar"]'); await page.waitForTimeout(300); } catch (e) { fail("B2 probe: could not restore light / calendar: " + errLine(e)); }
   }
   // (c) the sign-in screen in both themes: a second page with the session token removed before the app boots.
   const signin = await context.newPage();
@@ -11752,6 +11909,8 @@ try {
           if (logouts.length !== 1 || logouts[0] !== B7_SAME) fail(`B7 ${theme} sign out: expected one POST /auth/v1/logout with the OLD bearer, got ${logouts.length} (${logouts.map(tokName).join(",")})`); else ok(`B7 ${theme} sign out: one POST /auth/v1/logout with the old session's bearer`);
           if (!d.account.includes("Setting a password for " + B7_LINK_EMAIL)) fail(`B7 ${theme} sign out: the card does not name the link's account: '${d.account}'`); else ok(`B7 ${theme} sign out: then the set-password card - '${d.account.slice(0, 46)}'`);
           if (d.token !== B7_OTHER || d.refresh !== "b7-other-refresh") fail(`B7 ${theme} sign out: the stored pair is not the link's (token ${tokName(d.token)}, refresh ${d.refresh})`); else ok(`B7 ${theme} sign out: the link pair is stored only now`);
+          // 11/1 item 6: the set-password card (390 px) carries no phone tab bar - the bar is the signed-in shell's only
+          if (await b7.$("[data-testid=tabbar], [data-testid=more-sheet]")) fail(`B7 ${theme}: the set-password card shows the phone tab bar`); else ok(`B7 ${theme}: no tab bar on the set-password card`);
           await b7.screenshot({ path: path.join(OUT, `recovery-setpassword-390-${theme}.png`), fullPage: false });
           ok(`screenshot test/ui/out/recovery-setpassword-390-${theme}.png`);
         }
@@ -11787,7 +11946,7 @@ try {
       await pg.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
       await loadWithRetry(pg, BASE, "h1:has-text('Silvis Call Schedule')", 30000, tag);
       await pg.waitForSelector("text=Synced", { timeout: 30000 });
-      await pg.click('button[data-tab="settings"]');
+      await clickTab(pg, "settings");
       await pg.waitForSelector("[data-testid=theme-auto]", { timeout: 5000 });
       return { ctx, pg, settle };
     };
@@ -11813,7 +11972,7 @@ try {
       await X.settle();
       await X.pg.reload({ waitUntil: "domcontentloaded" });
       await X.pg.waitForSelector("text=Synced", { timeout: 30000 });
-      await X.pg.click('button[data-tab="settings"]');
+      await clickTab(X.pg, "settings");
       s = await themeState(X.pg);
       if (!darkHolds || s.bg !== BG.dark || s.mark !== null || s.flag !== "true" || s.pressed !== "theme-dark") fail(`${I5} (1): Dark on a light phone should paint dark and survive a reload (no Auto mark, the flag "true") - got ${JSON.stringify(s)}`);
       else ok(`${I5} (1): Dark holds on a light phone and survives a reload (body ${s.bg}, no Auto mark, flag '${s.flag}')`);
@@ -11857,9 +12016,9 @@ try {
       });
       await loadWithRetry(zp, BASE + "?public=1", "[data-testid=cal-month]", 20000, "item 5 public page");
       await zp.waitForTimeout(800);
-      const pz = await zp.evaluate(() => ({ bg: getComputedStyle(document.body).backgroundColor, mark: localStorage.getItem("silvis-theme"), nav: document.querySelectorAll("button[data-tab]").length }));
+      const pz = await zp.evaluate(() => ({ bg: getComputedStyle(document.body).backgroundColor, mark: localStorage.getItem("silvis-theme"), nav: document.querySelectorAll("button[data-tab], [data-testid=tabbar], .tabbar-spacer, [data-testid=more-sheet]").length }));
       if (pz.bg !== BG.dark || pz.mark !== "auto" || pz.nav) fail(`${I5} (3): ?public=1 on a dark phone that never opened the app should paint dark (Auto) with no nav - got ${JSON.stringify(pz)}`);
-      else ok(`${I5} (3): ?public=1 follows a dark phone on a new device (body ${pz.bg}, no nav)`);
+      else ok(`${I5} (3): ?public=1 follows a dark phone on a new device (body ${pz.bg}, no nav, no tab bar at 390 px)`);
       await zp.screenshot({ path: path.join(OUT, "public-auto-dark-390.png"), fullPage: false });
     } catch (e) { fail(`${I5} (3): ` + errLine(e)); }
     finally { if (Z) { await Z.settle().catch(() => {}); await Z.ctx.close().catch(() => {}); } }
@@ -11963,7 +12122,7 @@ try {
       const wSetup = writes.length;
       const blobWrites = (from) => writes.slice(from).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path) && w.method !== "GET");
       const blobMax = (w) => { try { return JSON.parse(w.body).data.surgeonRules.s3.maxConsecutiveDays; } catch (e) { return undefined; } };
-      await sess.click('button[data-tab="setup"]');
+      await clickTab(sess, "setup");
       await sess.waitForSelector("[data-testid=card-setup_rules]", { timeout: 5000 });
       if ((await sess.getAttribute("[data-testid=card-setup_rules]", "data-open")) !== "1") { await sess.click("[data-testid=card-toggle-setup_rules]"); await sess.waitForTimeout(200); }
       await sess.click("[data-testid=rules-pick-s3]");
@@ -12014,7 +12173,7 @@ try {
       await waitFor(() => blobWrites(w3).some(w => !w.forced401), 15000);
       await sess.waitForTimeout(1200);
       const b3b = blobWrites(w3);
-      await sess.click('button[data-tab="setup"]');
+      await clickTab(sess, "setup");
       await sess.waitForSelector("[data-testid=card-setup_rules]", { timeout: 5000 });
       if ((await sess.getAttribute("[data-testid=card-setup_rules]", "data-open")) !== "1") { await sess.click("[data-testid=card-toggle-setup_rules]"); await sess.waitForTimeout(200); }
       await sess.click("[data-testid=rules-pick-s3]");
@@ -12090,7 +12249,7 @@ try {
       await page.keyboard.press("Escape");
       await page.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
       const skipBtn = page.locator("[data-testid=publish-skip]"); if (await skipBtn.count()) await skipBtn.first().click().catch(() => {});
-      await page.click('button[data-tab="settings"]');
+      await clickTab(page, "settings");
       await page.click(`button:has-text('${theme === "dark" ? "Dark" : "Light"}')`);
       await page.click('button[data-tab="calendar"]');
       await page.waitForSelector("[data-testid=cal-grid]", { timeout: 10000 });
@@ -12133,7 +12292,7 @@ try {
       ok(`screenshot test/ui/out/theme-month-${theme}.png`);
     } catch (e) { fail(`month ${theme}: ` + errLine(e)); }
   }
-  try { await page.click('button[data-tab="settings"]'); await page.click("button:has-text('Light')"); } catch (e) { /* leave the theme as it is */ }
+  try { await clickTab(page, "settings"); await page.click("button:has-text('Light')"); } catch (e) { /* leave the theme as it is */ }
 
   // ====================== Prompt 29: APP call days (Faraz 10/1) ======================
   // Decided 10/1: any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log
@@ -12283,6 +12442,7 @@ try {
       const mineTab = tabs.find(t => t[0] === "myschedule");
       if (!mineTab || mineTab[1] !== "Mine" || tabs.some(t => t[0] === "setup")) fail(`${P} 1: the APP's tabs should include Mine (labelled "Mine") and no Setup: ${JSON.stringify(tabs)}`);
       else ok(`${P} 1: the APP keeps the Mine tab ("Mine"), no Setup: ${tabs.map(t => t[0]).join(", ")}`);
+      await checkPhoneNav(A.pg, `${P} 1 (APP, 390)`, { ...NAV_SURGEON, more: ["totals", "settings", "alerts"] }, true); // 11/1 item 6: no Paint offers, no pay
       await toMineM(A.pg);
       // Prompt 31 Part B (B4): the call-totals card is the East-code surgeon's own - never on an APP's Mine (My APP days)
       {
@@ -12548,7 +12708,9 @@ try {
       if (after.holder !== "Appleton" || after.dis !== "true") fail(`${P} 2: after the reload ${D10} should read taken by Appleton, aria-disabled: ${JSON.stringify(after)}`);
       else ok(`${P} 2: after the client's reload ${D10} reads taken - data-holder 'Appleton', aria-disabled`);
       const s1 = appSaves().length;
-      // force: Playwright's actionability check reads aria-disabled="true" as disabled - a phone tap still reaches the button
+      // force: Playwright's actionability check reads aria-disabled="true" as disabled - a phone tap still reaches the button.
+      // 11/1 item 6: a forced click skips the hit test, so the cell is centred first (never under the phone's bottom tab bar)
+      await B.pg.$eval(`[data-testid=appdays-cell][data-day="${D10}"]`, el => el.scrollIntoView({ block: "center" }));
       await B.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`, { force: true });
       await B.pg.waitForTimeout(300);
       const hintTxt = await B.pg.$eval("[data-testid=appdays-hint]", el => el.textContent.trim()).catch(() => "");
@@ -12861,7 +13023,7 @@ try {
       if (!sc) throw new Error("the scheduler page did not open");
       followsFixture = "present"; appColumnFixture = true;
       await sc.click('button[data-tab="calendar"]');
-      await sc.click('button[data-tab="setup"]');
+      await clickTab(sc, "setup");
       const card = sc.locator("[data-testid=card-setup_users]");
       if ((await card.getAttribute("data-open")) !== "1") { await sc.click("[data-testid=card-toggle-setup_users]"); await sc.waitForTimeout(200); }
       await sc.waitForFunction((id) => { const s = document.querySelector(`[data-testid=user-role-${id}]`); return !!s && Array.from(s.options).some(o => o.value === "app"); }, FOLLOWER_UID, { timeout: 10000 });
@@ -12883,7 +13045,7 @@ try {
       else ok(`${P} 6: 'app' on a linked row is refused client-side (toast, no PATCH)`);
       appColumnFixture = false;
       await sc.click('button[data-tab="calendar"]');
-      await sc.click('button[data-tab="setup"]');
+      await clickTab(sc, "setup");
       await sc.waitForSelector(`[data-testid=user-role-${FOLLOWER_UID}]`, { timeout: 10000 });
       await sc.waitForTimeout(600);
       const optsOff = await sc.$$eval(`[data-testid=user-role-${FOLLOWER_UID}] option`, els => els.map(o => o.value));
@@ -13339,7 +13501,7 @@ try {
       try {
         await ctp.setViewportSize({ width: 390, height: 844 });
         for (const theme of ["light", "dark"]) {
-          if (theme === "dark") { await ctp.click('button[data-tab="settings"]'); await ctp.click("button:has-text('Dark')"); await ctp.click('button[data-tab="myschedule"]'); }
+          if (theme === "dark") { await clickTab(ctp, "settings"); await ctp.click("button:has-text('Dark')"); await ctp.click('button[data-tab="myschedule"]'); }
           await ctp.waitForSelector("[data-testid=call-totals-card][data-state=ok]", { timeout: 8000 });
           await ctp.waitForTimeout(300);
           const first = await ctp.evaluate(CT_PROBE);
@@ -13365,7 +13527,7 @@ try {
         }
       } catch (e) { fail("P31B card (390): " + errLine(e)); }
       finally {
-        try { await ctp.click('button[data-tab="settings"]'); await ctp.click("button:has-text('Light')"); await ctp.click('button[data-tab="myschedule"]'); } catch (e) {}
+        try { await clickTab(ctp, "settings"); await ctp.click("button:has-text('Light')"); await ctp.click('button[data-tab="myschedule"]'); } catch (e) {}
         await ctp.setViewportSize({ width: 1180, height: 900 }).catch(() => {});
       }
       // (4) fail loud: every east_feed read of a reload answers 500 - the Davenport cells and both totals read "?" with the
@@ -13438,6 +13600,14 @@ try {
       if (!(await minBanner.count())) fail("forced-refresh banner disappeared on its own - it must persist until the reload");
       // ---- Prompt 16 B9 (c): at 390 px the fixed banner paints UNDER the day editor - its Save row stays tappable ----
       await p2.setViewportSize({ width: 390, height: 844 });
+      // 11/1 item 6: the minimum-version banner stands ON the phone's tab bar (bannerLift) - before the lift it lay over the bar and
+      // swallowed the tab taps; the Calendar click below goes through the bar
+      {
+        await p2.waitForSelector("[data-testid=tabbar]", { timeout: 5000 }).catch(() => {});
+        const onBar = await p2.evaluate(() => { const bar = document.querySelector("[data-testid=tabbar]"), banner = Array.from(document.querySelectorAll("div[role=alert]")).find(d => /below the required minimum/.test(d.textContent)); if (!bar || !banner) return null; return { bannerBottom: Math.round(banner.getBoundingClientRect().bottom), barTop: Math.round(bar.getBoundingClientRect().top) }; });
+        if (!onBar || Math.abs(onBar.bannerBottom - onBar.barTop) > 1) fail("11/1 item 6: the minimum-version banner should stand on the tab bar at 390 px (its bottom on the bar's top): " + JSON.stringify(onBar));
+        else ok(`11/1 item 6: the minimum-version banner stands on the tab bar (banner bottom ${onBar.bannerBottom}, bar top ${onBar.barTop})`);
+      }
       await p2.click('button[data-tab="calendar"]');
       const p2Picks = await openCalPicks(p2); // item 1 (11/1): at 390 px the pickers open from the month title
       await p2.selectOption("[data-testid=cal-month-select]", "9");
@@ -13705,10 +13875,12 @@ try {
     const loadApp = async (pg, url) => {
       await pg.goto(url, { waitUntil: "domcontentloaded" });
       await pg.waitForSelector("h1:has-text('Silvis Call Schedule')", { timeout: 30000 });
-      await pg.waitForSelector("button[data-tab=settings]", { timeout: 20000 });
+      // 11/1 item 6: Calendar is a visible nav tab on either layout (the iPhone 390 / Android 412 contexts show the bottom tab bar,
+      // where Settings sits in the More sheet - openCard reaches it through clickTab)
+      await pg.waitForSelector("button[data-tab=calendar]", { timeout: 20000 });
     };
     const openCard = async (pg) => {
-      await pg.click("button[data-tab=settings]");
+      await clickTab(pg, "settings");
       await openNotifSettings(pg);
       await pg.waitForSelector("[data-testid=push-card] [data-testid=push-state]:not([data-state=loading])", { timeout: 15000 });
     };
@@ -13735,7 +13907,7 @@ try {
       await pg.evaluate(async () => { await navigator.serviceWorker.register("/xr-sw.js", { scope: "/" }); });
       // Push UX 1(a) (10/10): push off -> Settings opens Notification settings by itself, with no tap on its header; a
       // close sticks (calendar and back); the push button and the Biometric one never share a bare "Enable"
-      await pg.click("button[data-tab=settings]");
+      await clickTab(pg, "settings");
       const autoOpened = await pg.waitForSelector("[data-testid=push-card] [data-testid=push-enable]", { timeout: 15000 }).then(() => true).catch(() => false);
       const enableTexts = await pg.$$eval("button", (bs) => bs.map(b => b.textContent.trim()).filter(t => /^Enable\b/.test(t)));
       if (!autoOpened) fail("P30 auto-open: with push off, Settings did not open Notification settings by itself");
@@ -13743,7 +13915,7 @@ try {
       else {
         await pg.click("[data-testid=notif-settings-toggle]");
         await pg.click("button[data-tab=calendar]"); await pg.waitForTimeout(300);
-        await pg.click("button[data-tab=settings]"); await pg.waitForTimeout(1500);
+        await clickTab(pg, "settings"); await pg.waitForTimeout(1500);
         const exp = await pg.getAttribute("[data-testid=notif-settings-toggle]", "aria-expanded");
         if (exp !== "false" || (await pg.$("[data-testid=push-card]"))) fail("P30 auto-open: a closed Notification settings card reopened on the next Settings visit (aria-expanded " + exp + ")");
         else ok("P30 auto-open: push off -> Notification settings opened by itself on Settings, button '" + enableTexts.join("' / '") + "'; closed, it stays closed on the next visit");
@@ -13857,7 +14029,7 @@ try {
       if (JSON.stringify(fb) !== JSON.stringify(["replace_push_subscription", "save_push_subscription"]) || !fbBody || fbBody.p_endpoint !== P30_EP2 || JSON.stringify(Object.keys(fbBody).sort()) !== JSON.stringify(["p_auth", "p_endpoint", "p_label", "p_p256dh"])) fail("P30 (revision z) fallback: " + JSON.stringify({ fb, fbBody }));
       else ok("P30 (revision z) fallback: with the wrapper missing (404 PGRST202) the re-arm saved through the plain save_push_subscription (four keys) - today's behaviour");
       // Push UX 1(a): push on (a fresh page load) -> Settings leaves Notification settings closed
-      await pg.click("button[data-tab=settings]"); await pg.waitForTimeout(1500);
+      await clickTab(pg, "settings"); await pg.waitForTimeout(1500);
       const expOn = await pg.getAttribute("[data-testid=notif-settings-toggle]", "aria-expanded").catch(() => null);
       if (expOn !== "false") fail("P30 auto-open: with push on, Settings opened Notification settings (aria-expanded " + expOn + ")");
       else ok("P30 auto-open: with push on, Notification settings stays closed on Settings");
@@ -14239,7 +14411,7 @@ try {
       else ok("days-fail: the Open shifts tail reads 'Schedule not loaded' with no counts");
       // review 9/28: goToDay routes (Setup > Holidays 'Edit M/D') - coverage says not loaded, Edit is disabled, no editor opens
       if (await pdf.$('button[data-tab="setup"]')) {
-        await pdf.click('button[data-tab="setup"]');
+        await clickTab(pdf, "setup");
         const hc = pdf.locator("[data-testid=card-setup_holidays]");
         if ((await hc.count()) && (await hc.getAttribute("data-open")) !== "1") { await pdf.click("[data-testid=card-toggle-setup_holidays]"); await pdf.waitForTimeout(200); }
         const hol = await pdf.evaluate(() => {
@@ -14358,6 +14530,14 @@ try {
       const tUp = Date.now();
       if (!up) fail(`${T8}: the forced availability 500 raised no "Couldn't load availability statements" toast`);
       else {
+        // 11/1 item 6: the toast stands 24 px above the phone's tab bar (css.aboveTabBar(24)) - it never covers a tab (geometry
+        // only: no text is read off the box)
+        {
+          const tb = await pt.evaluate(() => { const box = document.querySelector("[data-testid=toast-box]"), bar = document.querySelector("[data-testid=tabbar]"); if (!box || !bar) return null; return { boxBottom: Math.round(box.getBoundingClientRect().bottom), barTop: Math.round(bar.getBoundingClientRect().top) }; });
+          if (!tb) console.log(`     (${T8}: no tab bar / toast box to measure - the toast-above-the-bar check is not exercised)`);
+          else if (tb.barTop - tb.boxBottom !== 24) fail(`${T8}: 11/1 item 6 - the toast should end 24 px above the tab bar: ${JSON.stringify(tb)}`);
+          else ok(`${T8}: 11/1 item 6 - the toast ends 24 px above the tab bar (toast bottom ${tb.boxBottom}, bar top ${tb.barTop})`);
+        }
         // dispatched clicks: a pointer click on a cell the toast happens to cover would wait out the toast itself
         await pt.$eval('button[data-tab="calendar"]', el => el.click()).catch(() => {});
         await pt.waitForSelector(`[data-testid=cal-grid] [data-day="${todayCentral}"]`, { timeout: 8000 });
@@ -14564,7 +14744,7 @@ try {
       // show are unknown), and Generate refuses with its own toast - no preview, nothing written (it ran with both lists empty)
       await p4.setViewportSize({ width: 1180, height: 900 });
       await p4.waitForTimeout(300);
-      await p4.click("[data-testid=nav-paint-offers]");
+      await clickNav(p4, "[data-testid=nav-paint-offers]");
       await p4.waitForSelector("[data-testid=ofp-sheet][data-person]", { timeout: 8000 });
       await p4.waitForTimeout(300);
       const npUnread = await p4.$eval("[data-testid=ofp-np-unread]", el => el.textContent.trim()).catch(() => null);
@@ -14574,7 +14754,7 @@ try {
       else ok(`Do first 4 + Prompt 28: availability never read -> the painter's alert line '${npUnread}' and the No primary brush disabled`);
       await p4.click("[data-testid=ofp-close]");
       await p4.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 5000 });
-      await p4.click('button[data-tab="setup"]');
+      await clickTab(p4, "setup");
       if ((await p4.locator("[data-testid=card-setup_generate]").getAttribute("data-open")) !== "1") { await p4.click("[data-testid=card-toggle-setup_generate]"); await p4.waitForTimeout(200); }
       await p4.waitForSelector("[data-testid=gen-run]", { timeout: 5000 });
       const df4Writes = [];
@@ -14744,7 +14924,7 @@ try {
     p3.on("dialog", (d) => { dialogs3.push({ type: d.type(), message: d.message() }); if (d.type() === "prompt") { if (promptAnswer === null) d.dismiss(); else d.accept(promptAnswer); } else d.accept(); });
     const bodyText3 = () => p3.evaluate(() => document.body.innerText || "");
     const covCount = async () => { await p3.click('button[data-tab="calendar"]'); await p3.waitForSelector("[data-testid=cov-open-primary]", { timeout: 5000 }); await p3.waitForTimeout(300); return p3.$eval("[data-testid=cov-open-primary]", el => Number(el.getAttribute("data-count"))); };
-    const toSettings = async () => { await p3.click('button[data-tab="settings"]'); await p3.waitForSelector("[data-testid=export-backup]", { timeout: 8000 }); };
+    const toSettings = async () => { await clickTab(p3, "settings"); await p3.waitForSelector("[data-testid=export-backup]", { timeout: 8000 }); };
     const normRow = (r) => ({ day: r.day, primary_id: r.primary_id || null, backup_id: r.backup_id || null, primary_locked: r.primary_locked === true, backup_locked: r.backup_locked === true, source: r.source || null, external_cover: r.external_cover || null, note: (r.note === undefined || r.note === null || r.note === "") ? null : String(r.note) });
     const mapText = (rows) => JSON.stringify(rows.map(normRow).sort((a, b) => a.day < b.day ? -1 : 1));
     try {
@@ -15056,7 +15236,7 @@ try {
       await pc.click("[data-testid=ofp-close]");
       await pc.waitForTimeout(300);
       // (e) Settings: the Activity log card (own entries) + its audit_log read; no export / snapshots / client versions
-      await pc.click('button[data-tab="settings"]');
+      await clickTab(pc, "settings");
       await pc.waitForTimeout(1000);
       const auditCard = await pc.$("[data-testid=card-settings_audit]");
       const exportBtn = await pc.$("[data-testid=export-backup]");
@@ -15133,6 +15313,8 @@ try {
         if (banner) fail(`viewer (${theme}): the unlinked-account banner is shown to the viewer (no roster link is expected for the role)`);
         else if (tabs.includes("setup") || tabs.includes("myschedule") || paintNav || !tabs.includes("timeoff") || !tabs.includes("settings")) fail(`viewer (${theme}): nav wrong - expected no Setup / Mine / Paint offers and the Time off + Settings tabs, got ${tabs.join(",")}${paintNav ? " + Paint offers" : ""}`);
         else ok(`viewer (${theme}): no unlinked banner; nav = ${tabs.join(", ")} (no Setup, no Mine, no Paint offers)`);
+        // 11/1 item 6: no Mine, so the bar is Calendar / Open shifts / Time off / More; More holds Totals, Settings, Alerts; no pay words
+        await checkPhoneNav(pv, `viewer (${theme}, 390)`, { bar: ["calendar", "openshifts", "timeoff", "tabbar-more"], labels: ["Calendar", "Open shifts", "Time off", "More"], more: ["totals", "settings", "alerts"] }, true);
         // The tab reads "Time off" (no "& Trades") - the trades section returns null for the role, so the label must not promise it.
         const timeoffLabel = await pv.$eval("button[data-tab=timeoff]", el => (el.textContent || "").trim());
         if (!/^Time off$/.test(timeoffLabel)) fail(`viewer (${theme}): the Time off tab should read 'Time off' (no trade card behind it), got '${timeoffLabel}'`);
@@ -15152,7 +15334,7 @@ try {
         else if (notLinkedHits) fail(`viewer (${theme}): the 'not linked' sentence appears ${notLinkedHits}x on Time off & Trades`);
         else ok(`viewer (${theme}): Time off = 'Vacations' with the viewer's one sentence, no vacation form, no trade card, the 'not linked' sentence nowhere on the page`);
         // (c) Settings -> Live calendar sync: the public full-schedule feed, no personal / per-surgeon block; the Account line
-        await pv.click('button[data-tab="settings"]');
+        await clickTab(pv, "settings");
         await pv.waitForSelector("[data-testid=calsync-full]", { timeout: 8000 });
         const full = await pv.$eval("[data-testid=calsync-full]", el => el.value);
         const sBody = await bodyTextV();
@@ -15165,10 +15347,17 @@ try {
         else ok(`viewer (${theme}): Live calendar sync = the public full-schedule URL only (${full.replace("https://" + SUPABASE_HOST, "<project>")}); Account line 'a read-only account'`);
         // (d) Alerts: the badge counts the two visible rows; the panel lists exactly open_shifts + schedule_published (newest first)
         const badge = await pv.$eval('button[aria-label="Notifications"]', el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
-        await pv.click('button[aria-label="Notifications"]');
+        // 11/1 item 6: on a phone the unread count rides on the tab bar's More too (the Alerts row in its sheet carries it first)
+        const moreBadgeV = await pv.$eval("[data-testid=more-badge]", el => el.textContent.trim()).catch(() => "");
+        await clickNav(pv, ALERTS_BTN);
         await pv.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
         const rows = await pv.$$eval("[data-testid=notif-row]", els => els.map(e => e.getAttribute("data-type")));
         const panelText = await pv.$eval("[data-testid=notif-panel]", el => el.innerText || "");
+        // ... and the phone Alerts sheet stands on the bar (fixed, its bottom on the bar's top), on screen whatever the scroll
+        const apV = await pv.evaluate(() => { const p = document.querySelector("[data-testid=notif-panel]"), bar = document.querySelector("[data-testid=tabbar]"); return bar && p ? { pos: getComputedStyle(p).position, gap: Math.round(bar.getBoundingClientRect().top - p.getBoundingClientRect().bottom) } : null; });
+        if (!apV) fail(`viewer (${theme}): 11/1 item 6 - no tab bar or no Alerts panel at 390 px`);
+        else if (apV.pos !== "fixed" || apV.gap !== 0 || moreBadgeV !== badge) fail(`viewer (${theme}): 11/1 item 6 - the phone Alerts sheet should stand on the bar (fixed, gap 0) and More's badge equal the Alerts count ('${moreBadgeV}' vs '${badge}'): ${JSON.stringify(apV)}`);
+        else ok(`viewer (${theme}): 11/1 item 6 - More's badge ${moreBadgeV} = the Alerts count; the Alerts sheet stands on the bar (fixed, gap 0)`);
         if (badge !== "2") fail(`viewer (${theme}): the Alerts badge should read 2 (the two visible rows of the four served), got '${badge}'`);
         else if (rows.join(",") !== "open_shifts,schedule_published") fail(`viewer (${theme}): the Alerts panel should list exactly open_shifts, schedule_published (feed order), got [${rows.join(",")}]`);
         else if (/Trade proposed|Vacation logged/.test(panelText)) fail(`viewer (${theme}): the Alerts panel shows a trade / vacation row to a viewer`);
@@ -15262,6 +15451,8 @@ try {
         if (!mineTab || !/^Following/.test(mineTab[1])) fail(`F3 follower (${theme}): the Mine tab should show and read 'Following', got ${JSON.stringify(tabs)}`);
         else if (tabs.some(([k]) => k === "setup") || paintNav || banner) fail(`F3 follower (${theme}): Setup (${tabs.some(([k]) => k === "setup")}) / Paint offers (${!!paintNav}) / the unlinked banner (${!!banner}) shown to a follower`);
         else ok(`F3 follower (${theme}): nav = ${tabs.map(([, l]) => l.replace(/\d+$/, "")).join(", ")} - the Mine tab reads 'Following'; no Setup, no Paint offers, no unlinked banner`);
+        // 11/1 item 6: the follower's bar reads Following in Mine's slot; More holds Totals, Settings, Alerts; no pay words
+        await checkPhoneNav(pf, `F3 follower (${theme}, 390)`, { bar: ["calendar", "myschedule", "openshifts", "timeoff", "tabbar-more"], labels: ["Calendar", "Following", "Open shifts", "Time off", "More"], more: ["totals", "settings", "alerts"] }, true);
         // Item 2 (Faraz 11/1): a follower has no roster id - no ring (not even on the followed surgeons' pills), no legend line, no 'Your next call'
         await pf.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 });
         const fI2 = await pf.evaluate(() => ({ ring: document.querySelectorAll("[data-testid=cal-grid] [data-mine]").length, legend: !!document.querySelector("[data-testid=legend-mine]"), line: !!document.querySelector("[data-testid=my-next-call]") }));
@@ -15359,7 +15550,7 @@ try {
           else ok(`${T9}: no Following row clips the colleague's name - ${real.rows} real row(s) at 390 px (e.g. '${real.per[0].holder.text}'), and with H + E + F + EV injected after every holder at ${worst.map(x => x.w).join(" / ")} px (badges wrap under the name, a long name takes its own line; no row scrolls sideways)`);
         } catch (e) { fail(`DF9 follower (${theme}) names: ` + errLine(e)); }
         // (c) Settings -> Live calendar sync
-        await pf.click('button[data-tab="settings"]');
+        await clickTab(pf, "settings");
         await pf.waitForSelector("[data-testid=follow-sync]", { timeout: 8000 });
         const rows = await pf.$$eval("[data-testid=follow-sync]", els => els.map(e => ({ id: e.getAttribute("data-surgeon"), url: (e.querySelector("[data-testid=follow-sync-url]") || {}).value || "" })));
         const above = await pf.evaluate(() => { const f = document.querySelectorAll("[data-testid=follow-sync]"); const full = document.querySelector("[data-testid=calsync-full]"); return !!(f.length && full && Array.from(f).every(x => x.compareDocumentPosition(full) & Node.DOCUMENT_POSITION_FOLLOWING)); });
@@ -15422,9 +15613,15 @@ try {
         }
         // (d) Alerts
         const badge = await pf.$eval('button[aria-label="Notifications"]', el => (el.querySelector("span") || { textContent: "" }).textContent.trim());
-        await pf.click('button[aria-label="Notifications"]');
+        // 11/1 item 6: on a phone the unread count rides on the tab bar's More too (the Alerts row in its sheet carries it first)
+        const moreBadgeF = await pf.$eval("[data-testid=more-badge]", el => el.textContent.trim()).catch(() => "");
+        await clickNav(pf, ALERTS_BTN);
         await pf.waitForSelector("[data-testid=notif-panel]", { timeout: 5000 });
         const nRows = await pf.$$eval("[data-testid=notif-row]", els => els.map(e => e.getAttribute("data-type")));
+        const apF = await pf.evaluate(() => { const p = document.querySelector("[data-testid=notif-panel]"), bar = document.querySelector("[data-testid=tabbar]"); return bar && p ? { pos: getComputedStyle(p).position, gap: Math.round(bar.getBoundingClientRect().top - p.getBoundingClientRect().bottom) } : null; });
+        if (!apF) fail(`F3 follower (${theme}): 11/1 item 6 - no tab bar or no Alerts panel at 390 px`);
+        else if (apF.pos !== "fixed" || apF.gap !== 0 || moreBadgeF !== badge) fail(`F3 follower (${theme}): 11/1 item 6 - the phone Alerts sheet should stand on the bar (fixed, gap 0) and More's badge equal the Alerts count ('${moreBadgeF}' vs '${badge}'): ${JSON.stringify(apF)}`);
+        else ok(`F3 follower (${theme}): 11/1 item 6 - More's badge ${moreBadgeF} = the Alerts count; the Alerts sheet stands on the bar (fixed, gap 0)`);
         const wantTypes = "trade_proposed,shift_claimed,shift_reminder,open_shifts,schedule_published";
         if (badge !== "5") fail(`F3 follower (${theme}): the Alerts badge should read 5 (the rows s2 / s5 read), got '${badge}'`);
         else if (nRows.join(",") !== wantTypes) fail(`F3 follower (${theme}): the Alerts panel should list ${wantTypes}, got [${nRows.join(",")}]`);
@@ -15463,7 +15660,7 @@ try {
           const hitsByTab = [];
           let timeoffDates = -1;
           for (const k of navTabs) {
-            await pf.click(`button[data-tab="${k}"]`);
+            await clickTab(pf, k);
             await pf.waitForTimeout(350);
             const hits = await pf.evaluate((ids) => {
               const h = ids.filter(t => document.querySelector("[data-testid=" + t + "]"));
@@ -15528,7 +15725,7 @@ try {
             const w0 = writes.length;
             await loadWithRetry(pf, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "follower page, prefs column absent (" + theme + ")");
             await pf.waitForSelector("text=Synced", { timeout: 30000 });
-            await pf.click('button[data-tab="settings"]');
+            await clickTab(pf, "settings");
             await openNotifSettings(pf);
             await pf.waitForSelector("[data-testid=notif-follower-prefs][data-state=unavailable]", { timeout: 8000 });
             const st = await pf.$eval("[data-testid=notif-follower-prefs]", (el) => ({

@@ -34,6 +34,7 @@
       #root > div > div:first-child { display: none !important; } /* hide header */
       button, select, input { display: none !important; }
       [style*="position: absolute"] { display: none !important; } /* hide notification panel */
+      .tabbar, .tabbar-spacer, .more-sheet, .sheet-backdrop, .notif-panel { display: none !important; } /* 11/1 item 6: the phone tab bar, its spacer and sheets, the phone Alerts sheet (fixed - the rule above misses them) */
       div[style*="maxWidth"] { max-width: 100% !important; padding: 0 !important; }
       @page { margin: 0.5cm; size: landscape; }
     }
@@ -54,9 +55,18 @@
       .moretoggle { min-width: 36px; margin-top: -11px; margin-bottom: -11px; }
       /* the header's "N errors" the same way - its 36 px do not make the status line (and the header) taller */
       .hdr-errors { min-height: 36px; min-width: 36px; margin-top: -13px; margin-bottom: -13px; }
-      /* 10/30: the nav tabs take 8 px side padding on a phone - a surgeon's eight buttons fit two rows at 390 px (three before; measured with the fallback font) */
-      .navtab { padding-left: 8px !important; padding-right: 8px !important; }
     }
+    /* 11/1 item 6: the phone's bottom tab bar and its More sheet - rendered at <= 600 px only (useMediaQuery, so ONE nav is in the
+       DOM; the header nav and its 10/30 phone padding are gone at that width); these rules carry what inline styles cannot: the
+       label's ellipsis (a fifth of a 280 px screen is 56 px), the keyboard focus ring, the sheet's one slide-up (none with reduced
+       motion) and a smaller label at 340 px and under. Colours stay inline. */
+    .tabbar-btn { -webkit-tap-highlight-color: transparent; }
+    .tabbar-btn:focus-visible, .more-row:focus-visible { outline: 2px solid #FF5F05; outline-offset: -3px; }
+    .tabbar-label { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .more-sheet:not([hidden]) { animation: more-sheet-up 140ms ease-out; }
+    @keyframes more-sheet-up { from { transform: translateY(12px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .more-sheet:not([hidden]) { animation: none; } }
+    @media (max-width: 340px) { .tabbar-label { font-size: 9.5px; } }
     /* Calendar month grid (Prompt 6 Slice B). Classes only carry the layout
        that inline styles cannot (grid + the phone breakpoint); colors stay
        inline so dark mode's selectors keep working. */
@@ -446,8 +456,14 @@ function CallSchedule() {
   const reloadForUpdate = () => { if (!leaveMineOk("reload")) return false; APP_DAYS_UNLOAD.confirmed = true; if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); return true; };
 
   // 11/1 phone polish (items 4 and 6): the phone layout - at most 600 px wide, the CSS phone blocks' width - as React state,
-  // through the module-scope useMediaQuery; a rotation across 600 px re-renders.
+  // through the module-scope useMediaQuery; a rotation across 600 px re-renders. At that width the bottom tab bar replaces the
+  // header nav (ONE nav in the DOM at a time). moreOpen: the bar's More sheet; the refs hand the focus to More, into the sheet
+  // and to the phone Alerts sheet's close. (Its own paragraph: data-layer PD F lifts appDaysDirtyRef .. the next blank line.)
   const isPhone = useMediaQuery("(max-width: 600px)");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreBtnRef = useRef(null);
+  const moreSheetRef = useRef(null);
+  const notifCloseRef = useRef(null);
 
   // --- Roster / rules / settings (the call_schedule_data blob, id=main) ---
   // roster: { id, name (last name), code, fullName, active, roles }. The
@@ -7273,6 +7289,77 @@ function CallSchedule() {
     );
   };
 
+  // --- Navigation: ONE list for the header nav (wide screens) and the phone's bottom tab bar (11/1 item 6) ---
+  // Prompt 16 B3: the office (A7) and a viewer get no trade card (the trades section returns null for both), so their tab reads "Time off".
+  // Prompt 20 F3: for a follower the Mine tab is "Following" (the followed surgeons' upcoming days, read-only).
+  // Prompt 29: an APP keeps the Mine tab (My APP days, then the Following cards if he follows anyone) - labelled "Mine".
+  const navTabs = (() => {
+    const allTabs = [["setup","Setup"],["calendar","Calendar"],["openshifts","Open shifts"],["myschedule", isApp ? "Mine" : isFollowing ? "Following" : "Mine"],["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"],["totals","Totals"],["settings","Settings"]];
+    let tabs = allTabs;
+    if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
+    if (!mySurgeon && !isFollowing && !isApp) tabs = tabs.filter(([k]) => k !== "myschedule");
+    return tabs;
+  })();
+  // The scheduler's badge counts every pending proposal (he may answer any); a surgeon's only the ones waiting on him -
+  // both ONE per proposal (Faraz 9/27: a weekend or holiday unit is one badge count).
+  const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
+  const pendingTradesTitle = isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer";
+  const openSlotsTitle = boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "");
+  // 11/1 item 6 - the phone's bottom tab bar. Shown once the signed-in shell renders on a phone with the profile in (the header's
+  // gate plus userProfile: right after a password sign-in the slots would otherwise jump), never on ?public=1 / sign-in / loading
+  // / Welcome back, and not under a full-screen painter sheet (it owns the bottom edge and its own insets; keys must not reach a
+  // bar behind it). The centred dialogs (day editor, claim sheet, e-mail preview, Recent errors, publish) cover it with their
+  // backdrop. Slots (Faraz 11/1): Calendar, Mine (Following), Open shifts, Time off - each where the role has it - then More:
+  // Totals, Paint offers, Settings, Alerts, and Setup and Undo for the scheduler.
+  const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !!userProfile && !paintSheet && !offerSheet;
+  const barTabs = ["calendar", "myschedule", "openshifts", "timeoff"].map(k => navTabs.find(([t]) => t === k)).filter(Boolean);
+  const moreTabs = navTabs.filter(([k]) => !barTabs.some(([b]) => b === k));
+  const viewInMore = moreTabs.some(([k]) => k === view);
+  const bannerLift = tabBarShown ? TABBAR_H : 0; // the three fixed bottom banners stand on the bar
+  const scrollTopNow = () => { try { window.scrollTo(0, 0); } catch (e) { console.warn("tab bar: could not scroll to the top", e); } };
+  const focusMoreBtn = () => { if (moreBtnRef.current) { try { moreBtnRef.current.focus(); } catch (e) { console.warn("tab bar: could not focus More", e); } } };
+  const closeMore = (refocus) => { setMoreOpen(false); if (refocus) focusMoreBtn(); };
+  // A bar tab or a More row: the sheets close, the view moves (setView asks first while My APP days holds unsaved taps - spec F)
+  // and the page shows from its top (a phone keeps one scroll position; re-tapping the open tab scrolls up).
+  const tabBarGo = (k) => { setMoreOpen(false); setShowNotifs(false); if (setView(k)) scrollTopNow(); };
+  const openAlertsSheet = () => { setMoreOpen(false); setShowNotifs(true); markNotifsSeen(); };
+  // The Alerts panel's close (x, its phone backdrop, Escape): on a phone the focus goes back to More, where it opened.
+  const closeAlerts = () => { setShowNotifs(false); if (tabBarShown) focusMoreBtn(); };
+  // The phone sheets (More, Alerts) keep Tab inside them (helpers.focusTrapNext, as Recent errors does); Escape: the listener below.
+  const sheetTabKeyDown = (e) => {
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(e.currentTarget.querySelectorAll('button:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    const next = focusTrapNext(e.shiftKey, focusable, document.activeElement);
+    if (next) { e.preventDefault(); try { next.focus(); } catch (err) { console.warn("tab bar sheet: focus trap could not move focus", err); } }
+  };
+  // The More sheet goes with the bar (a rotation to landscape, a painter opening) and never comes back by itself.
+  useEffect(() => { if (!tabBarShown) setMoreOpen(false); }, [tabBarShown]);
+  // Escape closes the open phone sheet from anywhere (the focus back on More).
+  useEffect(() => {
+    if (!tabBarShown || !(moreOpen || showNotifs)) return undefined;
+    const onKey = (e) => { if (e.key !== "Escape") return; if (moreOpen) closeMore(true); else closeAlerts(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tabBarShown, moreOpen, showNotifs]);
+  // Opening a phone sheet moves the focus into it: More's first row, the Alerts sheet's close.
+  useEffect(() => {
+    if (!tabBarShown || !(moreOpen || showNotifs)) return undefined;
+    const id = requestAnimationFrame(() => {
+      const el = moreOpen ? (moreSheetRef.current && moreSheetRef.current.querySelector("[data-more-item]")) : notifCloseRef.current;
+      if (el) { try { el.focus(); } catch (e) { console.warn("tab bar sheet: could not move the focus into it", e); } }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [tabBarShown, moreOpen, showNotifs]);
+  // focus() and scrollIntoView stop above the bar (the trade card's first empty field, a Setup card): the page's scroll padding.
+  useEffect(() => {
+    try { document.documentElement.style.scrollPaddingBottom = tabBarShown ? TABBAR_CLEAR : ""; } catch (e) { console.warn("tab bar: could not set the page's scroll padding", e); }
+  }, [tabBarShown]);
+  // The bar's and the More sheet's looks (theme tokens; the layout is css.tabBar). Active: the onNavy label, bold, an accent mark.
+  const tabBtn = (on) => ({ flex:"1 1 0", minWidth:0, position:"relative", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3, padding:"6px 2px 5px", background:"none", border:"none", color:on ? T.onNavy : T.navTab, fontSize:10.5, fontWeight:on ? 700 : 600, lineHeight:1.15, fontFamily:font, cursor:"pointer" });
+  const tabMark = { position:"absolute", top:0, left:"50%", transform:"translateX(-50%)", width:28, height:3, borderRadius:"0 0 3px 3px", background:T.accent };
+  const tabBadge = { position:"absolute", top:4, left:"calc(50% + 5px)", minWidth:18, height:18, padding:"0 5px", borderRadius:9, fontSize:10, fontWeight:700, lineHeight:"18px", textAlign:"center", boxShadow:"0 0 0 2px " + T.navy };
+  const moreRow = { display:"flex", alignItems:"center", gap:14, width:"100%", minHeight:48, padding:"0 18px", background:"none", border:"none", borderTop:"1px solid " + T.border, color:T.text, fontSize:15, fontWeight:600, fontFamily:font, textAlign:"left", cursor:"pointer" };
+
   const authBox = (children) => (
     <div style={{display:"flex",justifyContent:"center",alignItems:"center",minHeight:"80vh",padding:20}}>
       <div style={{...css.card,maxWidth:380,width:"100%",padding:28}}>{children}</div>
@@ -7349,9 +7436,10 @@ function CallSchedule() {
           error or over a painter sheet (where the toast sits on the sheet's header and its Close), a close control.
           Review of Do first 8 (10/2): width max-content up to min(90vw, 640px) - with left 50% and no width the box
           shrank to the right half of the screen (195 px on a 390 px phone, a 160-character error 10 lines tall); over
-          the day editor / claim sheet it lifts above their action row (toastLift). */}
+          the day editor / claim sheet it lifts above their action row (toastLift). 11/1 item 6: while the phone tab bar shows it
+          sits 24 px above the bar (css.aboveTabBar); the lift still wins over a dialog. */}
       {toast && (
-        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
+        <div role="status" aria-live="polite" data-testid="toast-box" onClick={dismissToast} style={{position:"fixed",left:"50%",...((paintSheet || offerSheet) ? { top: `calc(12px + ${SAFE_AREA.top})` } : { bottom: `calc(24px + ${SAFE_AREA.bottom})` }),...(tabBarShown ? css.aboveTabBar(24) : {}),...(toastLift ? { bottom: toastLift } : {}),transform:"translateX(-50%)",zIndex:9999,width:"max-content",maxWidth:"min(90vw, 640px)",display:"flex",alignItems:"center",gap:10,background:toast.tone==="success"?"#1a7a4a":toast.tone==="error"?"#a83232":"#1F2A3A",color:"#fff",borderRadius:9,padding:"10px 18px",fontSize:13,fontWeight:600,fontFamily:font,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",cursor:"pointer",letterSpacing:0.2}}>
           <span data-testid="toast" style={{minWidth:0,overflowWrap:"anywhere"}}>{toast.msg}</span>
           {toast.count > 1 && <span data-testid="toast-count" title={"Shown " + toast.count + " times"} style={{flexShrink:0,background:"rgba(255,255,255,0.22)",borderRadius:8,padding:"1px 7px",fontSize:11,fontWeight:700}}>{"x" + toast.count}</span>}
           {(toast.tone === "error" || paintSheet || offerSheet) && <button type="button" data-testid="toast-close" aria-label="Dismiss the message" onClick={(e)=>{ e.stopPropagation(); dismissToast(); }} style={{flexShrink:0,background:"none",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",padding:0,margin:"-10px -12px -10px 0",minWidth:36,minHeight:36,lineHeight:1,fontFamily:font}}>x</button>}
@@ -7428,7 +7516,7 @@ function CallSchedule() {
           the person finishes or cancels the dialog first (a save meanwhile fails loudly per A3) and taps Sign in
           the moment it closes. */}
       {sessionExpired && !!authUser && !isPublicMode && !paintSheet && !offerSheet && (
-        <div role="alert" data-testid="session-expired" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5,fontWeight:600,fontFamily:font}}>
+        <div role="alert" data-testid="session-expired" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0), bannerLift),fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>Your session expired - sign in again</span>
           <button data-testid="session-expired-signin" onClick={openSignInAgain} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Sign in</button>
         </div>
@@ -7436,7 +7524,7 @@ function CallSchedule() {
       {/* Minimum-version gate (client_versions row 'main') - persistent, reload is user-initiated. Both banners' reload buttons
           ask first while My APP days holds unsaved taps (spec F review: reloadForUpdate - an iPhone never shows beforeunload) */}
       {forceUpdate && !paintSheet && !offerSheet && (
-        <div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5,fontWeight:600,fontFamily:font}}>
+        <div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0, bannerLift),fontSize:12.5,fontWeight:600,fontFamily:font}}>
           <span>This app version ({APP_VERSION}) is below the required minimum ({forceUpdate.min_version}). {forceUpdate.message}</span>
           <button onClick={reloadForUpdate} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Reload now</button>
         </div>
@@ -7444,9 +7532,10 @@ function CallSchedule() {
       {/* Update-available banner (version.json). The three fixed bottom banners stack 44 px apart through css.bottomBanner
           (Prompt 16 A5): the lowest one pads by the iOS home-indicator inset, the ones above it are lifted by it. All three
           sit at z 9200 (Prompt 16 B9 c) - UNDER the painter sheets (9300), the day editor and the claim sheet (9500) - so
-          a banner never covers a dialog's sticky Save row or the claim buttons on a phone; the toast stays above (9999). */}
+          a banner never covers a dialog's sticky Save row or the claim buttons on a phone; the toast stays above (9999). 11/1 item 6:
+          while the phone tab bar shows (z 9100) the stack stands ON it (bannerLift), so no banner covers a tab. */}
       {updateAvailable && !paintSheet && !offerSheet && (
-        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
+        <div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0, bannerLift),fontSize:12.5,fontWeight:600,fontFamily:font,boxShadow:"0 -2px 12px rgba(0,0,0,0.25)"}}>
           <span>New version available ({updateAvailable})</span>
           <button onClick={reloadForUpdate} style={{background:"#2a8a5a",border:"none",color:"#fff",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>Tap to reload</button>
           <button aria-label="Dismiss" onClick={()=>{ updateDismissedRef.current = updateAvailable; setUpdateAvailable(null); }} style={{background:"none",border:"none",color:"#8a9aa8",cursor:"pointer",fontSize:14,padding:"2px 6px"}}>x</button>
@@ -7652,30 +7741,19 @@ function CallSchedule() {
             </p>
           </div>
         </div>
-        {!isPublicMode && <div style={css.nav}>
-          {(() => {
-            // Prompt 16 B3: the office (A7) and a viewer get no trade card (the trades section returns null for both), so their tab reads "Time off".
-            // Prompt 20 F3: for a follower the Mine tab is "Following" (the followed surgeons' upcoming days, read-only).
-            // Prompt 29: an APP keeps the Mine tab (My APP days, then the Following cards if he follows anyone) - labelled "Mine".
-            const allTabs = [["setup","Setup"],["calendar","Calendar"],["openshifts","Open shifts"],["myschedule", isApp ? "Mine" : isFollowing ? "Following" : "Mine"],["timeoff", isCoordinator || isViewer ? "Time off" : "Time off & Trades"],["totals","Totals"],["settings","Settings"]];
-            let tabs = allTabs;
-            if (!isScheduler) tabs = tabs.filter(([k]) => k !== "setup");
-            if (!mySurgeon && !isFollowing && !isApp) tabs = tabs.filter(([k]) => k !== "myschedule");
-            // The scheduler's badge counts every pending proposal (he may answer any); a surgeon's only the ones waiting on him -
-            // both ONE per proposal (Faraz 9/27: a weekend or holiday unit is one badge count).
-            const pendingTrades = isScheduler ? pendingProposalCount : tradesWaitingOnMe.length;
-            return tabs.map(([k,l]) =>
+        {/* 11/1 item 6: off a phone only - at <= 600 px the bottom tab bar (end of the page) is the nav */}
+        {!isPublicMode && !isPhone && <div style={css.nav}>
+          {navTabs.map(([k,l]) =>
               <button key={k} data-tab={k} className="navtab" style={{...css.tab(view===k, T.accent),position:"relative"}} onClick={()=>setView(k)}>
                 {l}
                 {k==="timeoff" && pendingTrades > 0 && (
-                  <span data-testid="timeoff-badge" title={isScheduler ? pendingTrades + " pending proposal(s) - trades or gives" : pendingTrades + " trade(s) or give(s) waiting on your answer"} style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
+                  <span data-testid="timeoff-badge" title={pendingTradesTitle} style={{position:"absolute",top:-4,right:-4,background:T.accent,color:T.onAccent,borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{pendingTrades}</span>
                 )}
                 {k==="openshifts" && boardSlots.length > 0 && (
-                  <span data-testid="openshifts-badge" title={boardSlots.length + " open slot(s) from today to " + boardEndText + (boardRanges.length ? " plus later assigned days" : "")} style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{boardSlots.length}</span>
+                  <span data-testid="openshifts-badge" title={openSlotsTitle} style={{position:"absolute",top:-4,right:-4,background:"#e04040",color:"#fff",borderRadius:10,fontSize:9,fontWeight:700,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px"}}>{boardSlots.length}</span>
                 )}
               </button>
-            );
-          })()}
+          )}
           <button className="navtab" onClick={()=>{setShowNotifs(p=>!p); if(!showNotifs) markNotifsSeen();}} aria-label="Notifications"
             style={{...css.tab(showNotifs, T.accent),position:"relative",fontSize:12,padding:"5px 10px"}}>
             Alerts
@@ -7694,7 +7772,7 @@ function CallSchedule() {
         </div>}
       </div>
 
-      <div style={{maxWidth:1020,margin:"0 auto",padding:"18px 14px 60px",position:"relative"}}>
+      <div data-testid="app-main" style={{maxWidth:1020,margin:"0 auto",padding:"18px 14px 60px",position:"relative"}}>
 
         {/* Review 9/27 Do first 1: the schedule_days read failed and none has landed since - a persistent alert (the
             error toast is replaced by the next one within milliseconds) with a Retry that runs the poll's full
@@ -7709,9 +7787,15 @@ function CallSchedule() {
           </div>
         )}
 
-        {/* --- Notification Panel --- */}
+        {/* --- Notification Panel --- 11/1 item 6: on a phone (opened from the tab bar's More) a sheet over the bar - fixed, full
+            width, at most 70vh, a backdrop that closes it, Escape / Tab kept inside, the focus on its close and back on More after;
+            on a wide screen the panel is unchanged */}
+        {!isPublicMode && showNotifs && tabBarShown && <div className="sheet-backdrop" data-testid="notif-backdrop" onClick={closeAlerts} style={{position:"fixed",left:0,right:0,top:0,...css.aboveTabBar(0),zIndex:9240,background:"rgba(0,0,0,0.35)",touchAction:"none"}}/>}
         {!isPublicMode && showNotifs && (
-          <div data-testid="notif-panel" style={{position:"absolute",top:0,right:14,width:340,maxWidth:"calc(100vw - 28px)",maxHeight:400,overflowY:"auto",background:"#fff",border:"1px solid #dce2e8",borderRadius:10,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:100,padding:12}}>
+          <div data-testid="notif-panel" className="notif-panel" role={tabBarShown ? "dialog" : undefined} aria-modal={tabBarShown ? "true" : undefined} aria-label={tabBarShown ? "Alerts" : undefined} onKeyDown={tabBarShown ? sheetTabKeyDown : undefined}
+            style={tabBarShown
+              ? {position:"fixed",left:0,right:0,...css.aboveTabBar(0),maxHeight:"70vh",overflowY:"auto",overscrollBehavior:"contain",background:"#fff",border:"1px solid #dce2e8",borderBottom:"none",borderRadius:"14px 14px 0 0",boxShadow:"0 -8px 24px rgba(0,0,0,0.18)",zIndex:9250,padding:"12px 14px"}
+              : {position:"absolute",top:0,right:14,width:340,maxWidth:"calc(100vw - 28px)",maxHeight:400,overflowY:"auto",background:"#fff",border:"1px solid #dce2e8",borderRadius:10,boxShadow:"0 4px 20px rgba(0,0,0,0.12)",zIndex:100,padding:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               {/* 10/30: the panel is named like the nav button that opens it */}
               <span style={{fontSize:14,fontWeight:700,color:"#1F2A3A"}}>Alerts</span>
@@ -7719,7 +7803,7 @@ function CallSchedule() {
                 {myNotifications.length > 0 && (
                   <button onClick={clearAllNotifications} style={{background:"none",border:"1px solid #e8c0c0",color:"#904040",borderRadius:5,padding:"2px 8px",fontSize:10,cursor:"pointer",fontFamily:font}}>Clear all</button>
                 )}
-                <button aria-label="Close notifications" onClick={()=>setShowNotifs(false)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#8a94a0",minWidth:36,minHeight:36,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>x</button>
+                <button ref={notifCloseRef} aria-label="Close notifications" onClick={closeAlerts} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#8a94a0",minWidth:36,minHeight:36,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>x</button>
               </div>
             </div>
             {myNotifications.length === 0 ? (
@@ -7732,7 +7816,7 @@ function CallSchedule() {
               const tradeT = giveT ? null : notifTradeProposal(n);   // a pending two-way trade this account is asked to answer
               const tradeN = tradeT ? tradeGroupOf(tradeT).length : 0;
               return (
-              <div key={n.id} data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();}}}
+              <div key={n.id} data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();if(tabBarShown)scrollTopNow();}}}
                 style={{padding:"8px 10px",marginBottom:6,borderRadius:6,cursor:targetTab?"pointer":"default",background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span style={{fontSize:12,fontWeight:600,color:"#1F2A3A"}}>{n.title}</span>
@@ -9273,6 +9357,76 @@ function CallSchedule() {
           </div>}
         </>}
       </div>
+      {/* --- Phone tab bar + More sheet (11/1 item 6) --- At <= 600 px the header nav gives way to this bar (isPhone - ONE nav in the
+          DOM at a time): Calendar, Mine (Following), Open shifts and Time off - each where the role has it - then More: Totals, Paint
+          offers (a linked surgeon), Settings, Alerts (its unread count also on More), and Setup and Undo (the scheduler, Undo with
+          history). The sheet stays mounted while the bar shows (hidden when closed), so its tabs are always in the DOM once. Theme
+          tokens only (test/ui/theme-regions.js region "tab-bar"). z: the bar 9100 - under the bottom banners (lifted onto it), the
+          painter sheets (it is not shown with them) and the dialogs (their backdrop covers it); the sheets 9240 / 9250. The spacer
+          keeps the page's last content above the bar. */}
+      {isPhone && !isPublicMode && <div className="tabbar-spacer" aria-hidden="true" style={css.tabBarSpacer}/>}
+      {tabBarShown && (
+        <nav data-testid="tabbar" className="tabbar" aria-label="Main" style={{...css.tabBar,background:dkHdr,borderTop:`1px solid ${dk ? T.border : T.navy}`,boxShadow:"0 -2px 10px rgba(0,0,0,0.12)"}}>
+          {barTabs.map(([k,l]) => {
+            const here = view === k;
+            return (
+              <button key={k} type="button" data-tab={k} className="tabbar-btn" aria-current={here ? "page" : undefined} onClick={() => tabBarGo(k)} style={tabBtn(here)}>
+                {here && <span aria-hidden="true" style={tabMark}/>}
+                <NavIcon name={l === "Following" ? "following" : k}/>
+                <span className="tabbar-label">{k === "timeoff" ? "Time off" : l}</span>
+                {k === "timeoff" && pendingTrades > 0 && <span data-testid="timeoff-badge" title={pendingTradesTitle} style={{...tabBadge,background:T.accent,color:T.onAccent}}>{pendingTrades}</span>}
+                {k === "openshifts" && boardSlots.length > 0 && <span data-testid="openshifts-badge" title={openSlotsTitle} style={{...tabBadge,background:T.open,color:T.onOpen}}>{boardSlots.length}</span>}
+              </button>
+            );
+          })}
+          <button ref={moreBtnRef} type="button" data-testid="tabbar-more" className="tabbar-btn" aria-haspopup="dialog" aria-expanded={moreOpen} aria-controls="more-sheet" onClick={() => { setShowNotifs(false); setMoreOpen(o => !o); }}
+            style={{...tabBtn(viewInMore),...(moreOpen || showNotifs ? {background:"rgba(255,255,255,0.10)"} : {})}}>
+            {viewInMore && <span aria-hidden="true" style={tabMark}/>}
+            <span style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,minWidth:0,maxWidth:"100%",color:viewInMore ? T.onNavy : T.navTab}}><NavIcon name="more"/><span className="tabbar-label">More</span></span>
+            {myUnreadCount > 0 && <span data-testid="more-badge" title={myUnreadCount + " unread alert(s) - More > Alerts"} style={{...tabBadge,background:T.accent,color:T.onAccent}}>{myUnreadCount}</span>}
+          </button>
+        </nav>
+      )}
+      {tabBarShown && moreOpen && <div className="sheet-backdrop" data-testid="more-backdrop" onClick={() => closeMore(true)} style={{position:"fixed",left:0,right:0,top:0,...css.aboveTabBar(0),zIndex:9240,background:"rgba(0,0,0,0.35)",touchAction:"none"}}/>}
+      {tabBarShown && (
+        <div id="more-sheet" ref={moreSheetRef} data-testid="more-sheet" className="more-sheet" role="dialog" aria-modal="true" aria-labelledby="more-sheet-title" hidden={!moreOpen} onKeyDown={sheetTabKeyDown}
+          style={{position:"fixed",left:0,right:0,...css.aboveTabBar(0),zIndex:9250,maxHeight:"70vh",overflowY:"auto",overscrollBehavior:"contain",background:T.surface,color:T.text,borderTop:"1px solid " + T.border,borderRadius:"14px 14px 0 0",boxShadow:"0 -8px 24px rgba(0,0,0,0.18)",padding:"4px 0 6px",fontFamily:font}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"2px 4px 2px 18px"}}>
+            <span id="more-sheet-title" style={{fontSize:12,fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",color:T.muted}}>More</span>
+            <button type="button" aria-label="Close More" onClick={() => closeMore(true)} style={{background:"none",border:"none",color:T.muted,fontSize:20,cursor:"pointer",fontFamily:font,minWidth:44,minHeight:44}}>x</button>
+          </div>
+          {moreTabs.filter(([k]) => k === "totals").map(([k,l]) => (
+            <button key={k} type="button" data-more-item="" data-tab={k} className="more-row" aria-current={view === k ? "page" : undefined} onClick={() => { closeMore(true); tabBarGo(k); }} style={{...moreRow,...(view === k ? {color:T.accentText} : {})}}>
+              <NavIcon name={k}/>{l}
+            </button>
+          ))}
+          {mySurgeon && (
+            <button type="button" data-more-item="" data-testid="nav-paint-offers" className="more-row" title="Paint the dates you'll cover (primary / backup / either), any time ahead" onClick={() => { setMoreOpen(false); setOfferSheet({ personId: mySurgeon }); }} style={moreRow}>
+              <span style={{display:"flex",alignItems:"center",gap:14,color:T.text}}><NavIcon name="paint"/>Paint offers</span>
+            </button>
+          )}
+          {moreTabs.filter(([k]) => k === "settings").map(([k,l]) => (
+            <button key={k} type="button" data-more-item="" data-tab={k} className="more-row" aria-current={view === k ? "page" : undefined} onClick={() => { closeMore(true); tabBarGo(k); }} style={{...moreRow,...(view === k ? {color:T.accentText} : {})}}>
+              <NavIcon name={k}/>{l}
+            </button>
+          ))}
+          <button type="button" data-more-item="" className="more-row" aria-label="Notifications" onClick={openAlertsSheet} style={moreRow}>
+            {myUnreadCount > 0 && <span style={{order:2,marginLeft:"auto",minWidth:20,height:20,padding:"0 6px",borderRadius:10,background:T.accent,color:T.onAccent,fontSize:11,fontWeight:700,lineHeight:"20px",textAlign:"center"}}>{myUnreadCount}</span>}
+            <NavIcon name="alerts"/>Alerts
+          </button>
+          {moreTabs.filter(([k]) => k === "setup").map(([k,l]) => (
+            <button key={k} type="button" data-more-item="" data-tab={k} className="more-row" aria-current={view === k ? "page" : undefined} onClick={() => { closeMore(true); tabBarGo(k); }} style={{...moreRow,...(view === k ? {color:T.accentText} : {})}}>
+              <NavIcon name={k}/>{l}
+            </button>
+          ))}
+          {isScheduler && scheduleHistory.length > 0 && (
+            <button type="button" data-more-item="" data-testid="undo-btn" className="more-row" title={`Undo (${scheduleHistory.length} steps)`} onClick={() => { closeMore(true); undoLastChange(); }} style={moreRow}>
+              <span style={{display:"flex",alignItems:"center",gap:14,color:T.text}}><NavIcon name="undo"/>Undo the last change</span>
+            </button>
+          )}
+        </div>
+      )}
+      {/* --- end of the phone tab bar --- */}
       </>}
     </div>
   );
@@ -10367,6 +10521,28 @@ function useMediaQuery(query) {
     };
   }, [query]);
   return on;
+}
+
+// 11/1 item 6: the phone tab bar's and the More sheet's glyphs - 24-unit inline SVG strokes in currentColor (no icon font is
+// loaded), hidden from assistive tech (each sits beside its label) and without a <title>, so a button's textContent stays its
+// label (the smoke reads "Following", "Mine", "Time off" off it). Stroke attributes sit on the <svg> (children inherit them):
+// no JSX spread. ASCII only.
+function NavIcon({ name, size }) {
+  const s = size || 22;
+  let g = null;
+  if (name === "calendar") g = <><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></>;
+  else if (name === "myschedule") g = <><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20.5c.8-4 3.8-6.3 7.5-6.3s6.7 2.3 7.5 6.3"/></>;
+  else if (name === "following") g = <><circle cx="9" cy="8.5" r="3.2"/><path d="M2.8 20c.6-3.5 3.1-5.6 6.2-5.6s5.6 2.1 6.2 5.6M15.5 5.6a3 3 0 0 1 0 5.8M17.6 14.6c1.9.6 3.2 2.5 3.6 5.4"/></>;
+  else if (name === "openshifts") g = <><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></>;
+  else if (name === "timeoff") g = <><circle cx="12" cy="12" r="3.8"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></>;
+  else if (name === "totals") g = <path d="M3.5 20.5h17M7 20.5v-7M12 20.5v-15M17 20.5v-4.5"/>;
+  else if (name === "settings") g = <><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></>;
+  else if (name === "setup") g = <><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></>;
+  else if (name === "alerts") g = <path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/>;
+  else if (name === "paint") g = <path d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 3L8 18.5zM13.5 7l3 3"/>;
+  else if (name === "undo") g = <path d="M9 7l-4.5 4.5L9 16M4.5 11.5H15a4.5 4.5 0 0 1 0 9h-3"/>;
+  else if (name === "more") g = <><circle cx="5.5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.7" fill="currentColor" stroke="none"/></>;
+  return <svg aria-hidden="true" focusable="false" width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,display:"block"}}>{g}</svg>;
 }
 
 // --- Offer standing in words (Prompt 14 part 3c, U3c 9/23) ---

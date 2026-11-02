@@ -160,6 +160,8 @@ export const contrastTable = (mod) => {
     add(theme, "E badge (white on navy glyph)", "#FFFFFF", T.badge, "label");
     // 9px 700 digits are read as text (review of TH): light uses navy digits on the orange, dark the page navy.
     add(theme, "count badge digits on the accent", T.onAccent, T.accent, "text");
+    // 11/1 item 6: the phone tab bar's Open shifts count - its digits on the OPEN red (light white, dark the page navy)
+    add(theme, "open-slot count digits on the OPEN red (phone tab bar)", T.onOpen, T.open, "text"); // 6.47 / 5.41
     // Fairness bars: the gradient fill (start and end) against its track.
     add(theme, "fairness bar fill (start) on its track", T.barStart, T.barTrack, "label");
     add(theme, "fairness bar fill (end) on its track", T.barEnd, T.barTrack, "label");

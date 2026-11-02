@@ -40,6 +40,9 @@ const THEME = {
     primaryStart: "#13294B", primaryEnd: "#1F3A6B", onPrimary: "#FFFFFF",
     accent: "#FF5F05", onAccent: "#13294B", accentText: "#C2410C", accentTint: "#FFE8DB",
     open: "#B91C1C", weekend: "#EEF2F7", holiday: "#FDF6DC", skeleton: "#E4E8EE",
+    // The phone tab bar's Open shifts count (11/1 item 6): its digits on the OPEN red - light white 6.47:1; dark the page navy
+    // 5.41:1 on #F06060 (white would read 3.21:1 there). contrast.mjs measures both; the wide nav's badge keeps #e04040 / #fff.
+    onOpen: "#FFFFFF",
     // Success green as running text (Prompt 16 B2: "Saving", a sent test notification, the empty
     // open-shifts board's <span> - on a span, never a td: the dark sheet's td rule would repaint it)
     // - 4.99:1 on the card, 4.69:1 on the page; dark 6.17:1 / 7.38:1.
@@ -89,6 +92,7 @@ const THEME = {
     primaryStart: "#1F3A6B", primaryEnd: "#2E5090", onPrimary: "#FFFFFF",
     accent: "#FF8A4C", onAccent: "#0B1A33", accentText: "#FF8A4C", accentTint: "#3A2418",
     open: "#F06060", weekend: "#0F2140", holiday: "#3A3418", skeleton: "#243250",
+    onOpen: "#0B1A33",
     success: "#40C060",
     backupText: "#D4A84A", warnText: "#D4A84A",
     barTrack: "#0F2140", barStart: "#4A78D0", barEnd: "#5B8DEF",
@@ -149,6 +153,12 @@ function pillBorder(c) { const col = c || {}; return (col.dashed ? "1px dashed "
 // installed PWA draws under the notch and the home indicator; these two env() readers (0px everywhere else) keep the UI out of
 // them. Read them with a template literal AFTER the padding shorthand in the same style object (React applies keys in order).
 const SAFE_AREA = { top: "env(safe-area-inset-top, 0px)", bottom: "env(safe-area-inset-bottom, 0px)" };
+// The phone's bottom tab bar (11/1 item 6; index-source.html renders it instead of the header nav at <= 600 px): TABBAR_H px of
+// tabs above the home indicator, padded below by the inset. TABBAR_CLEAR is its whole height - what a bottom-anchored sheet,
+// banner or toast is lifted by while it shows, and the page's scroll padding (focus() / scrollIntoView stop above it). Kept here
+// beside SAFE_AREA so index-source.html gains no env() literal and no new inset reader (data-layer A5 counts both).
+const TABBAR_H = 56;
+const TABBAR_CLEAR = `calc(${TABBAR_H}px + ${SAFE_AREA.bottom})`;
 
 const css = {
   root: { fontFamily:font, background:LIGHT.bg, color:LIGHT.text, minHeight:"100vh" },
@@ -156,8 +166,15 @@ const css = {
   h1: { fontSize:21, fontWeight:700, color:LIGHT.onNavy, margin:0, letterSpacing:-0.5 },
   // A fixed bottom banner (update-available, minimum-version, session-expired): they stack 44 px apart, `stacked` = how many
   // show below this one. The lowest pads its bottom by the home-indicator inset; the ones above are lifted by it. Spread it
-  // after the banner's padding shorthand.
-  bottomBanner: (stacked) => stacked ? { bottom: `calc(${stacked * 44}px + ${SAFE_AREA.bottom})` } : { bottom: 0, paddingBottom: `calc(${SAFE_AREA.bottom} + 9px)` },
+  // after the banner's padding shorthand. 11/1 item 6: `lift` = TABBAR_H while the phone tab bar shows - the lowest banner then
+  // sits ON the bar (the bar pads the inset, the banner keeps its own 9 px) and the others stack 44 px apart above it; no lift =
+  // the A5 placement exactly.
+  bottomBanner: (stacked, lift) => lift ? { bottom: `calc(${(stacked || 0) * 44 + lift}px + ${SAFE_AREA.bottom})` } : stacked ? { bottom: `calc(${stacked * 44}px + ${SAFE_AREA.bottom})` } : { bottom: 0, paddingBottom: `calc(${SAFE_AREA.bottom} + 9px)` },
+  // 11/1 item 6 - the phone tab bar: its layout (index-source.html paints it with theme tokens), the in-flow spacer that keeps
+  // the page's last content above it, and `bottom` gap px above it (the toast 24; the More / Alerts sheets and backdrops 0).
+  tabBar: { position:"fixed", left:0, right:0, bottom:0, zIndex:9100, display:"flex", alignItems:"stretch", height:TABBAR_CLEAR, paddingBottom:SAFE_AREA.bottom, boxSizing:"border-box" },
+  tabBarSpacer: { height:TABBAR_CLEAR },
+  aboveTabBar: (gap) => ({ bottom: `calc(${TABBAR_H + (gap || 0)}px + ${SAFE_AREA.bottom})` }),
   sub: { fontSize:11, color:LIGHT.navyMuted, margin:"2px 0 0", letterSpacing:0.8, textTransform:"uppercase" },
   nav: { display:"flex", gap:3, flexWrap:"wrap" },
   // Nav tabs sit on the navy bar: the active tab is lifted a touch and underlined in the accent (the caller passes T.accent so dark mode gets its own).
@@ -250,7 +267,7 @@ function eastVacSegStyle(active, state, dark) {
 
 // Node (tests: test/data-layer.test.js pins, test/ui/contrast.mjs).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, SAFE_AREA, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle, OFFER_BRUSH, PAINT_ROWS };
+  module.exports = { THEME, OPENING, SURGEON_COLOR_BY_ID, OUTSIDE_SURGEON_COLOR, FALLBACK_SURGEON_COLORS, rosterColors, rosterNameColor, pillBorder, css, SAFE_AREA, TABBAR_H, TABBAR_CLEAR, EASTVAC_COLORS, EASTVAC_SEG_TONES, eastVacMarkStyle, eastVacSegStyle, OFFER_BRUSH, PAINT_ROWS };
 }
 
 /* ═══════════════════════════════════════════════════

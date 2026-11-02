@@ -7130,11 +7130,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(A5SRC.includes('<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">'), "black-translucent: the page draws under the status bar, which is why the header pads by the top inset");
     });
     check("A5 pins: the three fixed bottom banners (session-expired above minimum-version above update-available) position through css.bottomBanner spread AFTER their padding shorthand; no literal 44px offset or bottom:0 is left on them; the toast lifts by the bottom inset", () => {
-      assert.ok(A5line('data-testid="session-expired"').includes('style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0)),fontSize:12.5'), "the session-expired banner");
+      // pin moved deliberately 11/1 (item 6): the stack stands on the phone tab bar (bannerLift - 0 off a phone: the A5 placement)
+      assert.ok(A5line('data-testid="session-expired"').includes('style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner((forceUpdate ? 1 : 0) + (updateAvailable ? 1 : 0), bannerLift),fontSize:12.5'), "the session-expired banner");
       const fu = A5SRC.slice(A5SRC.indexOf("{forceUpdate && !paintSheet && !offerSheet && ("), A5SRC.indexOf("This app version ({APP_VERSION}) is below the required minimum"));
-      assert.ok(fu.includes('<div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0),fontSize:12.5'), "the minimum-version banner");
+      assert.ok(fu.includes('<div role="alert" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#7a2a2a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(updateAvailable ? 1 : 0, bannerLift),fontSize:12.5'), "the minimum-version banner");
       const ua = A5SRC.slice(A5SRC.indexOf("{updateAvailable && !paintSheet && !offerSheet && ("), A5SRC.indexOf("New version available ({updateAvailable})"));
-      assert.ok(ua.includes('<div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0),fontSize:12.5'), "the update-available banner");
+      assert.ok(ua.includes('<div role="status" aria-live="polite" style={{position:"fixed",left:0,right:0,zIndex:9200,background:"#1F2A3A",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexWrap:"wrap",gap:10,padding:"9px 14px",...css.bottomBanner(0, bannerLift),fontSize:12.5'), "the update-available banner");
       assert.strictEqual(A5count(A5SRC, "css.bottomBanner("), 3, "exactly the three banners");
       for (const gone of ["bottom:updateAvailable?44:0", "bottom:(forceUpdate?44:0)+(updateAvailable?44:0)", "bottom:0,zIndex:9998"]) assert.strictEqual(A5count(A5SRC, gone), 0, "literal offset left: " + gone);
       // Review 9/27 Do first 8 - pin moved deliberately: the positioned box is data-testid "toast-box" now; "toast" is the
@@ -7146,6 +7147,68 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(A5count(A5SRC, "env(safe-area-inset-"), 4, "the two painter sheets' header + footer literals, nothing else raw");
       assert.strictEqual(A5count(A5SRC, "${SAFE_AREA.bottom}"), 2, "the toast and the editor footer");
       assert.strictEqual(A5count(A5SRC, "${SAFE_AREA.top}"), 1, "the toast's painter-sheet placement is the only JSX reader of the top inset; the header's lives in css.hdr (app-styles.js)");
+    });
+  }
+
+  /* ---------------- N6. 11/1 item 6: the phone's bottom tab bar ---------------- */
+  console.log("\n[N6] 11/1 item 6 (phone bottom tab bar: one nav in the DOM at a time, the More sheet, what sits on the bar, print)");
+  {
+    const N6SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
+    const n6c = (needle) => N6SRC.split(needle).length - 1;
+    const st6 = require(path.join(ROOT, "app-styles.js"));
+    check("N6: ONE nav in the DOM - the header nav off a phone only, the bar on one only (600 px), both from navTabs; More is no data-tab destination; the slots per role (Faraz 11/1: Calendar, Mine, Open shifts, Time off - each where the role has it - then More)", () => {
+      assert.strictEqual(n6c('const isPhone = useMediaQuery("(max-width: 600px)");'), 1);
+      assert.strictEqual(n6c("{!isPublicMode && !isPhone && <div style={css.nav}>"), 1);
+      assert.strictEqual(n6c("const tabBarShown = isPhone && !isPublicMode && !authLoading && !biometricPending && !!authUser && !!userProfile && !paintSheet && !offerSheet;"), 1);
+      assert.ok(N6SRC.includes('{tabBarShown && (\n        <nav data-testid="tabbar" className="tabbar" aria-label="Main"'));
+      assert.strictEqual(n6c("const allTabs = ["), 1, "one tab list");
+      assert.strictEqual(n6c("data-tab={k}"), 5, "the header nav, the bar, and the More sheet's Totals, Settings and Setup rows");
+      const more = N6SRC.slice(N6SRC.indexOf('data-testid="tabbar-more"'), N6SRC.indexOf("</button>", N6SRC.indexOf('data-testid="tabbar-more"')));
+      assert.ok(more.length > 100 && !more.includes("data-tab"), "More carries no data-tab");
+      const lines = N6SRC.slice(N6SRC.indexOf("  const barTabs = "), N6SRC.indexOf("  const viewInMore = "));
+      const run = (keys) => new Function("navTabs", lines + "return [barTabs.map(t => t[0]).join(), moreTabs.map(t => t[0]).join()];")(keys.map(k => [k, k]));
+      assert.deepStrictEqual(run(["setup","calendar","openshifts","myschedule","timeoff","totals","settings"]), ["calendar,myschedule,openshifts,timeoff", "setup,totals,settings"], "the scheduler");
+      assert.deepStrictEqual(run(["calendar","openshifts","myschedule","timeoff","totals","settings"]), ["calendar,myschedule,openshifts,timeoff", "totals,settings"], "a surgeon / APP / follower");
+      assert.deepStrictEqual(run(["calendar","openshifts","timeoff","totals","settings"]), ["calendar,openshifts,timeoff", "totals,settings"], "the office / a viewer: no Mine, so Totals stays in More");
+    });
+    check("N6: the More sheet stays mounted while the bar shows (hidden when closed - its tabs are in the DOM once, a phone-width read sees them), only its backdrop is conditional; rows in the order Totals, Paint offers, Settings, Alerts, Setup, Undo", () => {
+      assert.ok(N6SRC.includes('{tabBarShown && (\n        <div id="more-sheet" ref={moreSheetRef} data-testid="more-sheet" className="more-sheet" role="dialog" aria-modal="true" aria-labelledby="more-sheet-title" hidden={!moreOpen} onKeyDown={sheetTabKeyDown}'), "mounted with the bar, hidden when closed");
+      assert.ok(N6SRC.includes('{tabBarShown && moreOpen && <div className="sheet-backdrop" data-testid="more-backdrop" onClick={() => closeMore(true)}'), "the backdrop only while open");
+      const sh = N6SRC.slice(N6SRC.indexOf('data-testid="more-sheet"'), N6SRC.indexOf("{/* --- end of the phone tab bar --- */}"));
+      const at = ['moreTabs.filter(([k]) => k === "totals")', 'data-testid="nav-paint-offers"', 'moreTabs.filter(([k]) => k === "settings")', 'aria-label="Notifications"', 'moreTabs.filter(([k]) => k === "setup")', 'data-testid="undo-btn"'].map(s => sh.indexOf(s));
+      assert.ok(at.every((x, i) => x > 0 && (i === 0 || x > at[i - 1])), "the More rows' order: " + JSON.stringify(at));
+      assert.ok(sh.includes("{mySurgeon && (") && sh.includes("{isScheduler && scheduleHistory.length > 0 && ("), "Paint offers for a linked surgeon, Undo for the scheduler with history");
+    });
+    check("N6: app-styles - TABBAR_H / TABBAR_CLEAR, css.tabBar (fixed, z 9100, pads the inset), css.aboveTabBar, css.bottomBanner(n, lift) on the bar and the A5 placement without a lift, THEME onOpen", () => {
+      assert.strictEqual(st6.TABBAR_H, 56);
+      assert.strictEqual(st6.TABBAR_CLEAR, "calc(56px + env(safe-area-inset-bottom, 0px))");
+      assert.deepStrictEqual(st6.css.tabBar, { position:"fixed", left:0, right:0, bottom:0, zIndex:9100, display:"flex", alignItems:"stretch", height:"calc(56px + env(safe-area-inset-bottom, 0px))", paddingBottom:"env(safe-area-inset-bottom, 0px)", boxSizing:"border-box" });
+      assert.deepStrictEqual(st6.css.aboveTabBar(24), { bottom: "calc(80px + env(safe-area-inset-bottom, 0px))" });
+      assert.deepStrictEqual(st6.css.aboveTabBar(0), { bottom: "calc(56px + env(safe-area-inset-bottom, 0px))" });
+      assert.deepStrictEqual(st6.css.bottomBanner(0, 56), { bottom: "calc(56px + env(safe-area-inset-bottom, 0px))" });
+      assert.deepStrictEqual(st6.css.bottomBanner(2, 56), { bottom: "calc(144px + env(safe-area-inset-bottom, 0px))" });
+      for (const n of [0, 1, 2]) assert.deepStrictEqual(st6.css.bottomBanner(n, 0), st6.css.bottomBanner(n));
+      assert.strictEqual(st6.THEME.light.onOpen, "#FFFFFF"); assert.strictEqual(st6.THEME.dark.onOpen, "#0B1A33");
+    });
+    check("N6: what sits on the bar is lifted onto it (banners, toast between the A5 position and toastLift, the sheets), the page's scroll padding, print", () => {
+      assert.strictEqual(n6c("const bannerLift = tabBarShown ? TABBAR_H : 0;"), 1);
+      assert.strictEqual(n6c(", bannerLift),fontSize:12.5"), 3);
+      const line = N6SRC.split("\n").find(l => l.includes('data-testid="toast-box"')) || "";
+      const a = line.indexOf("{ bottom: `calc(24px + ${SAFE_AREA.bottom})` }),"), b = line.indexOf("...(tabBarShown ? css.aboveTabBar(24) : {}),"), c = line.indexOf("...(toastLift ? { bottom: toastLift } : {}),");
+      assert.ok(a > 0 && b > a && c > b);
+      assert.ok(N6SRC.includes('document.documentElement.style.scrollPaddingBottom = tabBarShown ? TABBAR_CLEAR : "";'));
+      const pr = N6SRC.slice(N6SRC.indexOf("@media print {"), N6SRC.indexOf("@page"));
+      assert.ok(pr.includes(".tabbar, .tabbar-spacer, .more-sheet, .sheet-backdrop, .notif-panel { display: none !important; }"));
+    });
+    check("N6: the More sheet - a labelled modal dialog over the bar (Escape from anywhere, the Tab trap, focus in and back on More), closed by its backdrop / a pick / the bar going; Alerts opens the panel and marks it seen; NavIcon / useMediaQuery at module scope after cvAccountLabel", () => {
+      assert.ok(N6SRC.includes("const openAlertsSheet = () => { setMoreOpen(false); setShowNotifs(true); markNotifsSeen(); };"));
+      assert.ok(N6SRC.includes("useEffect(() => { if (!tabBarShown) setMoreOpen(false); }, [tabBarShown]);"));
+      assert.ok(N6SRC.includes("const tabBarGo = (k) => { setMoreOpen(false); setShowNotifs(false); if (setView(k)) scrollTopNow(); };"));
+      assert.ok(N6SRC.includes('const onKey = (e) => { if (e.key !== "Escape") return; if (moreOpen) closeMore(true); else closeAlerts(); };'));
+      const cv = N6SRC.indexOf("\nfunction cvAccountLabel("), mq = N6SRC.indexOf("\nfunction useMediaQuery("), ni = N6SRC.indexOf("\nfunction NavIcon(");
+      assert.ok(cv > 0 && mq > cv && ni > mq, "cvAccountLabel, then useMediaQuery, then NavIcon (outside the DayEditor runners' lift)");
+      const icon = N6SRC.slice(ni, N6SRC.indexOf("\n}\n", ni));
+      assert.ok(icon.includes('<svg aria-hidden="true" focusable="false"') && !icon.includes("<title"), "the glyphs are hidden from assistive tech and carry no title (a button's textContent stays its label)");
     });
   }
 
@@ -7730,7 +7793,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // pin moved deliberately 10/1 (Prompt 24): a seventh region, Setup > Rules (the pattern lists + the rules editor, rewritten on theme tokens)
     // pin moved deliberately 10/3 (fix/painter-dark-mode, spec D): the offer and vacation painter sheets join as regions eight and nine
     check("the six regions (+ Setup > Rules since Prompt 24, the two painter sheets since 10/3) are found by unique anchors and none carries a literal of the old set (#3a4a58, #7a8a98, #c04040, #5a6a78, #8a94a0, #1a8040, #f0f2f4)", () => {
-      assert.deepStrictEqual(REG.REGIONS.map(r => r.key), ["notif-settings", "publish-diff", "snapshot-list", "sucheck", "openshifts-board", "claim-sheet", "rules-editor", "offer-painter", "vacation-painter"]);
+      // pin moved deliberately 11/1 (item 6): the phone tab bar + More sheet join as region ten (theme tokens only)
+      assert.deepStrictEqual(REG.REGIONS.map(r => r.key), ["notif-settings", "publish-diff", "snapshot-list", "sucheck", "openshifts-board", "claim-sheet", "rules-editor", "offer-painter", "vacation-painter", "tab-bar"]);
       for (const r of REG.REGIONS) {
         const { text } = REG.extractRegion(B2SRC, r);
         assert.ok(text.length > 200, r.key + ": the region slice is suspiciously short (" + text.length + " chars) - an anchor moved");
@@ -9628,7 +9692,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(count("setShowErrorLog(true)"), 1, "opened from one place");
       assert.ok(src.includes("const openErrorLog = () => { errorLogOpenerRef.current = document.activeElement; setShowErrorLog(true); };"), "... openErrorLog");
       assert.strictEqual(count("onClick={openErrorLog}"), 1, "opened from the header only");
-      const hdr = liftOrNull('<div data-testid="app-header"', "{!isPublicMode && <div style={css.nav}>");
+      // pin moved deliberately 11/1 (item 6): the header nav renders off a phone only - the phone's nav is the bottom tab bar
+      const hdr = liftOrNull('<div data-testid="app-header"', "{!isPublicMode && !isPhone && <div style={css.nav}>");
       assert.ok(hdr !== null && hdr.includes('data-testid="hdr-errors"'), "the button lives in the header's status line (every role, ?public=1 too)");
       assert.ok(!/synced|saved|not saving|connecting|schedule not loaded/i.test("1 error 2 errors"), "the label carries none of the words the smoke reads off the header");
       const dlg = liftOrNull("{showErrorLog && (", "{/* Publish dialog");
@@ -13527,7 +13592,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
       // the callers stop on false: the Alerts row keeps its panel and the unread marks, goToDay opens no editor day, the trade /
       // give jumps fill no trade card and the open-shifts jump keeps the editor
-      assert.ok(PSRC.includes("onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();}}}"), "the Alerts row closes / marks seen only when the view moved");
+      // pin moved deliberately 11/1 (item 6): on a phone the target page shows from its top
+      assert.ok(PSRC.includes("onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();if(tabBarShown)scrollTopNow();}}}"), "the Alerts row closes / marks seen only when the view moved");
       const g2d = sliceP("  const goToDay = (day) => {", "\n  };\n");
       assert.ok(g2d.includes('    if (!setView("calendar")) return;') && g2d.indexOf('if (!setView("calendar")) return;') < g2d.indexOf("setCalMonth(") && g2d.indexOf('if (!setView("calendar")) return;') < g2d.indexOf("setEditorDay(day);"), "goToDay asks before it moves the month or sets the editor day");
       for (const [head, tab] of [["  const proposeTradeForDay = (day, role, pick) => {", "timeoff"], ["  const proposeGiveForDay = (day, role, from) => {", "timeoff"], ["  const openShiftsBoard = () => {", "openshifts"]]) {
