@@ -7711,7 +7711,10 @@ try {
         else ok(`No primary (s2): his ${ownIn.length} single-day backup_only row(s) in ${target} (${ownIn.map(md).join(", ")}; sources ${[...new Set(mine.filter(r => ownIn.includes(String(r.start_date).slice(0, 10))).map(r => r.source || "-"))].join("/")}) read 'No primary' - his to clear`);
       }
       // 4. two free rows marked
-      const picks = await npp.$$eval("[data-testid=ofp-day][data-state=free]", els => els.filter(e => !e.getAttribute("data-noprimary") && !e.getAttribute("data-np-why") && !e.disabled).map(e => e.getAttribute("data-day")));
+      // 11/2 (the painter fix's leftovers): a row with block words (data-why - a one-role block such as a colleague's derived East week
+      // behind the mark) is skipped: once the No primary row is saved the painter now shows that block (it hid it before), so Either
+      // would have nothing to lift there and the lift question below would not be asked (2/5 + 2/6 2027 sat in Fierce's week)
+      const picks = await npp.$$eval("[data-testid=ofp-day][data-state=free]", els => els.filter(e => !e.getAttribute("data-noprimary") && !e.getAttribute("data-np-why") && !e.getAttribute("data-why") && !e.disabled).map(e => e.getAttribute("data-day")));
       if (picks.length < 2) throw new Error(`fewer than two free rows to mark in ${target} (${picks.length})`);
       const [D1, D2] = picks;
       await npp.click(`[data-testid=ofp-day][data-day="${D1}"]`); await npp.waitForTimeout(120);
