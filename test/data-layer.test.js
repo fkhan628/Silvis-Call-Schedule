@@ -3001,23 +3001,28 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const app = src.slice(src.indexOf("function CallSchedule() {"), src.indexOf("function MonthPainterSheet("));
     const appCode = noComments(app);
     // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 7) - the four hard-reason call sites pass no gloss
-    assert.ok(appCode.includes('const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";'), "tradeReasonText (the trade-to / trade-return boxes, the Blocked / Can't accept toasts, the scheduler's confirms)");
-    assert.ok(appCode.includes('showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");'), "the claim-gate toast");
+    // pin moved deliberately 11/2 (the painter fix's leftovers): every hard reason through reasonsText (masked, labelled, "; "-joined)
+    assert.ok(appCode.includes('const reasonsText = (list) => eastMaskedReasons(list, eastDetailsVisible).map(c => reasonLabel(c, nameOf)).join("; ");'), "reasonsText: every reason, masked through the helper, then labelled");
+    assert.ok(appCode.includes('const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonsText(r.hard) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";'), "tradeReasonText (the trade-to / trade-return boxes, the Blocked / Can't accept toasts, the scheduler's confirms) reads reasonsText");
+    assert.ok(appCode.includes('showToast("Not eligible any more: " + (gate ? reasonsText(gate.hard) : reasonLabel("unknown-surgeon")), "error");'), "the claim-gate toast (every reason, 11/2)");
     // pin moved deliberately 10/14: Prompt 31 Part A (A3, decision 7) - nothing reads the gloss on the board any more, so its row
     // no longer carries it
     assert.ok(appCode.includes("soft: r.soft || [] };") && !appCode.includes("eastVacation: r.eastVacation"), "boardElig no longer carries the eastVacation gloss");
     assert.ok(appCode.includes("const soft = eastMaskedReasons(o.soft, eastDetailsVisible); return <span key={o.id} data-eligible-id={o.id} title={soft.length ? \"allowed - \" + soft.map(x => reasonLabel(x.reason, nameOf)).join(\"; \") : \"no rule warnings\"}"), "the board's eligible chip hover");
-    assert.ok(appCode.includes('const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon");'), "the Take button's title");
+    assert.ok(appCode.includes('const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonsText(me.hard) : reasonLabel("unknown-surgeon");'), "the Take button's title (every reason, 11/2)");
     assert.ok(appCode.includes("setClaimSheet({ day: slot.day, role: slot.role, unit: slot.unit, soft: me ? eastMaskedReasons(me.soft, eastDetailsVisible) : [], mates: obUnitMates(boardSlots, slot) });") && (appCode.match(/setClaimSheet\(\{/g) || []).length === 1, "the claim sheet's list is masked where the sheet is opened (its one setClaimSheet({...}))");
     assert.ok(appCode.includes('eastMaskedReasons(e.hard, eastDetailsVisible)[0]) : ""}</option>;'), "the trade card's greyed counter-party option (its raw code)");
     assert.ok(appCode.includes("const toNotes = toElig && toElig.ok && toElig.soft ? eastMaskedReasons(toElig.soft, eastDetailsVisible) : [];") && appCode.includes("Allowed with a note: {toNotes.map(softTag).join(\", \")}."), "the trade card's 'Allowed with a note'");
-    assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 7, "seven call sites in the App (tradeReasonText, the claim gate, the chip, the Take title, the claim sheet, the option, the note) - a new one needs its pin here");
+    // pin moved deliberately 11/2: tradeReasonText, the claim gate and the Take title read reasonsText (ONE call site) - 7 became 5
+    assert.strictEqual((appCode.match(/eastMaskedReasons\(/g) || []).length, 5, "five call sites in the App (reasonsText - for tradeReasonText, the claim gate and the Take title -, the chip, the claim sheet, the option, the note) - a new one needs its pin here");
     // nothing on those surfaces reads a reason around the helper: no hard[0] left in the App, every reasonLabel( there takes
     // the helper's answer, a constant or x.reason of a masked list (the chip's soft, the sheet's claimSheet.soft), every softTag the notes
     assert.strictEqual((appCode.match(/hard\[0\]/g) || []).length, 0, "a raw hard[0] read in the App (outside the helper)");
     const labelCalls = appCode.match(/reasonLabel\([^,)]*/g) || [];
-    const badLabel = labelCalls.filter(c => !/^reasonLabel\((eastMaskedReasons\(|"|x\.reason$)/.test(c));
+    // 11/2: `c` is reasonsText's element - an entry of the masked list; pinned to that one place below
+    const badLabel = labelCalls.filter(c => !/^reasonLabel\((eastMaskedReasons\(|"|x\.reason$|c$)/.test(c));
     assert.deepStrictEqual(badLabel, [], "a reasonLabel( in the App outside the helper: " + badLabel.join(" | "));
+    assert.strictEqual((appCode.match(/reasonLabel\(c, nameOf\)/g) || []).length, 1, "reasonLabel(c, nameOf) once in the App: inside reasonsText, on the masked list's entries");
     assert.strictEqual((appCode.match(/x\.reason, nameOf/g) || []).length, 2, "x.reason is labelled in two places only (the chip's masked soft, the sheet's masked claimSheet.soft)");
     assert.ok(appCode.includes("{claimSheet.soft.map((x, i) => <li key={i}>{reasonLabel(x.reason, nameOf)}"), "the claim sheet renders claimSheet.soft (masked at open)");
     assert.ok((appCode.match(/softTag/g) || []).length === 1 && appCode.includes("{toNotes.map(softTag).join("), "softTag in the App: the trade note only (through toNotes)");
@@ -5174,15 +5179,106 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const blocked = H.offerDayWhy(["time-off:2026-11-10", "hard-never-weekday:Tue"]);
     assert.strictEqual(H.offerWhyIfOffered(blocked, ["derived-lock-held:s5"]), blocked, "a block already -> unchanged");
     const free = H.offerDayWhy([]);
-    assert.strictEqual(H.offerWhyIfOffered(free, ["derived-lock-held:s5"]), free, "no confirm -> unchanged (the plain ask already went past the static layer)");
+    // pin moved deliberately 11/2 (the leftovers): a FREE plain picture with a block behind now blocks too - his own No primary row,
+    // filtered before offerDayWhy, stopped the plain ask at the static layer (U3b has the ctx case); nothing behind -> unchanged
+    assert.deepStrictEqual(H.offerWhyIfOffered(free, ["derived-lock-held:s5"]), { block: "a colleague's East/Silvis week", confirm: null, codes: { block: ["derived-lock-held:s5"], confirm: [] } }, "no confirm, a block behind -> blocked, no confirm words");
+    assert.strictEqual(H.offerWhyIfOffered(free, []), free, "no confirm, nothing behind -> unchanged");
+    assert.strictEqual(H.offerWhyIfOffered(free, ["holds-other-role", "monthly-cap:7"]), free, "no confirm, only the generator's business behind -> unchanged");
     assert.strictEqual(H.OFFER_BLOCK_WORDS["derived-lock-held"], "a colleague's East/Silvis week");
     assert.strictEqual(H.OFFER_BLOCK_WORDS["derived-lock"], "your East/Silvis week", "his own derived week keeps 'your'");
     // (4) the painter: the second ask for a confirm-only role, the same backup-only filter, the same East words option
     const sheet = src.slice(src.indexOf("\nfunction OfferPainterSheet("), src.indexOf("\nfunction Collapsible("));
-    assert.ok(sheet.includes("let why = offerDayWhy(hard, { eastDetails: !!eastDetails });\n") && sheet.includes("if (!why.block && why.confirm) {"), "the plain picture, then the second ask only for a confirm-only role");
-    assert.ok(sheet.includes("eligO = eligibility(ctx, ds, role, person.id, { claim: true, assumeOffer: true });"), "asked as if offered");
+    // pin moved deliberately 11/2 (the leftovers): the second ask also when his own No primary row was filtered out (ownRow)
+    assert.ok(sheet.includes("let why = offerDayWhy(hard, { eastDetails: !!eastDetails });\n") && sheet.includes("const ownRow = !!elig && elig.hard.length !== hard.length;") && sheet.includes("if (!why.block && (why.confirm || ownRow)) {"), "the plain picture, then the second ask for a confirm-only role or one his own No primary row stopped");
+    assert.ok(sheet.includes("eligO = eligibility(ctx, ds, role, person.id, { claim: true, assumeOffer: true, allHard: true });"), "asked as if offered, every layer (11/2 leftovers)");
     assert.ok(sheet.includes("why = offerWhyIfOffered(why, eligO ? eligO.hard.filter(c => !(role === \"primary\" && c === \"backup-only-row\")) : [], { eastDetails: !!eastDetails });"), "merged with the same filter and East words");
-    assert.ok(sheet.indexOf("row.block[role] = why.block; row.confirm[role] = why.confirm;") > sheet.indexOf("if (!why.block && why.confirm) {"), "the row reads the merged picture");
+    assert.ok(sheet.indexOf("row.block[role] = why.block; row.confirm[role] = why.confirm;") > sheet.indexOf("if (!why.block && (why.confirm || ownRow)) {"), "the row reads the merged picture");
+  });
+  check("U3b (11/2, the painter fix's leftovers): eligibility opts.allHard collects every layer's hard reasons (hard[0], ok, lockHolder unchanged); the painter asks it behind his own No primary row too; the day editor, its CLI, the trades and the board name every reason", () => {
+    const R = require(path.join(ROOT, "rules.js")), GEN = require(path.join(ROOT, "generator.js"));
+    const seed = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "silvis-seed.json"), "utf8"));
+    const core = (c) => String(c).split(":")[0];
+    const ids = seed.roster.map(s => s.id);
+    const base = { roster: seed.roster, surgeonRules: seed.surgeonRules, groupRules: seed.groupRules, holidays: seed.holidays, availabilityRows: [], periods: seed.offerPeriods, offers: [], today: "2026-10-01" };
+    // (1) the property, on the empty schedule and on a GENERATED Nov-Dec (held slots: caps, runs and the other role in play), with
+    // the opts the surfaces pass: the plain list is the head of the full one (hard[0] the same), ok / lockHolder / the glosses agree,
+    // an ok result is the very same shape, a blocked one's soft terms are the head of the full ones
+    const gen = GEN.generate(R.buildContext({ ...base, schedule: {} }), "2026-11-01", "2026-12-31", { seed: 1, bestOf: 1 });
+    assert.ok(gen && gen.schedule && Object.keys(gen.schedule).length >= 61, "a generated Nov-Dec");
+    let pairs = 0, deeper = 0, blocked = 0;
+    [{}, gen.schedule].forEach(schedule => {
+      const ctx = R.buildContext({ ...base, schedule });
+      for (let d = "2026-11-01"; d <= "2026-12-31"; d = H.suAddDays(d, 1)) ids.forEach(id => ["primary", "backup"].forEach(role => [{}, { claim: true }, { claim: true, assumeOffer: true }, { ignoreLocks: true, claim: true }].forEach(o => {
+        const plain = R.eligibility(ctx, d, role, id, o), all = R.eligibility(ctx, d, role, id, { ...o, allHard: true });
+        const tag = id + " " + d + " " + role + " " + JSON.stringify(o);
+        pairs++;
+        assert.strictEqual(all.ok, plain.ok, tag + ": ok");
+        assert.strictEqual(!!all.lockHolder, !!plain.lockHolder, tag + ": lockHolder");
+        if (plain.ok && !plain.lockHolder) { assert.deepStrictEqual(all, plain, tag + ": an ok result is the same with allHard"); return; }
+        const pl = plain.lockHolder ? (plain.conflicts || []) : plain.hard, al = all.lockHolder ? (all.conflicts || []) : all.hard;
+        assert.deepStrictEqual(al.slice(0, pl.length), pl, tag + ": the plain list is the head of the full one");
+        assert.deepStrictEqual(all.soft.slice(0, plain.soft.length), plain.soft, tag + ": the plain soft terms are the head of the full ones");
+        ["eastStanding", "eastVacation", "eastClear"].forEach(k => assert.deepStrictEqual(all[k], plain[k], tag + ": the gloss " + k));
+        if (al.length > pl.length) deeper++;
+        if (!plain.ok) blockedOk: blocked++;
+      })));
+    });
+    assert.ok(pairs >= 2900 && blocked >= 500 && deeper >= 30, "non-vacuous: " + pairs + " pairs, " + blocked + " blocked, " + deeper + " with a reason behind the first layer");
+    // (2) the layers behind, named: Khan's Tue 11/10 behind Fierce's derived primary week (U3a's case) - the pattern, then the week
+    const inp = { ...base, schedule: {}, periods: [seed.offerPeriods[0]], today: "2026-09-23", eastDerived: [{ surgeonId: "s5", weekMonday: "2026-11-09", silvisRole: "primary" }] };
+    const ctx = R.buildContext(inp);
+    assert.deepStrictEqual(R.eligibility(ctx, "2026-11-10", "primary", "s1", { claim: true }).hard.map(core), ["hard-never-weekday"], "plain: the pattern only");
+    assert.deepStrictEqual(R.eligibility(ctx, "2026-11-10", "primary", "s1", { claim: true, allHard: true }).hard, ["hard-never-weekday:Tue", "derived-lock-held:s5"], "allHard: the pattern, then the colleague's week");
+    // (3) his own single-day No primary row (Prompt 28: a backup_only availability row) on Mon 11/9 of that week - the plain ask
+    // stops at the row; the painter filters the row out and read the day FREE for primary (the leftover of the 11/2 fix); as if
+    // offered + allHard the week shows, and offerWhyIfOffered blocks the role although the plain picture had no confirm
+    const rowCtx = R.buildContext({ ...inp, availabilityRows: [{ person_id: "s1", start_date: "2026-11-09", kind: "backup_only" }] });
+    const plainRow = R.eligibility(rowCtx, "2026-11-09", "primary", "s1", { claim: true }).hard;
+    assert.deepStrictEqual(plainRow, ["backup-only-row"], "the plain ask stops at his own row");
+    const whyRow = H.offerDayWhy(plainRow.filter(c => c !== "backup-only-row"));
+    assert.ok(!whyRow.block && !whyRow.confirm, "the painter's plain picture: free (the row filtered, nothing behind it seen)");
+    const asIfRow = R.eligibility(rowCtx, "2026-11-09", "primary", "s1", { claim: true, assumeOffer: true, allHard: true }).hard;
+    assert.deepStrictEqual(asIfRow, ["backup-only-row", "derived-lock-held:s5"], "as if offered, every layer: the row (an offer never clears a dated statement), then the week");
+    assert.deepStrictEqual(R.eligibility(rowCtx, "2026-11-09", "primary", "s1", { claim: true, assumeOffer: true }).hard, ["backup-only-row"], "without allHard the as-if-offered ask stopped at the row too (the leftover)");
+    const fixedRow = H.offerWhyIfOffered(whyRow, asIfRow.filter(c => c !== "backup-only-row"));
+    assert.deepStrictEqual(fixedRow, { block: "a colleague's East/Silvis week", confirm: null, codes: { block: ["derived-lock-held:s5"], confirm: [] } }, "the role is blocked before anything is painted, no confirm");
+    assert.ok(R.eligibility(rowCtx, "2026-11-09", "backup", "s1", { claim: true, allHard: true }).ok, "his backup that day is fine (the row is backup only)");
+    // (4) a derived-lock holder blocked by his static layer stops there with allHard too (no cap or run reason for him); an import
+    // holder's conflicts carry the layers behind
+    const ownCtx = R.buildContext({ ...inp, eastDerived: [{ surgeonId: "s1", weekMonday: "2026-11-09", silvisRole: "primary" }], timeOffRows: [{ person_id: "s1", start_date: "2026-11-11" }] });
+    const ownPlain = R.eligibility(ownCtx, "2026-11-11", "primary", "s1"), ownAll = R.eligibility(ownCtx, "2026-11-11", "primary", "s1", { allHard: true });
+    assert.deepStrictEqual(ownPlain.hard, ["time-off:2026-11-11"], "his vacation day inside his own derived primary week: blocked at the static layer");
+    assert.deepStrictEqual(ownAll, ownPlain, "allHard: the same - caps and runs never apply to the derived-lock holder");
+    assert.ok(R.eligibility(ownCtx, "2026-11-09", "primary", "s1").lockHolder && R.eligibility(ownCtx, "2026-11-09", "primary", "s1", { allHard: true }).lockHolder, "Mon 11/9 (no vacation edge): he is the derived-lock holder with allHard as without");
+    // (a held Tuesday inside his 56-day notice reads the soft beyond-notice term, review 10/1 - so the static conflict here is a vacation
+    // over the locked day; the raw row also holds him as backup, the derived layer's holds-other-role)
+    const lockCtx = R.buildContext({ ...inp, schedule: { "2026-11-10": { primary: "s1", primaryLocked: true, backup: "s1", backupLocked: false, source: "manual", externalCover: null, note: null } }, timeOffRows: [{ person_id: "s1", start_date: "2026-11-10" }] });
+    const lockPlain = R.eligibility(lockCtx, "2026-11-10", "primary", "s1"), lockAll = R.eligibility(lockCtx, "2026-11-10", "primary", "s1", { allHard: true });
+    assert.ok(lockPlain.ok && lockPlain.lockHolder && lockAll.ok && lockAll.lockHolder, "an import lock holder is ok either way");
+    assert.deepStrictEqual(lockPlain.conflicts, ["time-off:2026-11-10"], "plain: the first layer's conflict only");
+    assert.deepStrictEqual(lockAll.conflicts, ["time-off:2026-11-10", "holds-other-role"], "allHard: the layer behind too");
+    // (5) the surfaces: the painter's second ask, the day editor and its CLI, the trade check and the board gate, reasonsText
+    const sheet = src.slice(src.indexOf("\nfunction OfferPainterSheet("), src.indexOf("\nfunction Collapsible("));
+    assert.ok(sheet.includes("const ownRow = !!elig && elig.hard.length !== hard.length;") && sheet.includes("if (!why.block && (why.confirm || ownRow)) {") && sheet.includes("eligO = eligibility(ctx, ds, role, person.id, { claim: true, assumeOffer: true, allHard: true });"), "the painter: a confirm, or his own No primary row filtered out -> asked as if offered for every layer");
+    const ed = src.slice(src.indexOf("\nfunction DayEditor("), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
+    assert.ok(ed.includes("const eopts = { allHard: true, ...(external ? { manual: true } : holdsOtherBlockDays(role, s.id) ? { asBlockMember: true } : {}) };"), "the day editor asks for every reason");
+    assert.ok(ed.includes('{ineligible.map(o => o.name + " - " + o.hard.map(c => reasonLabel(c, nameOf) + (o.eastStanding && c === "east-busy" ?') && ed.includes('/^(time-off:|day-before-vacation)/.test(c) ?') && ed.includes(').join(", ")).join("; ")}'), "the Not eligible line names every reason, each gloss on its own code");
+    assert.ok(ed.includes('if (!o.ok) return o.name + " - " + (o.hard[0] || "ineligible");') && ed.includes("if (opt && !opt.ok) { setPending({ id: value, role, reasons: opt.hard.slice() }); return; }"), "the option text keeps the first code; the override carries the whole list");
+    const cli = fs.readFileSync(path.join(ROOT, "scripts", "day-edit.js"), "utf8");
+    assert.ok(cli.includes("R.eligibility(ctx, d.day, role, id, { allHard: true, ...(external ? { manual: true } : asBlockMember ? { asBlockMember: true } : {}) })"), "the CLI's audit rows name every reason too");
+    const app = src.slice(src.indexOf("function CallSchedule() {"), src.indexOf("function MonthPainterSheet("));
+    assert.ok(app.includes("{ ignoreLocks: true, claim: true, allHard: true, ...(opts || {}) }") && app.includes("{ claim: true, allHard: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }"), "the trade check and the board gate ask for every reason");
+    const genSrc = fs.readFileSync(path.join(ROOT, "generator.js"), "utf8"), rulesSrc = fs.readFileSync(path.join(ROOT, "rules.js"), "utf8");
+    assert.ok(!/allHard/.test(genSrc) && (rulesSrc.match(/if \(hard\.length && !opts\.allHard\) return blockedResult\(\);/g) || []).length === 2 && (rulesSrc.match(/opts\.allHard\b/g) || []).length === 3, "the generator never asks for it; rules.js reads it at its two early returns only (the header names it once)");
+    assert.ok(rulesSrc.includes("if (lockHolder) return hard.length ? blockedResult() : glossed({ ok: true, hard: hard, soft: soft, lockHolder: true });"), "a derived-lock holder blocked by his static layer stops at the lock line");
+    // reasonsText, lifted with the page's helper and labels and run: the East codes collapse into one 'not available' for a
+    // non-scheduler, every other reason follows in order; the scheduler reads each code's words
+    const lift = (a, end) => { const i = src.indexOf(a); const j = i < 0 ? -1 : src.indexOf(end, i + a.length); if (i < 0 || j < 0) throw new Error("lift: '" + a.slice(0, 60) + "' not found"); return src.slice(i, j + end.length); };
+    const rtLine = app.slice(app.indexOf("const reasonsText = (list) =>"), app.indexOf("\n", app.indexOf("const reasonsText = (list) =>")));
+    const mk = (eastDetailsVisible) => new Function("eastDetailsVisible", "nameOf", lift("const REASON_WORDS = {", "\n};\n") + "\n" + lift("function reasonLabel(code, nameOf) {", "\n}\n") + "\n" + lift("function softTag(soft) {", "\n}\n") + "\n" + lift("const EAST_HARD_REASON_KEYS = [", "\n}\n") + "\n" + rtLine + "\nreturn reasonsText;")(eastDetailsVisible, (id) => ({ s5: "Fierce" })[id] || id);
+    assert.strictEqual(mk(false)(["east-busy", "hard-never-weekday:Tue", "derived-lock-held:s5", "holds-other-role"]), "not available; never on Tue; already holds the other role that day", "a surgeon: one 'not available' for the East codes, the rest in order");
+    assert.strictEqual(mk(true)(["east-busy", "hard-never-weekday:Tue", "derived-lock-held:s5"]), "on East (Davenport) call; never on Tue; East week slot belongs to Fierce", "the scheduler: every code's words");
+    assert.strictEqual(mk(false)(["hard-never-weekday:Tue"]), "never on Tue", "one reason: as before");
   });
   check("U3a: offerNextPeriod prefers the earliest period still OPEN for offers, falls back to the running frozen one; offerPeriodOpen reads status + offers_close_at like OF003 / OM005", () => {
     const P = [{ id: "b", start_day: "2027-02-01", end_day: "2027-04-30", offers_close_at: "2027-01-05", status: "upcoming" }, { id: "a", start_day: "2026-11-02", end_day: "2027-01-03", offers_close_at: "2026-10-02", status: "upcoming" }, { id: "z", start_day: "2026-08-01", end_day: "2026-09-20", offers_close_at: "2026-07-01", status: "published" }];
@@ -5821,8 +5917,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('case "offered": return "offered day (bonus)";') && src.includes('case "outside-offers": return "outside the offered days (penalty)";'), "softTag must word the two soft offer reasons");
     });
     check("U3c pins: with offers in the ctx a claim and a trade acceptance are offers made on the spot (rules doc 2c) - the board gate and tradeEligibility pass { claim: true } (the hard not-offered is skipped, the soft outside-offers still surfaces); the day editor and the generator do NOT claim", () => {
-      assert.ok(src.includes("try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }"), "tradeEligibility must pass claim: true");
-      assert.ok(src.includes("try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }"), "the open-shifts board gate must pass claim: true");
+      // pins moved deliberately 11/2 (the painter fix's leftovers): both asks add allHard - every reason for the words
+      assert.ok(src.includes("try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, allHard: true, ...(opts || {}) }); }"), "tradeEligibility must pass claim: true (and allHard)");
+      assert.ok(src.includes("try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, allHard: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }"), "the open-shifts board gate must pass claim: true (and allHard)");
       const ed = src.slice(src.indexOf("\nfunction DayEditor("), src.indexOf("// ===================== SETUP VIEW COMPONENTS"));
       assert.strictEqual(/claim:\s*true/.test(ed), false, "the day editor never claims - a manual pick onto a not-offered day goes through the Override panel");
       // pin moved deliberately 11/2 (Faraz: fix the painter): the painter asks a confirm-only role again as if offered - a fourth call site
@@ -14873,10 +14970,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/Edit|Remove|rmVac|setEditVac/.test(dl), "no Edit / Remove on a derived line");
       assert.ok(rl.includes('{!eastDetailsVisible && derivedVacState === "failed" && <p data-testid="vac-derived-failed"'), "a failed derived read is said under the list (never the look of 'no vacations')");
     });
-    check("P31A3 pins: the board / claim / trade reasons - eastMaskedReasons(list, eastDetailsVisible) no longer masks an East vacation's time-off / day-before-vacation (decision 7: 'on vacation' for everyone); seven call sites, none passes the gloss", () => {
+    check("P31A3 pins: the board / claim / trade reasons - eastMaskedReasons(list, eastDetailsVisible) no longer masks an East vacation's time-off / day-before-vacation (decision 7: 'on vacation' for everyone); five call sites since 11/2 (reasonsText), none passes the gloss", () => {
       assert.ok(src.includes("function eastMaskedReasons(list, eastDetailsVisible) {"), "two arguments");
       assert.ok(!/eastMaskedReasons\([^)]*\.eastVacation\)/.test(src), "no call passes the eastVacation gloss");
-      assert.strictEqual((appA.match(/eastMaskedReasons\(/g) || []).length, 7);
+      assert.strictEqual((appA.match(/eastMaskedReasons\(/g) || []).length, 5); // pin moved deliberately 11/2: reasonsText is the one call for tradeReasonText, the claim gate and the Take title (7 -> 5)
     });
     check("P31A3 pins: every East / Davenport word non-schedulers saw goes under eastDetailsVisible (decision 11) - the Mine / Following E / O / F / EV badges and their legend, the two East vacation cards (titles and all), the offer painter's East block words", () => {
       const bf = src.slice(src.indexOf("const badgesFor = (d, who) => {"), src.indexOf("const countdown = (d) =>"));
@@ -15450,7 +15547,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const fn = s.slice(at, s.indexOf("\n  };\n", at)).replace(/\n\s*\/\/ /g, " ");
       assert.ok(fn.includes("Since revision y (applied 2026-10-20 00:41:25Z, recorded in docs/SCHEMA-REVIEW.md) apply_trade() writes his call_offers row, as a claim does, when he agreed himself (for a return leg, both surgeons did) and is submitted for the day's period; where it writes none - the scheduler accepting for him, say (the record lists the cases) - a traded day off his offers / list still reads as a conflict on the held slot."), "the comment names revision y's write and the legs it skips");
       assert.ok(!/does not yet write/.test(fn) && !/call_offers row \(open\)/.test(s), "no 'does not yet write' / 'call_offers row (open)' is left");
-      assert.ok(fn.includes("try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }"), "the check itself is unchanged (claim: true)");
+      assert.ok(fn.includes("try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, allHard: true, ...(opts || {}) }); }"), "the check itself keeps claim: true (allHard added 11/2: every reason for the words)");
     });
   }
 

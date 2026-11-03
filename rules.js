@@ -22,7 +22,11 @@
 // ctx.schedule is the live schedule object: the generator mutates it in place
 // and eligibility sees the change on the next call (no tally refresh needed).
 // Hard reasons from the static layer are complete; the dynamic gates are only
-// evaluated once the static layer passes (the UI shows the first hard reason).
+// evaluated once the static layer passes - unless the caller asks for every
+// reason (opts.allHard, 11/2): then each layer runs and the hard list carries
+// every failed rule in layer order, the first reason the same. The surfaces that
+// name reasons to a person ask for it (the day editor and its audit rows, the
+// trade words, the board's Take, the painter); the generator never does.
 //
 // Lock holders: a surgeon who holds a locked slot (import/manual lock, or a
 // derived East lock that no import/manual lock overrides) always evaluates
@@ -1831,7 +1835,7 @@ function rdAssumeMap(assume) {
 // eligibility(ctx, dateStr, role, surgeonId, opts?) -> { ok, hard:[string], soft:[{reason, weight}] }
 //   plus lockHolder:true (and conflicts:[string]) when the surgeon holds the slot's lock.
 // The returned arrays and soft entries are fresh copies: callers may mutate them.
-// opts: { asBlockMember: bool, assume: [{date, role}], ignoreLocks: bool, skipPatternSoft: bool }
+// opts: { asBlockMember: bool, assume: [{date, role}], ignoreLocks: bool, skipPatternSoft: bool, claim: bool, assumeOffer: bool, allHard: bool }
 //   asBlockMember  - the caller is evaluating a full Fri+Sat+Sun block; relaxes only the
 //                    'weekend-block-only' weekday-pattern rule and (Prompt 12 L) enables
 //                    the 'weekend-primary' bonus of a primaryContribution "weekends" surgeon.
@@ -1858,6 +1862,15 @@ function rdAssumeMap(assume) {
 //                    are lifted for it exactly as a saved offer lifts them, and eligibility() goes on past the static layer
 //                    to the blocks behind it (the derived East locks, the other role). The painter asks it for a role whose
 //                    hard list held only the pattern family - else a colleague's derived week showed only after the save.
+//   allHard        - (11/2, the leftovers of that fix) collect EVERY hard reason: eligibility() otherwise returns at the first
+//                    layer that fails (the static layer; the derived locks / the other role; caps, runs and the shape rules),
+//                    so a surface naming "why not" showed the pattern and never the block behind it. With the flag every
+//                    layer runs and `hard` lists each failed rule in layer order - hard[0] is unchanged, an import holder's
+//                    conflicts likewise; ok, lockHolder and the glosses are as without it. A derived-lock holder blocked by
+//                    his static layer still stops there (caps and runs never apply to him). The generator, the regression
+//                    and the publish preflight never pass it - their flow is byte for byte the old one. Asked by the day
+//                    editor (its Not eligible line, the Override panel, the two audit rows) and scripts/day-edit.js, the
+//                    trade check (tradeEligibility), the board gate (boardElig) and the painter's as-if-offered ask.
 function eligibility(ctx, dateStr, role, surgeonId, opts) {
   opts = opts || {};
   if (role !== "primary" && role !== "backup") return { ok: false, hard: ["bad-role:" + role], soft: [] };
@@ -1927,7 +1940,7 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   function blockedResult() {
     return glossed(importHolder ? { ok: true, hard: [], soft: soft, lockHolder: true, conflicts: hard } : { ok: false, hard: hard, soft: soft });
   }
-  if (hard.length) return blockedResult();
+  if (hard.length && !opts.allHard) return blockedResult();   // allHard (11/2): go on to the layers behind
 
   var W = ctx.weights;
   var info = rdInfo(dateStr);
@@ -1956,8 +1969,8 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // Already holds the other role that day.
   if (ctx.backupDistinct && entry && entry[other] === surgeonId) hard.push("holds-other-role");
 
-  if (hard.length) return blockedResult();
-  if (lockHolder) return glossed({ ok: true, hard: hard, soft: soft, lockHolder: true }); // derived lock: caps/consecutive/patterns do not apply
+  if (hard.length && !opts.allHard) return blockedResult();   // allHard (11/2): on to caps, runs and the shape rules
+  if (lockHolder) return hard.length ? blockedResult() : glossed({ ok: true, hard: hard, soft: soft, lockHolder: true }); // derived lock: caps/consecutive/patterns do not apply (allHard: blocked by his static layer, he stops here too)
 
   // --- counting helpers (the evaluated slot counts as held; assume-slots too) ---
   function holdsRole(d, r) {

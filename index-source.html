@@ -4821,7 +4821,8 @@ function CallSchedule() {
     // (for a return leg, both surgeons did) and is submitted for the day's period; where it writes none - the scheduler
     // accepting for him, say (the record lists the cases) - a traded day off his offers / list still reads as a conflict on
     // the held slot.
-    try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, ...(opts || {}) }); }
+    // allHard (11/2): every failed rule - tradeReasonText names them all (the Blocked / Can't accept toasts, the card's boxes, the scheduler's confirms)
+    try { return eligibility(rulesCtx, day, role, candidateId, { ignoreLocks: true, claim: true, allHard: true, ...(opts || {}) }); }
     catch (e) {
       console.warn("trade eligibility check failed:", e);
       const msg = String(e && e.message || e).slice(0, 80);
@@ -4852,10 +4853,14 @@ function CallSchedule() {
     }
     return { ok: true, hard: [], soft };
   };
-  // Item E4 (Faraz 9/26): the first hard reason through eastMaskedReasons - an East one reads "not available" unless
+  // 11/2 (the painter fix's leftovers): EVERY hard reason of a blocked person, through eastMaskedReasons (Item E4: the East ones
+  // collapse into one "not available" for everyone but the scheduler) and reasonLabel, joined with "; " - the one wording for
+  // the trade texts, the board's Take title / ob-take-why and the claim-gate toast (their asks pass allHard, so the list is whole)
+  const reasonsText = (list) => eastMaskedReasons(list, eastDetailsVisible).map(c => reasonLabel(c, nameOf)).join("; ");
+  // Item E4 (Faraz 9/26): the hard reasons through eastMaskedReasons - an East one reads "not available" unless
   // eastDetailsVisible (the scheduler's text is unchanged). Every trade reason reads it here: the card's trade-to /
-  // trade-return boxes, the "Blocked: ..." and "Can't accept: ..." toasts, the scheduler's two confirms.
-  const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
+  // trade-return boxes, the "Blocked: ..." and "Can't accept: ..." toasts, the scheduler's two confirms. 11/2: every reason.
+  const tradeReasonText = (r) => (r && r.hard && r.hard.length) ? reasonsText(r.hard) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
   // The scheduler may confirm past an UNKNOWN check; members are told to retry. True = proceed.
   const rulesUnknownGate = (elig, whoId, what, verb) => {
     if (elig.error) showToast("Eligibility check failed: " + elig.error, "error");
@@ -6761,7 +6766,8 @@ function CallSchedule() {
         // The claim flag (Prompt 14 U3c): a claim is an offer made on the spot (rules doc 2c) - the hard 'not-offered' of an
         // exhaustive surgeon is skipped for the board only, and a surgeon submitted for the period is read as if his dated
         // lists did not exist (10/18); the soft 'outside-offers' rides along for the row's words
-        try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }
+        // allHard (11/2): every failed rule - the Take title / ob-take-why and the claim-gate toast name them all (reasonsText)
+        try { r = eligibility(rulesCtx, s.day, s.role, sg.id, { claim: true, allHard: true, ...(boardBlockMember(s.day, s.role, sg.id) ? { asBlockMember: true } : {}) }); }
         catch (e) { console.warn("board eligibility threw for", sg.id, s.role, s.day, e); r = { ok: false, hard: ["rules-unavailable:" + String(e && e.message || e).slice(0, 60)], soft: [] }; }
         // Item E4 (9/26) carried the derived East-vacation gloss here for eastMaskedReasons; Prompt 31 Part A (A3, decision 7)
         // retired it - an East vacation day reads "on vacation" on the board like a Silvis one, so nothing reads the gloss here
@@ -6843,7 +6849,7 @@ function CallSchedule() {
     // moved since the sheet opened); a refusal here never reached the function, so no audit row.
     const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
     // Item E4 (Faraz 9/26): the claim-gate toast's reason through eastMaskedReasons ("not available" for an East one, the scheduler excepted)
-    if (!gate || !gate.ok) { showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon")), "error"); closeClaimSheet(); return; }
+    if (!gate || !gate.ok) { showToast("Not eligible any more: " + (gate ? reasonsText(gate.hard) : reasonLabel("unknown-surgeon")), "error"); closeClaimSheet(); return; }
     setClaimBusy(true);
     const label = `${DAY_HDR[parse(s.day).getDay()]} ${fmtMD(s.day)} ${s.role}`;
     const a = await claimOpenSlotRpc(s.day, s.role);
@@ -8406,9 +8412,9 @@ function CallSchedule() {
           const nCols = 4 + (canAct ? 1 : 0) + (isScheduler ? 2 : 0);
           const horizonBtn = (v, text) => <button key={String(v)} type="button" data-testid={"ob-horizon-" + v} onClick={() => setObHorizon(v)} style={{...css.mini(obHorizon === v),padding:"6px 10px"}}>{text}</button>;
           // Item E4 (Faraz 9/26): the chip hover and the Take title read their reasons through eastMaskedReasons - an East soft
-          // note is dropped and an East hard reason reads "not available" for everyone but the scheduler (eastDetailsVisible)
+          // note is dropped and an East hard reason reads "not available" for everyone but the scheduler (eastDetailsVisible); 11/2: the Take title names every hard reason (reasonsText)
           const chip = (o) => { const c = colorOf(o.id); const soft = eastMaskedReasons(o.soft, eastDetailsVisible); return <span key={o.id} data-eligible-id={o.id} title={soft.length ? "allowed - " + soft.map(x => reasonLabel(x.reason, nameOf)).join("; ") : "no rule warnings"} style={{background:c.tg,color:c.tx,border:"1px solid " + c.bd,borderRadius:5,padding:"1px 7px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",marginRight:4,marginBottom:2,display:"inline-block"}}>{nameOf(o.id)}</span>; };
-          const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon");
+          const takeTitle = (me) => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonsText(me.hard) : reasonLabel("unknown-surgeon");
           const sheetDate = (d) => { try { return parse(d).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }); } catch (e) { return d; } };
           return (
             <div style={css.card} data-testid="openshifts-card">
@@ -9787,12 +9793,14 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           // Prompt 31 Part A (A3, decision 11): the East block words (East busy / forecast busy / East-Silvis week) read "not available"
           // to everyone but the scheduler - a surgeon painting his own days, the office relaying them (eastDetails = eastDetailsVisible)
           let why = offerDayWhy(hard, { eastDetails: !!eastDetails });
-          // 11/2 (Faraz: fix it): a role holding only the weekday-pattern family (confirm codes - the saved offer lifts them) is
-          // asked again as if offered: eligibility() returns at the pattern block, so a block behind it (a colleague's derived
-          // East week, his own derived week) greyed the day only after the save - now it shows before anything is painted
-          if (!why.block && why.confirm) {
+          // 11/2 (Faraz: fix it; widened the same evening): eligibility() returns at the first layer that fails, so a role whose
+          // hard list held only what the painter lifts - the weekday-pattern family (confirm codes - the saved offer lifts them),
+          // his own No primary row (filtered above) - is asked again as if offered and for every layer (allHard): a block behind
+          // (a colleague's derived East week, his own derived week) greyed the day only after the save - now it shows first
+          const ownRow = !!elig && elig.hard.length !== hard.length; // the plain ask stopped at his own No primary row
+          if (!why.block && (why.confirm || ownRow)) {
             let eligO = null;
-            try { eligO = eligibility(ctx, ds, role, person.id, { claim: true, assumeOffer: true }); } catch (e) { console.warn("Paint offers: eligibility (as if offered) threw for " + ds + " " + role, e); }
+            try { eligO = eligibility(ctx, ds, role, person.id, { claim: true, assumeOffer: true, allHard: true }); } catch (e) { console.warn("Paint offers: eligibility (as if offered) threw for " + ds + " " + role, e); }
             why = offerWhyIfOffered(why, eligO ? eligO.hard.filter(c => !(role === "primary" && c === "backup-only-row")) : [], { eastDetails: !!eastDetails });
           }
           row.block[role] = why.block; row.confirm[role] = why.confirm;
@@ -10936,7 +10944,9 @@ function DayEditor(props) {
       let r;
       // Prompt 12 M: an outside surgeon is asked on the manual path (slot facts only, never external-surgeon);
       // a pool surgeon completing a Fri-Sun block is asked as a block member (small items 9/22)
-      const eopts = external ? { manual: true } : (holdsOtherBlockDays(role, s.id) ? { asBlockMember: true } : undefined);
+      // allHard (11/2): every failed rule, not the first layer's - the Not eligible line, the Override panel and the two audit rows
+      // (schedule.day_edit detail.overrides, schedule.override) name them all; the option text keeps the first code
+      const eopts = { allHard: true, ...(external ? { manual: true } : holdsOtherBlockDays(role, s.id) ? { asBlockMember: true } : {}) };
       try { r = ctx ? eligibility(ctx, day, role, s.id, eopts) : { ok: true, hard: [], soft: [] }; }
       catch (e) {
         // fail CLOSED (small items 9/22): a thrown check makes the option ineligible with the error as its
@@ -11140,9 +11150,10 @@ function DayEditor(props) {
         {canEdit && cur && cur.ok && cur.soft.length > 0 && (
           <div style={{fontSize:11,color:"#8a5a10",marginTop:5}}>Soft penalties for {cur.name}: {cur.soft.map(softTag).join(", ")}</div>
         )}
+        {/* allHard (11/2): every failed rule per surgeon, each gloss (standing East day, East vacation) on its own code */}
         {canEdit && ineligible.length > 0 && (
           <div data-testid={"editor-" + role + "-reasons"} style={{fontSize:11,color:sub,marginTop:6,lineHeight:1.5}}>
-            <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(o.hard[0]) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join("; ")}
+            <span style={{fontWeight:700}}>Not eligible:</span> {ineligible.map(o => o.name + " - " + o.hard.map(c => reasonLabel(c, nameOf) + (o.eastStanding && c === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(c) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join(", ")).join("; ")}
           </div>
         )}
         {offerInfo && (() => {

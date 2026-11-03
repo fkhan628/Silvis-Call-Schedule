@@ -364,7 +364,8 @@ function evaluateEdits(plan, liveSchedule, mkCtx) {
       const external = !!(P && P.external);
       const asBlockMember = !external && holdsOtherBlockDays(ctx, drafts[d.day], d.day, role, id);
       let r;
-      try { r = R.eligibility(ctx, d.day, role, id, external ? { manual: true } : (asBlockMember ? { asBlockMember: true } : undefined)); }
+      // allHard (11/2): every failed rule, like DayEditor.evalRole - the refusal and the two audit rows name them all
+      try { r = R.eligibility(ctx, d.day, role, id, { allHard: true, ...(external ? { manual: true } : asBlockMember ? { asBlockMember: true } : {}) }); }
       catch (e) { const msg = String(e && e.message || e).slice(0, 120); r = { ok: false, hard: ["rules-error:" + msg], soft: [], error: msg }; }
       out.push({ day: d.day, role, id, ok: !!r.ok, hard: (r.hard || []).slice(), soft: (r.soft || []).slice(), lockHolder: !!r.lockHolder, conflicts: (r.conflicts || []).slice(), error: r.error || null, asBlockMember, external });
     });

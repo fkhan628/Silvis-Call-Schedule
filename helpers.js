@@ -4326,16 +4326,17 @@ function offerDayWhy(hard, opts) {
   });
   return out;
 }
-// offerWhyIfOffered(why, hardIfOffered, opts) -> the painter's picture of one role once the block behind the pattern family shows
-// (11/2, Faraz "fix it"). eligibility() returns at its static layer, so a role whose hard list carries only confirm codes (the
-// weekday-pattern family a saved offer lifts) never named what an offer would still meet - a colleague's derived East week
-// (derived-lock-held), his own derived week for the other role (derived-lock): the painter showed the day paintable behind one
-// confirmation and greyed it only after the save. For such a role the painter asks eligibility again with { claim: true,
-// assumeOffer: true } and passes that hard list here: a BLOCK code there becomes the role's block (its words and codes; the
-// confirm words stay); anything else - no block behind, a block already, no confirm - returns `why` unchanged.
+// offerWhyIfOffered(why, hardIfOffered, opts) -> the painter's picture of one role once the block behind what it lifts shows
+// (11/2, Faraz "fix it"; widened the same evening for his own No primary row). eligibility() returns at the first layer that
+// fails, so a role whose hard list carried only what the painter lifts - the weekday-pattern family a saved offer lifts (confirm
+// codes), his own single-day No primary row (backup-only-row, filtered before offerDayWhy - Prompt 28) - never named what an
+// offer would still meet: a colleague's derived East week (derived-lock-held), his own derived week for the other role
+// (derived-lock). For such a role the painter asks eligibility again with { claim: true, assumeOffer: true, allHard: true } (as if
+// offered, every layer) and passes that hard list here: a BLOCK code there becomes the role's block (its words and codes; the
+// confirm words stay - null when the plain picture had none); no block behind, or a block already - `why` unchanged.
 // why = offerDayWhy(hard, opts) of the plain ask; opts as offerDayWhy (eastDetails).
 function offerWhyIfOffered(why, hardIfOffered, opts) {
-  if (!why || why.block || !why.confirm) return why;
+  if (!why || why.block) return why;
   const after = offerDayWhy(hardIfOffered, opts);
   if (!after.block) return why;
   return { block: after.block, confirm: why.confirm, codes: { block: after.codes.block.slice(), confirm: why.codes.confirm.slice() } };

@@ -4862,7 +4862,8 @@ try {
             if (R.me === "s1") {   // Khan as a surgeon: his own Take title, claim sheet and claim gate
               if (busyRow) {
                 const chk = await e4Rules(rp, "check", { day: E4_BUSY, role: "primary", cand: "s1", opts: { claim: true } });
-                if (busyRow.take !== "disabled" || busyRow.title !== E4_NA) fail(`${T}: Khan's Take on ${E4_BUSY} must be disabled with the title '${E4_NA}' - ${busyRow.take}, '${busyRow.title}'`);
+                // 11/2 (the painter fix's leftovers): the title names EVERY hard reason (allHard) - the East ones as one 'not available', first here
+                if (busyRow.take !== "disabled" || !String(busyRow.title || "").startsWith(E4_NA) || E4_RE.test(String(busyRow.title || ""))) fail(`${T}: Khan's Take on ${E4_BUSY} must be disabled with a title starting '${E4_NA}' and no East word - ${busyRow.take}, '${busyRow.title}'`);
                 else if (chk.error || !chk.eastHard) fail(`${T}: this page's rules give Khan no East hard reason on ${E4_BUSY} (${JSON.stringify(chk)}) - the Take-title check proves nothing`);
                 else ok(`${T}: Khan's Take on ${E4_BUSY} is disabled - title '${busyRow.title}' (the rules here: ${chk.hard0}; the scheduler's title: '${sched.busyTitle || ""}')`);
               }
