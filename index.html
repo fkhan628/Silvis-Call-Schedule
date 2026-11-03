@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-3H58cwxKfpxXw7rXbeu5joEs/n0BGkemrRXasKYlGzE=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-BYqxCeFMQhgHkeKDKK6ywmxtP9VL39hjmV4Yet2PkH4=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-67Ynl1thnQR2QYc02VB6IBAg9pi8NupinVTHp5pIjc0=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-uljZk5I9/SXDNV1x+u+2y8LAEcOtPgbqVf6nrkwkl6I=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -257,7 +257,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.11.02b";
+    var APP_VERSION = "2026.11.02c";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -5611,7 +5611,8 @@ function CallSchedule() {
     try {
       return eligibility(rulesCtx, day, role, candidateId, _objectSpread({
         ignoreLocks: true,
-        claim: true
+        claim: true,
+        allHard: true
       }, opts || {}));
     } catch (e) {
       console.warn("trade eligibility check failed:", e);
@@ -5657,7 +5658,8 @@ function CallSchedule() {
       soft
     };
   };
-  const tradeReasonText = r => r && r.hard && r.hard.length ? reasonLabel(eastMaskedReasons(r.hard, eastDetailsVisible)[0], nameOf) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
+  const reasonsText = list => eastMaskedReasons(list, eastDetailsVisible).map(c => reasonLabel(c, nameOf)).join("; ");
+  const tradeReasonText = r => r && r.hard && r.hard.length ? reasonsText(r.hard) + (r.day ? " (" + fmtMD(r.day) + ")" : "") : "";
   const rulesUnknownGate = (elig, whoId, what, verb) => {
     if (elig.error) showToast("Eligibility check failed: " + elig.error, "error");
     if (!isScheduler) {
@@ -8348,7 +8350,8 @@ function CallSchedule() {
         let r;
         try {
           r = eligibility(rulesCtx, s.day, s.role, sg.id, _objectSpread({
-            claim: true
+            claim: true,
+            allHard: true
           }, boardBlockMember(s.day, s.role, sg.id) ? {
             asBlockMember: true
           } : {}));
@@ -8492,7 +8495,7 @@ function CallSchedule() {
     if (!s || claimBusy || !mySurgeon) return;
     const gate = (boardElig[openSlotKey(s.day, s.role)] || []).find(o => o.id === mySurgeon);
     if (!gate || !gate.ok) {
-      showToast("Not eligible any more: " + (gate ? reasonLabel(eastMaskedReasons(gate.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon")), "error");
+      showToast("Not eligible any more: " + (gate ? reasonsText(gate.hard) : reasonLabel("unknown-surgeon")), "error");
       closeClaimSheet();
       return;
     }
@@ -13076,7 +13079,7 @@ function CallSchedule() {
         }
       }, nameOf(o.id));
     };
-    const takeTitle = me => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonLabel(eastMaskedReasons(me.hard, eastDetailsVisible)[0], nameOf) : reasonLabel("unknown-surgeon");
+    const takeTitle = me => !rulesCtx ? reasonLabel("rules-unavailable") : me ? reasonsText(me.hard) : reasonLabel("unknown-surgeon");
     const sheetDate = d => {
       try {
         return parse(d).toLocaleDateString(undefined, {
@@ -16919,12 +16922,14 @@ function OfferPainterSheet({
           let why = offerDayWhy(hard, {
             eastDetails: !!eastDetails
           });
-          if (!why.block && why.confirm) {
+          const ownRow = !!elig && elig.hard.length !== hard.length;
+          if (!why.block && (why.confirm || ownRow)) {
             let eligO = null;
             try {
               eligO = eligibility(ctx, ds, role, person.id, {
                 claim: true,
-                assumeOffer: true
+                assumeOffer: true,
+                allHard: true
               });
             } catch (e) {
               console.warn("Paint offers: eligibility (as if offered) threw for " + ds + " " + role, e);
@@ -19510,11 +19515,13 @@ function DayEditor(props) {
     const list = roster.map(s => {
       const external = s.type === "external";
       let r;
-      const eopts = external ? {
+      const eopts = _objectSpread({
+        allHard: true
+      }, external ? {
         manual: true
       } : holdsOtherBlockDays(role, s.id) ? {
         asBlockMember: true
-      } : undefined;
+      } : {});
       try {
         r = ctx ? eligibility(ctx, day, role, s.id, eopts) : {
           ok: true,
@@ -19966,7 +19973,7 @@ function DayEditor(props) {
       style: {
         fontWeight: 700
       }
-    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + reasonLabel(o.hard[0], nameOf) + (o.eastStanding && o.hard[0] === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(o.hard[0]) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join("; ")), offerInfo && (() => {
+    }, "Not eligible:"), " ", ineligible.map(o => o.name + " - " + o.hard.map(c => reasonLabel(c, nameOf) + (o.eastStanding && c === "east-busy" ? " (standing rule: " + o.eastStanding + ", every year)" : "") + (o.eastVacation && /^(time-off:|day-before-vacation)/.test(c) ? " (East vacation, " + o.eastVacation + (o.eastVacation === "unreviewed" ? " - decide it in Setup > East feed or Time off" : "") + ")" : "")).join(", ")).join("; ")), offerInfo && (() => {
       const rows = offerInfo.items.map(x => _objectSpread(_objectSpread({}, x), {}, {
         w: offerCandidateWords(x.st, role)
       })).filter(x => x.w);
