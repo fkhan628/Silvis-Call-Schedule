@@ -531,6 +531,23 @@ let sessBlobWriteTs = null;     // Prompt 16 A3: the same stamp for the session 
 const EAST_HOST = "xqongyahdnkozqunpwmu.supabase.co";
 const EAST_WEEK = { week_monday: "2026-10-05", data: { dayCall: "s6", nights: { mon: "s1", tue: "s2", wed: "s3", thu: "s4", wknd: "s5" }, off: [], isBackup: false, dayCallOverrides: {} } };
 const EAST_BLOB = { surgeons: [{ id: "s6", name: "FAK" }, { id: "s1", name: "AAA" }] };
+// Prompt 34 (Faraz 11/11): the East week lists. The fake Davenport blob also carries the two lists as that app writes them
+// (eastBlobLists; null = the blob has neither key), and the east_feed rows every page reads carry the HARNESS's copy of the
+// cached lists on the newest published week (eastListsServed: { eastPrimary, eastBackup, readAt? } - readAt defaults to that
+// row's own fetched_at, so the card reads "read"; null = no lists in the cache). A copy the LIVE rows carry is always
+// stripped (eastFeedRows): the weeks a real refresh caches must never move this run's picks. Default (11/11, the review):
+// "auto" - HEALTHY BY CONSTRUCTION: the lists of the flagged published weeks the served cache rows carry (isBackup ->
+// backupMondays / eastPrimary, isFierceBackup -> fierceBackup / eastBackup), as a consistent Davenport and an earlier
+// refresh would hold them - a trusted read that derives nothing new (every listed week is published). Two EMPTY lists
+// were the default; a read of an empty list is no longer taken while a published week carries its flag (east-feed.js
+// eastListsGuard 'empty-while-published'). The Setup > East feed step serves its own and puts the default back.
+let eastBlobLists = "auto";
+let eastListsServed = "auto";
+// what the east_feed rows served last held (eastFeedRows fills it): the flagged published Mondays, how many of those rows
+// a refresh re-read within 84 h (the guard's vouched rows), and the newest published week
+const eastServed = { isBackup: [], isFierceBackup: [], fresh: 0, freshBackup: 0, freshFierce: 0, newest: null };
+const eastBlobListsNow = () => (eastBlobLists === "auto" ? { backupMondays: eastServed.isBackup.slice(), fierceBackup: eastServed.isFierceBackup.slice() } : eastBlobLists);
+const eastListsServedNow = () => (eastListsServed === "auto" ? { eastPrimary: eastServed.isBackup.slice(), eastBackup: eastServed.isFierceBackup.slice() } : eastListsServed);
 // Prompt 15 part 3: three FAK ranges (unreviewed / away / home) overlaid on the newest cached east_feed row, answered by the mocked
 // Davenport time_off (s6 = FAK) and reviewed through the in-harness store. 11/2 (date bombs, finding #11): EASTVAC_RANGES,
 // eastVacReviewStore and eastVacFeed are DERIVED further down (after the served offer period, before any page loads); every use
@@ -1187,7 +1204,7 @@ const routeEast = async (route) => {
     if (eastExtraAnswer && lte > eastExtraAnswer.after) return json(eastExtraAnswer.weeks);
     return json([EAST_WEEK]);
   }
-  if (url.pathname.startsWith("/rest/v1/call_schedule_data")) return json([{ id: "main", data: EAST_BLOB }]);
+  if (url.pathname.startsWith("/rest/v1/call_schedule_data")) return json([{ id: "main", data: Object.assign({}, EAST_BLOB, eastBlobListsNow() || {}) }]);   // Prompt 34: + the two week lists (none when eastBlobLists is null; "auto" = the served cache's flagged weeks)
   // Prompt 15: the Davenport time_off read (kind vacation, FAK = s6 there) answers the same three ranges the
   // harness overlays on the cache, so a Refresh keeps every review (nothing changed, nothing removed).
   if (url.pathname.startsWith("/rest/v1/time_off")) return json(eastVacFeed.map((r, i) => ({ id: "dav-timeoff-" + (i + 1), person_id: "s6", kind: "vacation", start_date: r.start, end_date: r.end })));
@@ -1373,17 +1390,34 @@ const scheduleDayRows = async (route, req, url) => {
 };
 // The east_feed rows a GET is answered with: the live cache, every row's data.vacations stripped, the newest published
 // week hosting `ranges` as FAK's (the route below passes eastVacFeed; Item E4's pages, 9/26, add their one-day 'home'
-// ranges to it).
+// ranges to it). Prompt 34 (11/11): every row's data.eastLists is stripped too (the live lists never reach a page) and
+// the same host week carries the harness's copy (eastListsServed; none when it is null) - its readAt the row's own
+// fetched_at unless the step gives one.
 const eastFeedRows = async (route, req, ranges) => {
   const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
   let rows = await res.json().catch(() => []);
   if (!Array.isArray(rows)) rows = [];
   const published = rows.filter(r => r && r.data && r.data.isForecast !== true).map(r => r.week_monday).sort();
   const host = published[published.length - 1] || null;
+  const flagged = (k) => rows.filter(r => r && r.data && r.data.isForecast !== true && r.data[k] === true);
+  eastServed.isBackup = flagged("isBackup").map(r => r.week_monday).sort();
+  eastServed.isFierceBackup = flagged("isFierceBackup").map(r => r.week_monday).sort();
+  // (the guard's vouched rows: re-read within 84 h; the week the fake Davenport returns is judged by its fetched copy, which carries no flag)
+  const freshOf = (k) => flagged(k).filter(r => r.week_monday !== EAST_WEEK.week_monday && Date.now() - Date.parse(r.fetched_at) <= 84 * 3600000).length;
+  eastServed.freshBackup = freshOf("isBackup"); eastServed.freshFierce = freshOf("isFierceBackup");
+  eastServed.fresh = eastServed.freshBackup + eastServed.freshFierce;
+  eastServed.newest = host;
+  const served = eastListsServedNow();
   return rows.map(r => {
     if (!r || !r.data || typeof r.data !== "object") return r;
-    const data = { ...r.data }; delete data.vacations;
-    if (r.week_monday === host) data.vacations = ranges.map(x => ({ code: "FAK", start: x.start, end: x.end }));
+    const data = { ...r.data }; delete data.vacations; delete data.eastLists;
+    if (r.week_monday === host) {
+      data.vacations = ranges.map(x => ({ code: "FAK", start: x.start, end: x.end }));
+      if (served) {
+        const fa = Date.parse(r.fetched_at);
+        data.eastLists = { eastPrimary: served.eastPrimary.slice(), eastBackup: served.eastBackup.slice(), readAt: served.readAt || (isNaN(fa) ? "2026-01-05T10:30:00.000Z" : new Date(fa).toISOString()), dropped: served.dropped || 0 };
+      }
+    }
     return { ...r, data };
   });
 };
@@ -3485,7 +3519,10 @@ try {
       for (let i = 0; i < nMonths; i++) {
         const y = 2026 + Math.floor((10 + i) / 12), m0 = (10 + i) % 12, last = new Date(y, m0 + 1, 0).getDate();
         const days = []; for (let d = 1; d <= last; d++) days.push(y + "-" + String(m0 + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0"));
-        const derived = days.filter(d => ctx.derivedByDay && ctx.derivedByDay[d] && Object.keys(ctx.derivedByDay[d]).length > 0).map(d => ({ day: d, roles: Object.keys(ctx.derivedByDay[d]).sort().join("+") }));
+        // (Prompt 34: a day a holiday unit added that is no longer the derived surgeon's - rules.js derivedUnitLost, the
+        // page's global - is no derived day in the editor either)
+        const derivedRoles = (d) => Object.keys((ctx.derivedByDay && ctx.derivedByDay[d]) || {}).filter(r => !(typeof derivedUnitLost === "function" && derivedUnitLost(ctx, ctx.schedule, d, r, ctx.derivedByDay[d][r]))).sort();
+        const derived = days.filter(d => derivedRoles(d).length > 0).map(d => ({ day: d, roles: derivedRoles(d).join("+") }));
         const forecast = [];
         Object.keys(ctx.per || {}).forEach(id => {
           const P = ctx.per[id], fc = P && P.eastForecast;
@@ -3857,7 +3894,7 @@ try {
       }
       if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
       let derivedDay = null;
-      for (let t = Date.UTC(2026, 10, 1); t < Date.UTC(2027, 10, 1) && !derivedDay; t += 86400000) { const d = new Date(t).toISOString().slice(0, 10); if (ctx.derivedByDay && ctx.derivedByDay[d] && Object.keys(ctx.derivedByDay[d]).length) derivedDay = d; }
+      for (let t = Date.UTC(2026, 10, 1); t < Date.UTC(2027, 10, 1) && !derivedDay; t += 86400000) { const d = new Date(t).toISOString().slice(0, 10); if (ctx.derivedByDay && ctx.derivedByDay[d] && Object.keys(ctx.derivedByDay[d]).some(r => !(typeof derivedUnitLost === "function" && derivedUnitLost(ctx, ctx.schedule, d, r, ctx.derivedByDay[d][r])))) derivedDay = d; }
       const eastVac = {};
       Object.keys(ctx.per || {}).forEach(id => { const P = ctx.per[id]; days.forEach(d => { if (P && P.eastVacationDays && P.eastVacationDays[d]) eastVac[d] = id + " " + P.eastVacationDays[d]; }); });
       const countsEast = Object.keys(ctx.per || {}).filter(id => ctx.per[id] && ctx.per[id].countsEastDays);
@@ -4823,7 +4860,11 @@ try {
               else if (!dis.length) ok(`${T}: ob-take-why not exercised - no disabled Take on this board (${board.rows.length} row(s)); no enabled Take carries the text`);
               else ok(`${T}: every disabled Take (${dis.length}) shows its reason as text beside it, the title's words (e.g. ${dis[0].slot}: '${dis[0].why}'); enabled ones show none`);
               if (R.me === "s1" && busyRow && busyRow.take === "disabled") {
-                if (busyRow.why !== E4_NA) fail(`${T}: Khan's visible Take reason on ${E4_BUSY} must read '${E4_NA}' (no East word) - '${busyRow.why}'`);
+                // 11/11 (a date bomb met while building Prompt 34; the 11/2 title check below already reads it this way): the text
+                // repeats the title, which names EVERY hard reason (allHard) - the East ones as one 'not available', first. On a run
+                // where the pick has no free day for E4_BUSY and takes a pattern day (11/11: Tue 11/17) it reads 'not available;
+                // never on Tue' - still no East word, which is what this check is for
+                if (!String(busyRow.why || "").startsWith(E4_NA) || E4_RE.test(String(busyRow.why || ""))) fail(`${T}: Khan's visible Take reason on ${E4_BUSY} must start '${E4_NA}' and carry no East word - '${busyRow.why}'`);
                 else ok(`${T}: Khan's visible Take reason on ${E4_BUSY} reads '${busyRow.why}'`);
               }
             }
@@ -10190,8 +10231,13 @@ try {
       await openCard("setup_east");
       const st = await page.$eval("[data-testid=east-status]", el => el.innerText.replace(/\s+/g, " "));
       if (!/East feed: fetched .+, \d+ week\(s\), coverage \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}, next derived primary week/.test(st)) fail("East status line wrong: " + st); else ok("East status: " + st.slice(0, 140));
-      const derived = await page.$eval("[data-testid=east-derived]", el => el.innerText.trim().split("\n").length).catch(() => 0);
-      if (!derived) fail("East: no derived weeks listed (feed/stated weeks expected)"); else ok(`East: ${derived} derived week(s) listed with source feed/stated`);
+      // 11/11 (review C): count the week ROWS, upcoming and earlier - the text-line count also counted "No upcoming derived
+      // week." and the fold's summary, so it could not fail once the list rendered
+      const derived = await page.$$eval("[data-testid=east-derived] [data-week], [data-testid=east-derived-past] [data-week]", els => els.length).catch(() => 0);
+      const derivedBox = !!(await page.$("[data-testid=east-derived]"));
+      if (!derivedBox) fail("East: the derived-weeks list is missing");
+      else if (!derived && !fixture) fail("East: no derived week listed, upcoming or earlier (LIVE mode: Fierce's published East weeks are expected)");
+      else ok(`East: ${derived} derived week row(s) listed (upcoming + earlier), each with its source`);
       // fix round 2 (safe-1 / wire-2): the east_feed upsert dying at the network level
       // (route.abort, not an HTTP error) must warn + toast, log no audit row and
       // leave the status line alone - then the same Refresh succeeds and the
@@ -10263,6 +10309,114 @@ try {
         if (conflicts === null) fail("East card (C.4): no [data-testid=east-conflicts] conflict report");
         else if (!(conflicts === "none" || /\d{4}-\d{2}-\d{2} (primary|backup) /.test(conflicts))) fail("East card (C.4): the conflict report is neither 'none' nor day/role rows: " + conflicts.slice(0, 160));
         else ok("East card (C.4): conflicts with the published schedule: " + (conflicts === "none" ? "none" : conflicts.slice(0, 120)));
+        // Prompt 34 (Faraz 11/11): the East week lists. The refresh above read the fake Davenport blob's two lists (the
+        // default: the flagged published weeks of the served cache) and wrote them with the week - data.eastLists, from the
+        // refresh window's first Monday on (the audit row's from), the run's time - and the audit row names the lists leg.
+        {
+          const l2 = rows2[0] && rows2[0].data ? rows2[0].data.eastLists : null, dl2 = d2.lists || {};
+          const wantP = eastServed.isBackup.filter(m => m >= d2.from), wantB = eastServed.isFierceBackup.filter(m => m >= d2.from);
+          if (!l2 || JSON.stringify([l2.eastPrimary, l2.eastBackup, l2.dropped]) !== JSON.stringify([wantP, wantB, 0]) || l2.readAt !== rows2[0].fetched_at) fail("East refresh (P34): the week written should carry data.eastLists { " + JSON.stringify(wantP) + ", " + JSON.stringify(wantB) + ", readAt = its fetched_at, dropped 0 } (the served cache's flagged weeks from " + d2.from + " on): " + JSON.stringify(l2));
+          else if (dl2.trusted !== true || dl2.eastPrimary !== wantP.length || dl2.eastBackup !== wantB.length || dl2.written !== true || (dl2.guard || []).length) fail("East refresh (P34): audit detail.lists should read trusted with the two lists written: " + JSON.stringify(dl2));
+          else ok(`East refresh (P34): the fake Davenport blob's two week lists ride in the week written (data.eastLists: ${wantP.length} + ${wantB.length} Monday(s) from ${d2.from} on, readAt = fetched_at); audit detail.lists trusted, written`);
+        }
+        // Prompt 34: Setup > East feed > Derived weeks on lists the harness serves - three Mondays about ten months ahead
+        // (past anything Davenport has published): one East primary, one East backup, one on BOTH lists. Four refreshes:
+        // (a) a healthy read (with one entry that is no Monday) is written and shown, source by source; (b) the blob comes back
+        // WITHOUT the two keys while the cache holds the lists - they are KEPT: the week written carries the cached copy with
+        // its own readAt, the toast and the audit row say so, and the card still lists every week (never "no Fierce weeks");
+        // (c) nothing cached and nothing read - "none in the cache" in the card and in Setup's issues; (e) nothing cached and
+        // two EMPTY lists read while a published week carries a flag - not taken (the 11/11 review: a wiped list over a cold
+        // cache read as "0 weeks"); (d) the run's default again, so nothing later sees a listed week.
+        {
+          const monOf = (iso) => isoPlus(iso, -((new Date(iso + "T00:00:00Z").getUTCDay() + 6) % 7));
+          // 11/11 (review C): past anything Davenport has published - about ten months ahead AND at least four weeks past the
+          // newest published week the cache serves (today + 301 days alone assumed Davenport never publishes that far)
+          const lmBase = isoPlus(todayCentral, 301), lmNewest = eastServed.newest ? isoPlus(eastServed.newest, 28) : lmBase;
+          const LM1 = monOf(lmNewest > lmBase ? lmNewest : lmBase), LM2 = isoPlus(LM1, 14), LM3 = isoPlus(LM1, 28);
+          const OLD_READ = "2026-01-05T10:30:00.000Z";
+          const cardState = () => page.evaluate(() => {
+            const q = (s) => document.querySelector(s), t = (e) => e.textContent.replace(/\s+/g, " ").trim();
+            const st = q("[data-testid=east-lists-status]"), der = q("[data-testid=east-derived]"), wr = q("[data-testid=east-derived-warnings]"), lg = q("[data-testid=east-derived-legend]"), si = q("[data-testid=setup-issues]");
+            return {
+              state: st ? st.getAttribute("data-state") : null, status: st ? t(st) : null,
+              rows: der ? Array.from(der.querySelectorAll("[data-week]")).map(e => ({ week: e.getAttribute("data-week"), role: e.getAttribute("data-role"), source: e.getAttribute("data-source"), text: t(e) })) : [],
+              warnings: wr ? Array.from(wr.querySelectorAll("[data-week]")).map(e => ({ week: e.getAttribute("data-week"), why: e.getAttribute("data-why"), text: t(e) })) : [],
+              legend: lg ? t(lg) : null, issues: si ? t(si) : null,
+            };
+          });
+          const refreshOnce = async () => {
+            const b = writes.length;
+            await page.click("[data-testid=east-refresh]");
+            await waitFor(() => !!auditSince(b, "east.refresh"), 20000);
+            await page.waitForTimeout(600);
+            const post = writesSince(b, "/rest/v1/east_feed").find(w => w.method === "POST");
+            let rows = []; try { rows = JSON.parse(post ? post.body : "[]"); } catch (e) {}
+            const au = auditSince(b, "east.refresh");
+            // toast: the toast's own text (review C: the body also holds the card's last-refresh line, which repeats errors[0])
+            return { lists: rows[0] && rows[0].data ? rows[0].data.eastLists : undefined, fetchedAt: rows[0] ? rows[0].fetched_at : null, detail: (au && au.detail) || {}, text: await bodyText(), toast: await page.$eval("[data-testid=toast]", el => el.textContent.replace(/\s+/g, " ")).catch(() => ""), card: await cardState() };
+          };
+          const listRows = (c) => c.rows.filter(r => r.source === "list").map(r => r.week + ":" + r.role);
+          const WANT = [LM1 + ":backup", LM2 + ":primary", LM3 + ":backup"];
+          const J = JSON.stringify;
+          try {
+            // (a) a healthy read
+            // (the cache copy the pages read after the refresh is the harness's - it says what the refresh wrote: dropped 1)
+            eastListsServed = { eastPrimary: [LM1, LM3], eastBackup: [LM2, LM3], dropped: 1 };
+            eastBlobLists = { backupMondays: [LM3, LM1, "not-a-monday"], fierceBackup: [LM2, LM3] };
+            const a = await refreshOnce(), la = a.lists || {}, da = a.detail.lists || {};
+            if (J([la.eastPrimary, la.eastBackup, la.dropped]) !== J([[LM1, LM3], [LM2, LM3], 1]) || la.readAt !== a.fetchedAt) fail("P34 Setup lists (a): the week written should carry the two lists sorted, the run's time and dropped 1: " + J(a.lists));
+            else if (da.trusted !== true || (da.guard || []).length || J(da.dropped) !== J([{ list: "backupMondays", value: "not-a-monday" }])) fail("P34 Setup lists (a): audit detail.lists should read trusted and name the dropped entry: " + J(da));
+            else if (!a.toast.includes("East week lists read: 2 East-primary + 2 East-backup week(s)") || !a.toast.includes("1 entry that is not a Monday dropped (backupMondays not-a-monday)") || /NOT cached/.test(a.toast)) fail("P34 Setup lists (a): the toast should say what was read and what was dropped: " + a.toast.slice(0, 400));
+            else if (a.card.state !== "read" || !/^DSG lists last read .+: 2 East-primary \+ 2 East-backup week\(s\) on file - 1 entry that is not a Monday was dropped\.$/.test(a.card.status || "")) fail("P34 Setup lists (a): the lists line should read 'DSG lists last read <time>: 2 East-primary + 2 East-backup week(s) on file - 1 entry that is not a Monday was dropped.' (state read): " + J([a.card.state, a.card.status]));
+            else if (J(listRows(a.card)) !== J(WANT)) fail("P34 Setup lists (a): the derived weeks should list " + J(WANT) + " as DSG-list weeks, saw " + J(listRows(a.card)) + " among " + J(a.card.rows.map(r => r.week + ":" + r.source)));
+            else if (!a.card.rows.filter(r => r.source === "list").every(r => /\(DSG list\)/.test(r.text)) || a.card.rows.some(r => r.source === "feed" && !/\(published\)/.test(r.text)) || a.card.rows.some(r => r.source === "stated" && !/\(stated\)/.test(r.text))) fail("P34 Setup lists (a): each week names its source (published / DSG list / stated): " + J(a.card.rows.map(r => r.text)));
+            else if (a.card.warnings.length !== 1 || a.card.warnings[0].week !== LM3 || a.card.warnings[0].why !== "both-lists" || !/BOTH DSG lists/.test(a.card.warnings[0].text)) fail("P34 Setup lists (a): one warning for the Monday on both lists (" + LM3 + "): " + J(a.card.warnings));
+            else if (!/published Davenport week decides first/.test(a.card.legend || "")) fail("P34 Setup lists (a): the legend is missing: " + a.card.legend);
+            else ok(`P34 Setup lists (a): a healthy read - the week written carries [${LM1}, ${LM3}] / [${LM2}, ${LM3}] (dropped 1, named in the toast and the audit row); the card: 'DSG lists last read ...: 2 + 2', ${WANT.join(", ")} each '(DSG list)', one both-lists warning for ${LM3}, the legend; ${a.card.rows.filter(r => r.source === "feed").length} published and ${a.card.rows.filter(r => r.source === "stated").length} stated week(s) beside them`);
+            // (b) the blob without the two keys: the cached lists are kept
+            eastListsServed = { eastPrimary: [LM1, LM3], eastBackup: [LM2, LM3], readAt: OLD_READ };
+            eastBlobLists = null;
+            const b = await refreshOnce(), lb = b.lists || {}, db = b.detail.lists || {};
+            if (J([lb.eastPrimary, lb.eastBackup, lb.readAt]) !== J([[LM1, LM3], [LM2, LM3], OLD_READ])) fail("P34 Setup lists (b): the week written must keep the CACHED lists and their own readAt (" + OLD_READ + "): " + J(b.lists));
+            else if (b.detail.ok !== false || db.trusted !== false || J((db.guard || []).map(p => p.list + ":" + p.why)) !== J(["backupMondays:missing", "fierceBackup:missing"]) || !(b.detail.errors || []).some(e => /backupMondays list did not come back - the cached lists are kept/.test(e))) fail("P34 Setup lists (b): the audit row should say ok false, the lists not trusted (both keys missing) and kept: " + J({ ok: b.detail.ok, lists: db, errors: b.detail.errors }).slice(0, 500));
+            else if (!/backupMondays list did not come back - the cached lists are kept/.test(b.toast)) fail("P34 Setup lists (b): the TOAST should say the cached lists are kept: " + b.toast.slice(0, 400));
+            else if (b.card.state !== "kept" || !/KEPT: the refresh of .+ did not trust its read/.test(b.card.status || "")) fail("P34 Setup lists (b): the lists line should say KEPT (state kept): " + J([b.card.state, b.card.status]));
+            else if (J(listRows(b.card)) !== J(WANT)) fail("P34 Setup lists (b): every listed week must still be derived (never 'no Fierce weeks'): " + J(listRows(b.card)));
+            else ok(`P34 Setup lists (b): the blob without its two keys - the week written keeps the cached lists (readAt ${OLD_READ}), audit ok false with both keys missing, the toast says kept, the card says KEPT and still lists ${WANT.length} DSG-list weeks`);
+            // (c) nothing cached, nothing read
+            eastListsServed = null;
+            const c = await refreshOnce(), dc = c.detail.lists || {};
+            if (c.lists !== undefined) fail("P34 Setup lists (c): with nothing cached and nothing read no eastLists key may be written: " + J(c.lists));
+            else if (dc.trusted !== false || dc.readAt !== null || dc.written !== false) fail("P34 Setup lists (c): audit detail.lists should read not trusted, nothing cached, nothing written: " + J(dc));
+            else if (c.card.state !== "none" || !/^DSG lists: none in the cache/.test(c.card.status || "") || listRows(c.card).length) fail("P34 Setup lists (c): the lists line should say none in the cache and no DSG-list week may be derived: " + J([c.card.state, c.card.status, listRows(c.card)]));
+            else if (!/The East week lists are not in the East feed cache/.test(c.card.issues || "")) fail("P34 Setup lists (c): Setup's issues should say the lists are not in the cache: " + String(c.card.issues).slice(0, 300));
+            else ok("P34 Setup lists (c): nothing cached and nothing read - no eastLists key written, the card says 'DSG lists: none in the cache', no DSG-list week derived, Setup's issues name it");
+            // (e) the 11/11 review: nothing cached and the blob's two lists EMPTY. While a published week the cache serves
+            // carries a flag (re-read within 84 h - the guard's vouched rows), an empty list is a wiped or reset blob, not
+            // "no weeks": nothing is written, the run is not ok and says why. (Before, this read was taken as two lists of 0.)
+            eastListsServed = null;
+            eastBlobLists = { backupMondays: [], fierceBackup: [] };
+            const e5 = await refreshOnce(), de = e5.detail.lists || {};
+            // per list: named only when a flagged week of ITS flag was re-read within 84 h (the guard's vouched rows)
+            const wantWhy = [].concat(eastServed.freshBackup ? ["backupMondays:empty-while-published"] : [], eastServed.freshFierce ? ["fierceBackup:empty-while-published"] : []);
+            if (!eastServed.fresh || !wantWhy.length) console.log(`     (P34 Setup lists (e): the served cache holds no flagged published week re-read in the last 84 h (${eastServed.isBackup.length} + ${eastServed.isFierceBackup.length} flagged, ${eastServed.fresh} fresh) - the empty-list refusal is not exercised this run)`);
+            else if (e5.lists !== undefined) fail("P34 Setup lists (e): two empty lists over a cache with no copy must not be written while published weeks carry the flags: " + J(e5.lists));
+            else if (e5.detail.ok !== false || de.trusted !== false || de.written !== false || J((de.guard || []).map(p => p.list + ":" + p.why)) !== J(wantWhy)) fail("P34 Setup lists (e): the audit row should say ok false, not trusted, " + J(wantWhy) + ": " + J({ ok: e5.detail.ok, lists: de }).slice(0, 500));
+            else if (!/came back empty although \d+ published week\(s\) carry its flag/.test(e5.toast)) fail("P34 Setup lists (e): the toast should say the list came back empty although published weeks carry its flag: " + e5.toast.slice(0, 400));
+            else if (e5.card.state !== "none" || listRows(e5.card).length) fail("P34 Setup lists (e): the card should still say none in the cache: " + J([e5.card.state, e5.card.status]));
+            else ok(`P34 Setup lists (e): nothing cached and two EMPTY lists read while ${eastServed.freshBackup} + ${eastServed.freshFierce} published week(s) re-read in the last 84 h carry the flags - not taken (${wantWhy.join(", ")}), no key written, the toast says why, the card still says none in the cache`);
+          } catch (e) { fail("P34 Setup lists: " + errLine(e)); }
+          finally {
+            // (d) the run's default again - a healthy read of the published weeks' lists
+            eastListsServed = "auto";
+            eastBlobLists = "auto";
+            try {
+              const d = await refreshOnce(), dd = d.detail.lists || {};
+              if (dd.trusted !== true || d.card.state !== "read" || listRows(d.card).length || /The East week lists are not in the East feed cache/.test(d.card.issues || "")) fail("P34 Setup lists (d): back on the default the read should be trusted, the line 'read', no DSG-list week and no Setup issue: " + J([dd, d.card.state, listRows(d.card)]));
+              else ok("P34 Setup lists (d): the default again (the lists of the published weeks, trusted) - no DSG-list week left, the Setup issue gone");
+            } catch (e) { fail("P34 Setup lists (d): " + errLine(e)); }
+          }
+        }
       }
       // Prompt 31 Part B item 7 (10/13): the refresh's weeks-only EXTRA leg. The harness's Davenport answers the extra read
       // (the only schedule_weeks GET asking past today + 400 days) with the main week, a week ~6 months back (before the
@@ -10298,6 +10452,8 @@ try {
           if (posts7.length !== 2) fail(`item 7 extra leg: expected two east_feed POSTs (the main week, then the week before the main window), saw ${posts7.length}: ${JSON.stringify(posts7.map(w => (rowsOf(w) || []).map(r => r.week_monday)))}`);
           else if (!r1 || r1.length !== 1 || r1[0].week_monday !== EAST_WEEK.week_monday) fail("item 7 extra leg: the FIRST POST is not the main read's one week: " + JSON.stringify((r1 || []).map(r => r.week_monday)));
           else if (!r2 || r2.length !== 1 || r2[0].week_monday !== pastWeek || !r2[0].data || r2[0].data.dayCall !== "s6" || !r2[0].fetched_at || Object.prototype.hasOwnProperty.call(r2[0].data, "vacations") || !/resolution=merge-duplicates/.test(posts7[1].prefer || "")) fail(`item 7 extra leg: the second POST must be exactly ${pastWeek} (dayCall s6, fetched_at, no vacations key, merge-duplicates): ` + JSON.stringify({ prefer: posts7[1].prefer, rows: r2 }).slice(0, 300));
+          // Prompt 34 (review A, 11/11): the extra leg's week carries the East week lists too - the same copy as the main week
+          else if (!r1[0].data.eastLists || JSON.stringify(r2[0].data.eastLists) !== JSON.stringify(r1[0].data.eastLists)) fail("item 7 extra leg (P34): the week before the main window must carry the same data.eastLists as the main week: " + JSON.stringify([r1[0].data.eastLists, r2[0].data.eastLists]).slice(0, 400));
           else if (JSON.stringify(ex7) !== JSON.stringify(wantExtra(1, null))) fail("item 7 extra leg: audit east.refresh detail.extra is " + JSON.stringify(ex7) + ", expected " + JSON.stringify(wantExtra(1, null)));
           else if (!/1 more published week\(s\) cached \(/.test((au7.detail && au7.detail.summary) || "")) fail("item 7 extra leg: the audit summary does not name the extra weeks: " + String(au7.detail && au7.detail.summary).slice(0, 300));
           else if (!/1 more published week\(s\) cached\./.test(txt7) || !/1 later week\(s\) after a gap/.test(txt7)) fail("item 7 extra leg: the toast does not name the extra week and the skipped one: " + txt7.slice(0, 400));
@@ -11271,6 +11427,46 @@ try {
       await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
       { const tst = await page.$("[data-testid=toast]"); if (tst) await tst.click().catch(() => {}); }
     } catch (e) { fail("U3c stale offers: " + errLine(e)); await page.evaluate((t) => localStorage.setItem("silvis-auth-token", t), FAKE_JWT); await pollWindowClosed(u3cGuard); }
+    // Prompt 34 (the 11/11 review, finding A3): a cache without the East week lists was silent where it is USED. With
+    // nothing cached and nothing read (a refresh by an older writer leaves the cache so) a Generate run stamps its preview
+    // and warns in its toast - the readings of Setup's issue line; with the default lists back the next preview carries no
+    // warning. N=2 over one week keeps both runs short; both are discarded and nothing is written. The next step fills the
+    // Generate fields itself.
+    try {
+      const refreshLists = async () => { await openCard("setup_east"); const b = writes.length; await page.click("[data-testid=east-refresh]"); await waitFor(() => !!auditSince(b, "east.refresh"), 20000); await page.waitForTimeout(500); };
+      const previewOnce = async () => {
+        await openCard("setup_generate");
+        await page.fill("[data-testid=gen-start]", genStart);
+        await page.fill("[data-testid=gen-end]", isoAddDays(genStart, 6));
+        await page.fill("[data-testid=gen-n]", "2");
+        await page.fill("[data-testid=gen-seed]", "7");
+        const b = writes.length;
+        await page.click("[data-testid=gen-run]");
+        await page.waitForSelector("[data-testid=gen-preview]", { timeout: 90000 });
+        await page.waitForTimeout(400);
+        const warn = await page.$eval("[data-testid=gen-preview-lists-warning]", el => el.textContent).catch(() => null);
+        const toast = await page.$eval("[data-testid=toast]", el => el.textContent).catch(() => "");
+        const wrote = writesSince(b).filter(w => /\/rest\/v1\/(schedule_days|call_schedule_snapshots|availability|time_off)/.test(w.path));
+        await page.click("[data-testid=gen-discard]");
+        await page.waitForSelector("[data-testid=gen-preview]", { state: "detached", timeout: 3000 });
+        return { warn, toast, wrote };
+      };
+      eastListsServed = null; eastBlobLists = null;
+      await refreshLists();
+      const miss = await previewOnce();
+      eastListsServed = "auto"; eastBlobLists = "auto";
+      await refreshLists();
+      const back = await previewOnce();
+      const LW = /WARNING: the East week lists are not in the East feed cache - only published and stated East weeks were derived/;
+      if (!miss.warn || !LW.test(miss.warn)) fail("P34 Generate (lists missing): the preview must carry the red gen-preview-lists-warning: " + JSON.stringify(miss.warn));
+      else if (!LW.test(miss.toast)) fail("P34 Generate (lists missing): the run toast must warn too: " + JSON.stringify(String(miss.toast).slice(0, 300)));
+      else if (miss.wrote.length || back.wrote.length) fail("P34 Generate (lists missing): a run wrote something: " + JSON.stringify(miss.wrote.concat(back.wrote).map(w => w.method + " " + w.path)));
+      else if (back.warn !== null || LW.test(back.toast)) fail("P34 Generate (lists back): with the lists in the cache again the preview must carry no lists warning: " + JSON.stringify([back.warn, String(back.toast).slice(0, 200)]));
+      else ok("P34 Generate: with no East week lists in the cache the preview is stamped 'WARNING: the East week lists are not in the East feed cache ...' and the toast warns; with the lists back the next preview carries no warning; nothing written");
+      { const tst = await page.$("[data-testid=toast]"); if (tst) await tst.click().catch(() => {}); }
+    } catch (e) { fail("P34 Generate (lists missing): " + errLine(e)); }
+    finally { eastListsServed = "auto"; eastBlobLists = "auto"; }
+    await openCard("setup_generate");
     const genEnd = utcDay(Date.UTC(+genStart.slice(0, 4), +genStart.slice(5, 7), 0)); // day 0 of the next month = the last day of genStart's month
     const genDays = daysBetween(genStart, genEnd).length;
     const genMonthLabel = `${["January","February","March","April","May","June","July","August","September","October","November","December"][+genStart.slice(5, 7) - 1]} ${genStart.slice(0, 4)}`;
