@@ -9,6 +9,12 @@
 //     'vacation' only, of any roster surgeon with an East code (fetchEastWeeks
 //     opts.vacationCodes -> attachVacationsToWeeks -> east_feed data.vacations:
 //     [{ code, start, end }]; read back with eastVacations(rows, code))
+//   - the East week lists (Prompt 34, Faraz 11/11): the two lists of Mondays the
+//     Davenport blob keeps behind isBackup / isFierceBackup, for the weeks
+//     Davenport has NOT published yet (fetchEastWeeks .lists -> eastListsPlan ->
+//     eastAttachLists -> east_feed data.eastLists on every row a refresh writes; read
+//     back by deriveFierceWeeks: a published week, then the lists, then Setup's
+//     stated weeks)
 //
 // Loaded in the browser as a classic script (config -> helpers -> rules ->
 // east-feed -> generator), so every top-level name here is prefixed east/ef and
@@ -109,7 +115,8 @@ function eastResolveFakId(roster, code) {
 //        fakId,                          // deprecated alias: the FIRST requested code's id, or null
 //        vacations: { CODE: [{ start, end }] } | null,   // merged, sorted
 //        vacationsError: string | null, vacationsTo,
-//        vacationIdsByCode: { CODE: davenportId }, vacationCodesUnresolved: [CODE] }
+//        vacationIdsByCode: { CODE: davenportId }, vacationCodesUnresolved: [CODE],
+//        lists: eastListsFromBlob(the roster blob) }     // Prompt 34: the two week lists, from the blob this already reads
 // Throws on any transport/HTTP failure of the weeks or the roster (never
 // resolves to "no East call"). The time_off read is a SEPARATE step: each code
 // is resolved to its Davenport id through the roster blob (by code, never a
@@ -159,7 +166,7 @@ async function fetchEastWeeks(fromMonday, toMonday, opts) {
     try { vacations = vacationsFromTimeOff(await eastGetJson(tq), vacationIdsByCode); }
     catch (e) { vacationsError = (e && e.message) ? e.message : String(e); }
   }
-  return { weeks, roster, fakId, idsByCode, codesUnresolved, fetchedAt: new Date().toISOString(), vacations, vacationsError, vacationsTo, vacationIdsByCode, vacationCodesUnresolved };
+  return { weeks, roster, fakId, idsByCode, codesUnresolved, fetchedAt: new Date().toISOString(), vacations, vacationsError, vacationsTo, vacationIdsByCode, vacationCodesUnresolved, lists: eastListsFromBlob(blob) };
 }
 
 // deriveKhanBusyDays(weeks, fakId, opts)
@@ -248,32 +255,276 @@ function deriveKhanBusyDays(weeks, fakId, opts) {
 
 // deriveFierceWeeks(weeks, opts)
 //   opts: { deriveFrom: 'YYYY-MM-DD' (Monday; weeks before it are dropped),
-//           statedWeeks: { eastPrimary:[mondays], eastBackup:[mondays] } }
-//   -> [{ weekMonday, silvisRole:'primary'|'backup', source:'feed'|'stated' }]
+//           statedWeeks: { eastPrimary:[mondays], eastBackup:[mondays] },
+//           listedWeeks: { eastPrimary:[mondays], eastBackup:[mondays] } | null }
+//   -> [{ weekMonday, silvisRole:'primary'|'backup', source:'feed'|'list'|'stated' }]
+// Precedence (Prompt 34, Faraz 11/11): a PUBLISHED week first, then the East
+// lists, then Setup's stated weeks.
 // Feed rows:   isBackup (Fierce East PRIMARY) -> Silvis 'backup' Mon-Sun
 //              isFierceBackup (Fierce East BACKUP) -> Silvis 'primary' Mon-Sun
-// Stated weeks (Faraz, ahead of publication) fill ONLY weeks the feed has no
-// PUBLISHED row for; a published row always wins, flagged or not. Forecast
-// rows (data.isForecast) are not published rows and never suppress a stated week.
-function deriveFierceWeeks(weeks, opts) {
+//              a published row always wins, flagged or not. Forecast rows
+//              (data.isForecast) are not published rows and never suppress a
+//              listed or a stated week.
+// Listed weeks: the two lists of Mondays the Davenport app keeps behind those
+//              flags (eastPrimary <- backupMondays, eastBackup <- fierceBackup),
+//              for the weeks it has not published. opts.listedWeeks absent =
+//              the copy the cache rows carry (eastCachedLists(weeks) - so no
+//              caller passes them and none can forget them); null = none. A
+//              Monday in BOTH lists reads as East primary (Silvis backup), the
+//              reading of a published row carrying both flags, with a warning.
+// Stated weeks (Setup, the manual override for a week the lists do not name)
+//              fill only the weeks neither a published row nor a list names; a
+//              listed week whose stated role differs keeps the list's role,
+//              with a warning.
+// deriveFierceWeeksDetail(weeks, opts) -> { weeks (the list above), warnings:
+//   [{ weekMonday, why:'both-lists'|'list-vs-stated', stands, stated? }] sorted
+//   by week, lists: the copy read (with its readAt) | null } - Setup > East
+//   feed shows the warnings and when the lists were last read.
+function deriveFierceWeeksDetail(weeks, opts) {
   const o = Object.assign({ deriveFrom: null, statedWeeks: null }, opts || {});
-  const out = {};
+  const lists = o.listedWeeks === undefined ? eastCachedLists(weeks) : (o.listedWeeks && typeof o.listedWeeks === "object" ? o.listedWeeks : null);
+  const out = {}, warnings = [];
   const feedMondays = new Set();
   (weeks || []).forEach(w => {
-    if (!w || !efIsDateStr(w.weekMonday) || efIsForecastRow(w)) return;
-    feedMondays.add(w.weekMonday);
+    // both spellings of a row's Monday (review A, 11/11): the lists' copy is read from either (eastCachedLists), so a
+    // published week must be seen in either too - or a list would replace it
+    const m = w && (w.weekMonday || w.week_monday);
+    if (!efIsDateStr(m) || efIsForecastRow(w)) return;
+    feedMondays.add(m);
     const d = w.data || {};
-    if (d.isBackup === true) out[w.weekMonday] = { weekMonday: w.weekMonday, silvisRole: "backup", source: "feed" };
-    else if (d.isFierceBackup === true) out[w.weekMonday] = { weekMonday: w.weekMonday, silvisRole: "primary", source: "feed" };
+    if (d.isBackup === true) out[m] = { weekMonday: m, silvisRole: "backup", source: "feed" };
+    else if (d.isFierceBackup === true) out[m] = { weekMonday: m, silvisRole: "primary", source: "feed" };
+  });
+  const mondaysOf = (list) => (Array.isArray(list) ? list : []).filter(efIsMonday);
+  mondaysOf(lists && lists.eastPrimary).forEach(m => { if (!feedMondays.has(m)) out[m] = { weekMonday: m, silvisRole: "backup", source: "list" }; });
+  mondaysOf(lists && lists.eastBackup).forEach(m => {
+    if (feedMondays.has(m)) return;
+    if (out[m] && out[m].source === "list") { if (!warnings.some(x => x.weekMonday === m && x.why === "both-lists")) warnings.push({ weekMonday: m, why: "both-lists", stands: "backup" }); return; }
+    out[m] = { weekMonday: m, silvisRole: "primary", source: "list" };
   });
   const st = o.statedWeeks || {};
-  (st.eastPrimary || []).forEach(m => { if (efIsDateStr(m) && !feedMondays.has(m)) out[m] = { weekMonday: m, silvisRole: "backup", source: "stated" }; });
-  (st.eastBackup || []).forEach(m => { if (efIsDateStr(m) && !feedMondays.has(m)) out[m] = { weekMonday: m, silvisRole: "primary", source: "stated" }; });
-  return Object.keys(out)
-    .filter(m => !o.deriveFrom || m >= o.deriveFrom)
-    .sort()
-    .map(m => out[m]);
+  const stated = (list, role) => (Array.isArray(list) ? list : []).forEach(m => {
+    if (!efIsDateStr(m) || feedMondays.has(m)) return;
+    if (out[m] && out[m].source === "list") {
+      if (out[m].silvisRole !== role && !warnings.some(x => x.weekMonday === m && x.why === "list-vs-stated")) warnings.push({ weekMonday: m, why: "list-vs-stated", stands: out[m].silvisRole, stated: role });
+      return;
+    }
+    out[m] = { weekMonday: m, silvisRole: role, source: "stated" };
+  });
+  stated(st.eastPrimary, "backup");
+  stated(st.eastBackup, "primary");
+  const from = (m) => !o.deriveFrom || m >= o.deriveFrom;
+  return {
+    weeks: Object.keys(out).filter(from).sort().map(m => out[m]),
+    warnings: warnings.filter(x => from(x.weekMonday)).sort((a, b) => a.weekMonday < b.weekMonday ? -1 : a.weekMonday > b.weekMonday ? 1 : a.why < b.why ? -1 : a.why > b.why ? 1 : 0),
+    lists: lists || null,
+  };
 }
+function deriveFierceWeeks(weeks, opts) { return deriveFierceWeeksDetail(weeks, opts).weeks; }
+
+// ---- the East week lists (Prompt 34, Faraz 11/11) ----
+// The Davenport blob (call_schedule_data 'main', the row fetchEastWeeks already reads for the roster) holds two lists of
+// Mondays, unsorted, with past weeks mixed in - the sets its generator stamps the two week flags from:
+//   backupMondays -> isBackup        (Fierce East PRIMARY -> Silvis BACKUP all week)   -> eastPrimary here
+//   fierceBackup  -> isFierceBackup  (Fierce East BACKUP  -> Silvis PRIMARY all week)  -> eastBackup here
+// (the names of surgeonRules.<id>.eastFeed.statedWeeks). A Monday on a list with no published week is Davenport's own
+// "pending" mark: its generator stamps the flag when the week is generated. Silvis reads the lists for exactly those weeks.
+// Both refreshes read them (GET only, no request added), cache them in the payload of every east_feed row they write - the
+// main window's and the extra leg's (data.eastLists = { eastPrimary, eastBackup, readAt, dropped }, beside data.vacations) and nothing else of that
+// blob is cached; Generate, the day editor and the rules read the cache, never Davenport.
+
+// efIsMonday(s): a real 'YYYY-MM-DD' date that is a Monday.
+function efIsMonday(s) { return efIsDateStr(s) && efFmt(efParse(s)) === s && efParse(s).getDay() === 1; }
+
+// eastListsFromBlob(blob) -> { eastPrimary: [Mondays] | null, eastBackup: [Mondays] | null,
+//                              problems: [{ list, why: 'missing' | 'not-array' }], dropped: [{ list, value }] }
+//   Valid Mondays only, each once, sorted. An entry that is no Monday is DROPPED and named (value: at most 24 characters of
+//   text - never the raw entry; it reaches the scheduler's warning only, never the cache). A key that is absent or null is
+//   'missing', one that is no array 'not-array': its list is null - UNKNOWN, never an empty list. list = the Davenport key.
+function eastListsFromBlob(blob) {
+  const b = blob && typeof blob === "object" ? blob : {};
+  const out = { eastPrimary: null, eastBackup: null, problems: [], dropped: [] };
+  [["eastPrimary", "backupMondays"], ["eastBackup", "fierceBackup"]].forEach(pair => {
+    const raw = b[pair[1]];
+    if (raw === undefined || raw === null) { out.problems.push({ list: pair[1], why: "missing" }); return; }
+    if (!Array.isArray(raw)) { out.problems.push({ list: pair[1], why: "not-array" }); return; }
+    const seen = {}, keep = [];
+    raw.forEach(v => {
+      if (efIsMonday(v)) { if (!seen[v]) { seen[v] = true; keep.push(v); } return; }
+      let text;
+      try { text = typeof v === "string" ? v : JSON.stringify(v); } catch (e) { text = undefined; }
+      out.dropped.push({ list: pair[1], value: String(text === undefined ? v : text).slice(0, 24) });
+    });
+    out[pair[0]] = keep.sort();
+  });
+  return out;
+}
+
+// eastCachedLists(rows) -> { eastPrimary, eastBackup, readAt, dropped } | null
+//   The copy of the lists the cache holds: the data.eastLists with the NEWEST readAt among the published rows (east_feed
+//   rows or the app's { weekMonday, data }). Every row a refresh writes carries the same copy; an untrusted read writes the
+//   older copy back with its own readAt, so readAt is always the time of the last TRUSTED read. A forecast row's copy and a
+//   malformed one (no readAt, a list that is no array) never count. null = the cache holds no lists - unknown, never
+//   "no weeks". Returns a copy (valid Mondays only, sorted).
+function eastCachedLists(rows) {
+  let best = null;
+  (rows || []).forEach(r => {
+    if (!r || !r.data || efIsForecastRow(r)) return;
+    const c = r.data.eastLists;
+    if (!c || typeof c !== "object" || !Array.isArray(c.eastPrimary) || !Array.isArray(c.eastBackup) || typeof c.readAt !== "string" || !c.readAt) return;
+    if (!best || c.readAt > best.readAt) best = c;
+  });
+  if (!best) return null;
+  return { eastPrimary: best.eastPrimary.filter(efIsMonday).sort(), eastBackup: best.eastBackup.filter(efIsMonday).sort(), readAt: best.readAt, dropped: typeof best.dropped === "number" ? best.dropped : 0 };
+}
+
+// eastListsGuard(read, cached, weeks, today, now) -> { ok, problems } - the read guard of the lists leg, on the pattern of
+//   eastVacationReadGuard (a wiped or half-read blob must never read as "no Fierce weeks").
+//   read: eastListsFromBlob's result; cached: eastCachedLists(the cache before the refresh) | null; weeks: every published
+//   week the refresh knows - the weeks it just fetched, then the cached rows (a Monday counts once, the first; forecast rows
+//   never); today: the Central date; now: the refresh's own time (ISO) - see VOUCHED below; absent = every row counts.
+//   NOT trusted (the caller keeps BOTH cached lists as they are and takes nothing new from this read):
+//     'missing' / 'not-array'  a key did not come back as an array (or nothing was read);
+//     'empty-while-cached'     a list has no valid Monday, and
+//     'lost-week'              a list no longer names
+//                              a cached Monday of THIS WEEK OR LATER that Davenport has not published - unless the read is
+//                              CLEARLY HEALTHY: that list still holds every week Davenport has published with its flag
+//                              (isBackup for backupMondays, isFierceBackup for fierceBackup), and there is at least one
+//                              such week. Davenport writes a list and its week flags together, so a list that lost a
+//                              published week was wiped, reset or reverted;
+//     'empty-while-published'  a list has no valid Monday while a published week carries its flag - whatever the cache
+//                              holds, a cache with no copy included (the 11/11 review: a wiped list read over a cold cache
+//                              was taken as "0 weeks"). Davenport keeps past weeks on its lists, so an empty list beside a
+//                              flagged week is a wipe or a reset. An empty list is taken only when nothing speaks against
+//                              it: no cached upcoming week of it, and no published week with its flag.
+//   A lost week Davenport HAS published is no loss (the published row decides); a past week neither. With no cache nothing
+//   can be lost: a first read that NAMES weeks is taken as it is. A problem of the last three kinds carries weeks (the lost
+//   Mondays), unmatched (the published Mondays of that flag the list lacks) and published (how many weeks carry the flag).
+//   VOUCHED (review A, 11/11): "every week Davenport has published with its flag" counts only the rows this run can vouch
+//   for - a week it just fetched (no fetched_at) or a cached row some refresh re-read within EAST_LISTS_VOUCH_HOURS before
+//   `now`. A cached row nobody re-reads any more (older than the refresh's 12-month window, or a week Davenport no longer
+//   returns) keeps whatever flag it had: counted, it would refuse every later edit of the list for months, with no way to
+//   accept the read. It neither blocks nor vouches. Whether a lost week is PUBLISHED is still read from any row.
+const EAST_LISTS_VOUCH_HOURS = 84;   // the server refresh re-reads both windows daily: two missed runs are tolerated (72 h sat exactly on the third run)
+function eastListsGuard(read, cached, weeks, today, now) {
+  const LISTS = [["eastPrimary", "backupMondays", "isBackup"], ["eastBackup", "fierceBackup", "isFierceBackup"]];
+  if (!read || typeof read !== "object") return { ok: false, problems: LISTS.map(L => ({ list: L[1], why: "missing" })) };
+  const problems = (Array.isArray(read.problems) ? read.problems : []).filter(p => p && p.list && p.why).map(p => ({ list: p.list, why: p.why }));
+  LISTS.forEach(L => { if (!Array.isArray(read[L[0]]) && !problems.some(p => p.list === L[1])) problems.push({ list: L[1], why: "missing" }); });
+  if (problems.length) return { ok: false, problems };
+  const thisMonday = efIsDateStr(today) && efFmt(efParse(today)) === today ? efMonday(today) : null;
+  const nowMs = typeof now === "string" ? Date.parse(now) : NaN;
+  const pub = {}, vouched = {};
+  (weeks || []).forEach(w => {
+    const m = w && (w.weekMonday || w.week_monday);
+    if (!efIsDateStr(m) || efIsForecastRow(w) || pub[m]) return;
+    pub[m] = w.data || {};
+    const f = w.fetched_at !== undefined ? w.fetched_at : w.fetchedAt;
+    vouched[m] = isNaN(nowMs) || f === undefined || (typeof f === "string" && nowMs - Date.parse(f) <= EAST_LISTS_VOUCH_HOURS * 3600000);
+  });
+  LISTS.forEach(L => {
+    const fresh = read[L[0]], had = cached && Array.isArray(cached[L[0]]) ? cached[L[0]] : [];
+    const lost = had.filter(m => efIsDateStr(m) && (!thisMonday || m >= thisMonday) && fresh.indexOf(m) < 0 && !pub[m]).sort();
+    const flagged = Object.keys(pub).filter(m => vouched[m] && pub[m][L[2]] === true).sort();
+    const unmatched = flagged.filter(m => fresh.indexOf(m) < 0);
+    if (!lost.length) {
+      // nothing cached is lost - but an EMPTY list is not taken while a vouched published week carries its flag
+      if (!fresh.length && flagged.length) problems.push({ list: L[1], why: "empty-while-published", weeks: [], unmatched: unmatched, published: flagged.length });
+      return;
+    }
+    if (flagged.length && !unmatched.length) return;   // clearly healthy: the list still holds every week published with its flag
+    problems.push({ list: L[1], why: fresh.length ? "lost-week" : "empty-while-cached", weeks: lost, unmatched: unmatched, published: flagged.length });
+  });
+  return { ok: problems.length === 0, problems };
+}
+function eastListsGuardText(p) {
+  const tail = " - the cached lists are kept";
+  if (!p) return "the East week lists were not trusted" + tail;
+  const some = (list) => (list || []).slice(0, 3).join(", ") + ((list || []).length > 3 ? " (+" + ((list || []).length - 3) + ")" : "");
+  if (p.why === "missing") return ("Davenport's " + p.list + " list did not come back" + tail + " (never read as no weeks)").slice(0, 200);
+  if (p.why === "not-array") return ("Davenport's " + p.list + " is not a list" + tail + " (never read as no weeks)").slice(0, 200);
+  if (p.why === "empty-while-published") return ("Davenport's " + p.list + " came back empty although " + p.published + " published week(s) carry its flag (" + some(p.unmatched) + ")" + tail).slice(0, 200);
+  const why = (p.unmatched || []).length ? "it also lacks the published " + some(p.unmatched) : "no published week to check it against";
+  return ("Davenport's " + p.list + (p.why === "empty-while-cached" ? " came back empty; the cache holds " : " lost ") + some(p.weeks) + "; " + why + tail).slice(0, 200);
+}
+
+// eastListsPlan(feed, cachedRows, today, from) -> { trusted, lists, guard, dropped }
+//   The lists leg of a refresh, behind the guard. feed: fetchEastWeeks' result (feed.lists, feed.weeks, feed.fetchedAt);
+//   cachedRows: the cache as read just BEFORE the refresh; today: the Central date; from: the refresh window's first Monday.
+//   trusted -> lists = the fresh lists from `from` on (older Mondays are published history - the rules never need them),
+//              readAt = this refresh's time, dropped = how many entries were dropped;
+//   else    -> lists = the newest cached copy, unchanged (its own readAt), or null when the cache holds none - then no key
+//              is written (unknown stays unknown).
+//   guard: the problems ([] when trusted); dropped: the dropped entries of this read (for the warning - never cached).
+//   The guard's `now` is feed.fetchedAt: the fetched weeks vouch for a list, and so do the cached rows a refresh re-read
+//   in the last EAST_LISTS_VOUCH_HOURS - never a row left behind by an old refresh.
+function eastListsPlan(feed, cachedRows, today, from) {
+  const f = feed || {};
+  const read = f.lists && typeof f.lists === "object" ? f.lists : null;
+  const cached = eastCachedLists(cachedRows);
+  const guard = eastListsGuard(read, cached, (f.weeks || []).concat(cachedRows || []), today, f.fetchedAt);
+  const dropped = read && Array.isArray(read.dropped) ? read.dropped.slice() : [];
+  if (!guard.ok) return { trusted: false, lists: cached, guard: guard.problems, dropped };
+  const keep = (list) => list.filter(m => !efIsDateStr(from) || m >= from);
+  return { trusted: true, lists: { eastPrimary: keep(read.eastPrimary), eastBackup: keep(read.eastBackup), readAt: f.fetchedAt || null, dropped: dropped.length }, guard: [], dropped };
+}
+
+// eastAttachLists(weeks, lists) -> new weeks array: every published week carries its own copy of the lists in
+//   data.eastLists (a refresh rewrites a week's payload whole, so the copy is written with every week it writes). lists
+//   null -> the rows as they are, no key. Forecast rows never carry one. Never mutates the input.
+function eastAttachLists(weeks, lists) {
+  const ws = weeks || [];
+  if (!lists || typeof lists !== "object" || !Array.isArray(lists.eastPrimary) || !Array.isArray(lists.eastBackup)) return ws.slice();
+  return ws.map(w => {
+    if (!w || !efIsDateStr(w.weekMonday) || efIsForecastRow(w)) return w;
+    const copy = { eastPrimary: lists.eastPrimary.slice(), eastBackup: lists.eastBackup.slice(), readAt: lists.readAt || null, dropped: typeof lists.dropped === "number" ? lists.dropped : 0 };
+    return Object.assign({}, w, { data: Object.assign({}, w.data || {}, { eastLists: copy }) });
+  });
+}
+
+// ---- Setup > East feed: the words for the derived weeks and the lists (Prompt 34) ----
+// eastSourceLabel(source): a derived week's source as the scheduler reads it - 'published' (a Davenport week row, source
+//   'feed'), 'DSG list' ('list': one of the two lists, for a week Davenport has not published), 'stated' (Setup).
+function eastSourceLabel(source) { return source === "feed" ? "published" : source === "list" ? "DSG list" : source === "stated" ? "stated" : String(source || ""); }
+// eastDerivedWarningText(w): the words of a deriveFierceWeeksDetail warning.
+function eastDerivedWarningText(w) {
+  if (!w || !w.weekMonday) return "";
+  const role = (r) => r === "backup" ? "East primary (Silvis backup)" : "East backup (Silvis primary)";
+  if (w.why === "both-lists") return "week of " + w.weekMonday + " is in BOTH DSG lists - read as " + role(w.stands) + ", the way a published week with both flags reads; correct the lists in the Davenport app";
+  if (w.why === "list-vs-stated") return "week of " + w.weekMonday + ": the DSG list says " + role(w.stands) + ", Setup's stated week says " + role(w.stated) + " - the DSG list stands";
+  return "week of " + w.weekMonday + ": " + String(w.why || "");
+}
+// eastListsStatus(rows) -> { state: 'none' | 'read' | 'kept', readAt, writtenAt, eastPrimary, eastBackup, dropped }
+//   What the cache holds of the two lists (east_feed rows with fetched_at). 'none': no copy - unknown. 'read': the rows
+//   carry lists read by the refresh that wrote them. 'kept': the newest copy was written back by a LATER refresh that did
+//   not trust its own read (a row's fetched_at is more than EAST_LISTS_KEPT_LAG_MS after the copy's readAt - the weeks of
+//   a refresh's own extra leg carry the copy too and are stamped seconds after the read, so the line is five minutes: an
+//   untrusted re-run inside it still reads 'read', and its own toast and audit row said so). eastPrimary / eastBackup
+//   count the Mondays on file; dropped = entries the last trusted read dropped.
+const EAST_LISTS_KEPT_LAG_MS = 5 * 60000;
+function eastListsStatus(rows) {
+  const lists = eastCachedLists(rows);
+  if (!lists) return { state: "none", readAt: null, writtenAt: null, eastPrimary: 0, eastBackup: 0, dropped: 0 };
+  let writtenAt = null;
+  (rows || []).forEach(r => {
+    if (!r || !r.data || efIsForecastRow(r) || !r.data.eastLists || r.data.eastLists.readAt !== lists.readAt) return;
+    const f = r.fetched_at || r.fetchedAt || null;
+    if (typeof f === "string" && !isNaN(Date.parse(f)) && (!writtenAt || Date.parse(f) > Date.parse(writtenAt))) writtenAt = f;
+  });
+  const lag = writtenAt ? Date.parse(writtenAt) - Date.parse(lists.readAt) : NaN;
+  return { state: lag > EAST_LISTS_KEPT_LAG_MS ? "kept" : "read", readAt: lists.readAt, writtenAt: writtenAt, eastPrimary: lists.eastPrimary.length, eastBackup: lists.eastBackup.length, dropped: lists.dropped };
+}
+// eastListsStatusText(status, fmtTs): the Setup line for eastListsStatus() - when the lists were last read, how many weeks
+//   they hold, and whether the newest refresh kept them instead of trusting its own read. fmtTs: the time's words.
+function eastListsStatusText(st, fmtTs) {
+  const ts = typeof fmtTs === "function" ? fmtTs : (x) => String(x);
+  if (!st || st.state === "none") return "DSG lists: none in the cache - Refresh from Davenport reads them. Until then only published and stated weeks derive.";
+  return "DSG lists last read " + ts(st.readAt) + ": " + st.eastPrimary + " East-primary + " + st.eastBackup + " East-backup week(s) on file"
+    + (st.state === "kept" ? " - KEPT: the refresh of " + ts(st.writtenAt) + " did not trust its read (see the refresh line above)" : "")
+    + (st.dropped ? " - " + (st.dropped === 1 ? "1 entry that is not a Monday was dropped" : st.dropped + " entries that are not Mondays were dropped") : "") + ".";
+}
+// The legend over the derived weeks in Setup > East feed (the three sources, in the order they decide).
+const EAST_DERIVED_LEGEND = "A published Davenport week decides first; for a week Davenport has not published, the two week lists of the Davenport (DSG) app; then the stated weeks in Setup > Rules, for a week the lists do not name.";
 
 // coverageOf(weeks) -> { from: firstMonday, to: lastSunday } | null
 // PUBLISHED coverage only: forecast rows do not count as East coverage.
@@ -667,5 +918,7 @@ if (typeof module !== "undefined") {
     EAST_VACATIONS_HORIZON_DAYS, efFmt, efParse, efAddD, efDayOffsets,
     EAST_AHEAD_DAYS, efMonday, eastRefreshWindows, eastExtraWeeks,
     eastVacationReadGuard, eastGuardText,
+    deriveFierceWeeksDetail, efIsMonday, eastListsFromBlob, eastCachedLists, eastListsGuard, eastListsGuardText, eastListsPlan, eastAttachLists,
+    eastSourceLabel, eastDerivedWarningText, eastListsStatus, eastListsStatusText, EAST_DERIVED_LEGEND,
   };
 }

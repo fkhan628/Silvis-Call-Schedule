@@ -27,7 +27,7 @@ the two disagree, fix both.*
 | Backup contract | Backup should never be called if the primary stays true to the location. (Stipend transfer on activation is a group/admin matter.) **Backup is never paid in the app.** ~~The app carries no compensation logic or $ display at all.~~ ⟶ **9/27: primary call pay is tracked in the app** (next row). | Burchett 9/18, Khan 9/21, **9/27** |
 | Call pay (9/27) | ⟶ **9/27 (Faraz; reverses the 9/21 "no compensation" rule): the app tracks PRIMARY call pay.** Per primary 24-h call day (07:00 → 07:00): a **stipend** per shift; a **call-in rate** when the primary is called in that day — the weekday rate on a weekday, the weekend / holiday rate (paid in addition to the stipend) on a weekend or holiday day; an **activation rate** for the hours worked (on a weekday the after-hours hours the surgeon enters, on a weekend / holiday all hours) — or, by a setting, per call-in. wRVU conversion is not tracked yet. A day is paid to whoever is its primary in the **current** schedule (a trade moves the pay with the day; a call-in logged on a day that later moved is listed as not counted). Days up to today are *earned*, later days *projected* (stipend only). **The figures are data, never in this document, the seed, the repo or any public table:** the scheduler enters them in Setup → Pay rates (`call_pay_settings`, authenticated only); surgeons log call-ins in My schedule → My pay (`call_pay_logs`, own rows only; a future day, a backup day and more than 24 h a day are refused; the optional note carries **no patient and no contact details** — hours only, e.g. "OR till 2am"). Who sees pay: each surgeon his own, the scheduler everyone's (Totals → Pay, with a CSV), and — **9/27 decision (item 5a)** — the office coordinator read-only (Totals → Pay and its CSV, for preparing the stipends; no My pay, no call-in entry, no rates screen); viewers, followers and the public page see none. **Paid by the call stipend (9/27, item 5b):** a per-surgeon switch in Setup → Pay rates, on for everyone by default; the scheduler switches off a surgeon who is not paid by the call stipend — he then gets no My pay, is left out of Totals → Pay and its CSV, and cannot read the rates (the database enforces it). Which surgeons are switched off is data the scheduler sets, never in this document. No amount in notifications, e-mails, calendar feeds or exports others see. Defaults taken for the open questions (§8 item 22): Friday is a weekday for pay, every day of a holiday unit is a holiday, the call-in rates need a logged call-in, activation is per hour. Schema: `sql/migrations/2026-09-27-call-pay.sql` (applied 2026-09-28 01:15:26Z, recorded in `docs/SCHEMA-REVIEW.md`; a missing table - the guard - still makes the cards say "Pay tracking is available after the next database update"). | Khan **9/27** |
 | Practice hygiene | No operating at another facility while on Silvis primary. 30-minute response time. | Khan 8/29, Burchett 8/27 |
-| Consecutive days | Default max **2 consecutive 24-h PRIMARY periods** (hard, real days); per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). ⟶ **9/22 (Prompt 12 A): a holiday unit counts as one day only for a surgeon who opted in (Khan); any-role runs (primary or backup) have a SOFT per-surgeon limit (Burchett 3, Sarkar 2, Khan 4, Acton 4, Philip 4, Fierce 7) with a penalty that grows per day beyond it.** ⟶ **10/29 (Faraz): Sarkar's any-role limit removed - none for her (§3 Sarkar, §8 item 28); her hard 2 consecutive primary days stand.** ⟶ **10/18: a per-surgeon SOFT rest between call stretches (`restBetweenStretches` - Acton 2 days off; §3 Acton, §8).** | Burchett 8/27, Khan 8/29, review 9/22 |
+| Consecutive days | Default max **2 consecutive 24-h PRIMARY periods** (hard, real days); per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). ⟶ **9/22 (Prompt 12 A): a holiday unit counts as one day only for a surgeon who opted in (Khan); any-role runs (primary or backup) have a SOFT per-surgeon limit (Burchett 3, Sarkar 2, Khan 4, Acton 4, Philip 4, Fierce 7) with a penalty that grows per day beyond it.** ⟶ **10/29 (Faraz): Sarkar's any-role limit removed - none for her (§3 Sarkar, §8 item 28); her hard 2 consecutive primary days stand.** ⟶ **10/18: a per-surgeon SOFT rest between call stretches (`restBetweenStretches` - Acton 2 days off; §3 Acton, §8).** ⟶ **11/11 (Faraz): a holiday unit that one of Fierce's derived weeks touches is his on all its days - his week of 5/24/2027 plus Memorial Day Monday is 8 locked primary days (a derived lock is not measured against the limit; a ninth day is still refused) - §3 Fierce, §8 item 29.** | Burchett 8/27, Khan 8/29, review 9/22, Khan 11/11 |
 | Week-long stints | No more week-long call stints for the general pool (Atwell/Fierce legacy pattern). Fierce's derived weeks are the explicit exception (§3). | Burchett 8/27, Khan 9/21 |
 | Period | **The generation window is the offer period** (Process row below; `groupRules.offerPeriods`). ⟶ **9/30 (Faraz): periods are six months - "go from January to June. We will do 6 months."** `lengthMonths` 6 (a new period's preset; was 3), the in-app notice from **14 days** before the freeze (`noticeDaysBeforeClose` 14, was 42) and the reminder e-mails **14 and 3 days** before it (`remindDaysBeforeClose` [14, 3], was [42, 14, 3] - Faraz: "October 12 is too soon"; Cowork set the three live in Setup on 9/30 at 20:32 CDT). Nov 2026 – Jan 2027 was generated and published 9/23 (`docs/PUBLISH-2026-09-23.md`); the next one is **Jan 2027 – Jun 2027** (1/4 – 6/30; freeze **Mon 11/23**, publish by **12/7**; reminders 11/9 and 11/20) - the Jan 2027 row Faraz created by SQL 9/24 (1/4 – 1/31) widened, with the **Feb 2027 – Apr 2027** row (2/1 – Sun 5/2, freeze 12/21) folded into it and deleted (decided 9/30; **applied 2026-10-01 04:33:12Z** by Faraz in the SQL editor - `docs/SCHEMA-REVIEW.md` 2026-09-30, with the `period.update` / `period.delete` audit rows; the Feb – Apr row carried no rules-only choice or mode to merge; offers are keyed by person and day). Fierce's "go by my rules" choice for January now covers January – June. Each period is generated from Setup → Periods → "Generate this period". **Sep 14 – Nov 1 stays exactly as the emails describe it** (locked import, §7). Generate's own range field keeps its 3-, 6-, 9- and 12-month presets, and (9/22 late, Prompt 12 AB) **its default range starts at the first open slot on or after today** — locks are never touched, whatever the range. ⟶ *B10 (9/23): the two range rules this row used to state — "this round: generate through the end of 2026 (2026-11-02 → 2027-01-03)" and "after that, presets from the last published day" — were the milestone plan, done on 9/23 and superseded by AB; dropped.* | Khan 9/21, **9/22**, 9/23, 9/24 |
 | Time off | **Vacations only — there are no "no-call days."** Surgeons **enter their own vacations; nothing is approved** — the app logs them (audit trail) and blocks those days from call. A vacation **cannot be entered over a day the surgeon is already published as primary or backup**: the entry is refused, the conflicting dates are listed, and the surgeon must find a switch (trade) first. A vacation day also blocks the day before it (the 07:00 shift end falls on the vacation day). ⟶ **9/22 (Faraz, Prompt 12 H): under the open-backup rule the day-before block stays PRIMARY-only — a standby backup the day before a vacation is acceptable** (seed `groupRules.dayBeforeRules.trailingEdgeRoles = ["primary"]`; the DB trigger likewise checks `start_date - 1` for primary only). ⟶ **9/30 (Faraz, Prompt 27: "a warning when people are taking vacations and a warning that stops vacations if more than 4 people are on vacation. Need at least 2 surgeons around") — the vacation guard.** Still no approval. **The rule:** a vacation is refused when, on a day it takes the person off, fewer than **2** active surgeons would stay around — with six active surgeons, at most four are off on any day. **The default is data:** `groupRules.vacations.minSurgeonsAround` (a whole number 0-99; absent or junk reads 2 — `helpers.js` `VACATION_GUARD_DEFAULTS`; the seed carries `{ minSurgeonsAround: 2 }`; Setup → Rules → Advanced → Edit group rules as JSON). **Counted** per calendar day over the active roster surgeons (not an inactive or an outside surgeon); a surgeon is **off** on a day inside one of the `time_off` rows of that surgeon, or inside an **East (Davenport) vacation** range not reviewed *home* — an *away* range counts, an **unreviewed** one counts too (as everywhere in the app: unreviewed counts as away), a *home* one does not. A person already off that day (by another vacation row, or by an East range) is not counted twice; an **edit** is checked on its new days only and a shortening never. **While a vacation is typed** (before Save) the Time off form shows who else is off and how many stay around (the others in roster order: "Also off: Burchett 3/18-3/20, Acton 3/15-3/21 - after yours, 3 of 6 are around 3/18-3/20"; the East days carry no East word except for the scheduler, item E3 - everyone else reads one merged list of days per person; an Edit of a vacation shows the same line). **Under the minimum** a surgeon — and the office coordinator entering for a surgeon — is refused before saving with the database's own words ("VACATION_TOO_FEW_AROUND: on 3/18, 3/19 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"); **the scheduler gets a confirm instead** ("... enter it anyway?") and may proceed. The month painter counts its whole draft the same way. **Database:** the `time_off` trigger `time_off_vacation_guard` (`sql/migrations/2026-09-30-vacation-guard.sql`, report-first, **applied 2026-10-01**; `docs/SCHEMA-REVIEW.md` "2026-09-30 - vacation guard") refuses the same (`VG001`, the same text), lets the scheduler and a session with no signed-in user through, reads the East ranges from the `east_feed` cache and the *home* reviews, and fires after the on-call trigger (`ON_CALL_CONFLICT` still answers first); it backs the app's own check (a stale build or a direct REST call is refused by the database too). ⟶ **10/14 (Faraz 10/9, Prompt 31 Part A): the East person's away / unreviewed ranges, seen by everyone signed in.** An East range that is *away* or still *unreviewed* now shows to every signed-in role exactly like a vacation: the calendar's vacation bar and "Off: Khan" for everyone but the scheduler (his bar shows the review state instead - "Khan?" while unreviewed, decision 6 as of 10/21; the East diamond and the dot until then); a read-only line that says "set by the scheduler" (no Edit or Remove, the office coordinator included) where a Time off list shows other people's vacations - the office coordinator's, a viewer's / follower's, an APP's (a surgeon's own list shows no one else's vacations, as with a Silvis vacation, so another surgeon sees no such line; the scheduler's lines carry the East marker); the person's own My vacations; the word is "vacation" - never East / Davenport / DSG for anyone but the scheduler; *home* ranges, `?public=1`, the share page, print, the calendar feeds, the digest, the ER export, e-mails and pay are unchanged (§3 Khan). The counting above does not change - those ranges already counted. What changes with **revision x** (`sql/migrations/2026-10-14-east-vacations.sql`, report-first, **applied 2026-10-19** - Faraz's `apply-east-vacations.sh`; `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"): the trigger reads the East ranges through the database's one derived reading, `silvis_derived_vacations()` - the merged range, a *home* review exempting only a range it matches exactly, the app's own reading (a stale *home* row that merely covers a day no longer exempts it). **The East person's own range is never refused** - Davenport owns it: when it leaves fewer than the minimum around, or covers a published day he holds, the scheduler is warned with the dates (Setup → East feed, the Time off East card, the coverage strip, the day editor) - never a block, a dropped range or a moved lock. | Khan 9/21, **9/22**, **9/30**, Faraz **10/9, 10/14** |
@@ -353,6 +353,51 @@ decides the Trauma Director role.
   locked 10/12 is never listed). A former derived week where he holds **backup**
   raises nothing (backup is open to him every day); the day editor's "East week -> Silvis <role> (derived)" line (the scheduler's only since item E3, 9/25), Setup > East feed's derived-weeks list (the month grid's E badge came off on 9/25, item E2) and `diagnostics.derivedYields` cover it. Locked rows
   are listed too; the report never edits the schedule — open the day to trade or reassign.
+- ⟶ **11/11 (Prompt 34, Faraz's decision): for the weeks Davenport has not published, his weeks come from the Davenport (DSG)
+  app's two lists.** That app keeps two lists of Mondays in its setup — `backupMondays` (Fierce East primary → Silvis
+  **backup** all week) and `fierceBackup` (Fierce East backup → Silvis **primary** all week) — and stamps `isBackup` /
+  `isFierceBackup` on a week from them when the week is generated; a Monday on a list with no published week is that app's own
+  pending mark. Both refreshes (Setup → East feed → Refresh from Davenport, and the daily server refresh) take the two lists
+  from the Davenport setup row they already read (GET only, no request added), keep the valid Mondays (anything else is
+  dropped and named in the refresh's warning) and cache them in the East feed cache (the `east_feed` payload of the weeks the
+  refresh writes, `data.eastLists`); nothing else of that row is cached, and Generate, the day editor and the rules read the
+  cache, never Davenport. **Precedence: a published Davenport week (flagged or not) → the DSG lists → Setup's stated weeks**
+  (`statedWeeks` stays as the manual override for a week the lists do not name); `deriveFrom` (11/2/2026) still applies.
+  **The read guard:** a missing key, a non-list, or a list that lost an upcoming week Davenport has not
+  published — unless that list still holds every week Davenport has published with that flag — keeps **both** cached lists
+  as they are, and the refresh reports NOT OK (never read as "no Fierce weeks"); so does an **empty** list while a published
+  week carries its flag, even when nothing is cached yet; a lost week that Davenport has published is
+  no loss (the published row decides). The published weeks that count are the ones the refresh has just read or re-read in
+  the last three and a half days (84 hours; §8 item 29 (c)). Setup → East feed lists his upcoming derived weeks with each one's source (published /
+  DSG list / stated), when the lists were last read, and two warnings: a Monday in both lists (read as East primary = Silvis
+  backup, the reading of a published week carrying both flags) and a listed week whose stated role differs (the list stands).
+  **As read 11/11:** 2027 East backup weeks (Silvis primary) 2/1, 3/29, 5/24, 9/13, 11/1; East primary weeks (Silvis backup)
+  1/4, 2/22, 4/19, 6/21, 7/19, 8/30, 11/29 — 1/4 and 2/1 already published by Davenport (through the week of 2/15/2027), the
+  rest from the lists. §8 item 29 has the readings taken.
+- ⟶ **11/11 (Faraz, on the Jan–Jun 2027 preview): "Give Fierce Memorial Day."** His primary week of 5/24/2027 ends Sunday
+  5/30; the Memorial Day unit runs Sat 5/29 – Mon 5/31. The lock put him on the unit's Saturday and Sunday, the unit keeps one
+  primary through all its days, and his own limit of 7 consecutive primary days refused him the Monday — a slot nobody could
+  hold, left open. **Rule (general, read once when the rules are built): a holiday unit with a day in a derived week belongs
+  to the derived surgeon in that role on all its days** — the unit's days outside the week become derived days (locks; caps
+  and run limits do not apply to a derived lock), so he holds 5/24 – 5/31, eight days, and a ninth day in a row is still
+  refused. It is the yearly holiday plan's reading since 9/30 (§5 item 5), now the generator's too. It holds for both roles
+  and both edges of a week (his backup week of 8/30/2027 keeps Labor Day Monday 9/6 as backup; a week that starts on a
+  holiday Monday takes the unit's weekend before it), never before his `deriveFrom`, and an explicit locked row still beats
+  it day by day (the yield rule above). **And only while the unit is his:** when the unit's days inside his week are all held
+  by someone else (a hand lock, a trade, a published row), the unit is that holder's and the day it would have added is not
+  his: it follows the unit's one holder, as before 11/11 — or is left open, with reasons, when that holder cannot take it (a
+  vacation of his own, a limit). When only some of those days are someone else's the added day stays his, and a lock of his
+  on it stands whatever the rest holds — the unit is then split, and the warning says so (settle it by hand).
+  `diagnostics.derivedUnitDays` and the generator's warnings name the added days and what became of each. Data:
+  `groupRules.eastFeed.derivedWeeks.keepHolidayUnit` (on unless exactly `false`).
+- ⟶ **11/11 (Faraz, on the same preview): "Don't put him on if he has a vacation listed."** His primary week of 3/29/2027
+  runs into a vacation of his. **Rule (general): a derived lock yields on a day the vacation rules refuse the
+  derived surgeon for that role** — the vacation day itself and, for primary, the day before it (the trailing-edge rule of
+  §1) — and that day is filled like any other day; a holiday unit yields whole (refused on any of its days, the lock yields
+  on all of them, so the unit goes to one other surgeon). In the week of 3/29 he holds Mon 3/29 and Tue 3/30; Wed 3/31 –
+  Sun 4/4 go to the pool. Before, the lock placed him over the vacation and the preview listed five lock violations.
+  `diagnostics.derivedVacationYields` and one warning per week name the days; the holiday plan reads the same (§5 item 5).
+  Data: `groupRules.eastFeed.derivedWeeks.yieldToVacation` (on unless exactly `false`).
 - **Outside those weeks he is in the pool and can be primary**, under his weekday pattern (via Faraz, 9/21):
 
   | Day | Where he is | Silvis eligibility |
@@ -498,8 +543,12 @@ The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DE
    `surgeonRules.s1.holidayRules.holidaysOff ["Christmas"]`, which the generator reads too, so once applied he is no
    Christmas backup candidate there either), `maxMajorHolidays` (Philip: 1 per rolling 12 months — unit START months fewer
    than 12 apart, history included, the engine's window), and **Fierce's derived week**: a unit on any day of one of his
-   derived East weeks takes him in that week's Silvis role and nobody else in it; if he is refused that slot (a vacation),
-   it stays OPEN and the plan says so.
+   derived East weeks takes him in that week's Silvis role and nobody else in it; if he is refused that slot by anything
+   but his own vacation (his holiday opt-out, a major-holiday limit), it stays OPEN and the plan says so. ⟶ **11/11 (Faraz:
+   "don't put him on if he has a vacation listed"): a vacation of his on the unit - any of its days, or for primary the day
+   before one - makes the derived week yield the whole unit, and it is planned like any other** (the plan's warning says
+   so; §3 Fierce). ⟶ **11/11 ("Give Fierce Memorial Day"): the generator reads this rule too** - every day of such a unit
+   is a derived day of his, the days outside the week included (§3 Fierce).
 6. **History:** lifetime counts come from the schedule (every stored unit somebody holds; only the years BEFORE the one
    being planned count — the planned year never, and a later year on file feeds only the `maxMajorHolidays` 12-month window
    and rule 4)
@@ -1324,3 +1373,72 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     that week, because Burchett offered Mon 1/11 and wins it on his offered bonus. Her own offers for 1/11 primary, 1/12
     primary, 1/13 backup and 1/14 primary (Setup > Periods > Enter for Sarkar) repeat the November shape in most preview runs
     (33 of 36); locking those four days before the Generate repeats it every time - Faraz decides.
+29. **Fierce's weeks from the DSG lists; the Memorial Day unit; his vacation (Faraz 11/11, Prompt 34) — DECIDED 11/11; the
+    readings taken, confirm.** (a) **The source and the precedence** are Faraz's decision (Prompt 34): a published Davenport
+    week, then the Davenport (DSG) app's two lists, then Setup's stated weeks; `deriveFrom` applies; the stated weeks (all
+    published or past now) stay as the manual override for a week the lists do not name. (b) **Where the lists are cached -
+    no schema change:** in the `east_feed` payload of the weeks each refresh writes (`data.eastLists = { eastPrimary,
+    eastBackup, readAt, dropped }`, beside `data.vacations`) - both refreshes already read that Davenport row and already
+    write those cache rows, so no table, policy or apply is involved (the alternative Faraz saw in the 11/11 report: a new
+    table with an apply). Mondays only - no name, no reason; an entry that is no Monday is counted there and named only in
+    the scheduler's refresh record. (c) **The read guard - the rule chosen** (the prompt asked for the vacation guard's
+    pattern and for the rule to be named): the lists are trusted when both came back as lists and no upcoming week is lost;
+    a list that lost a cached Monday of this week or later that Davenport has not published is accepted
+    only when that list still holds every week Davenport has published with its flag, and there is at least one - Davenport
+    writes a list and its week flags together, and on 11/11 all 60 of its published weeks matched. An EMPTY list is accepted
+    only when nothing speaks against it - no cached upcoming week of it, and no published week with its flag (the 11/11
+    review: a wiped list read over a cache holding no copy was taken as "no weeks"; a first read that NAMES weeks is taken
+    as it is). The published weeks that vouch are the ones the refresh has just fetched or a refresh re-read within 84
+    hours (the daily server run re-reads them, so two missed runs are tolerated): a cached week nobody re-reads any more
+    neither refuses an edit nor vouches for one. Otherwise both cached
+    lists are kept whole, nothing new is taken from that read, and the refresh is NOT OK and names the weeks. It catches a
+    wiped, reset or reformatted list and a list reverted past a published marked week; it cannot tell a revert that loses
+    only marks added after Davenport's last publish from a real edit. A kept list clears when Davenport publishes the week,
+    when the mark is repaired in the Davenport app, or when the week passes. (d) **Reading taken - a Monday in both lists**
+    is read as East primary (Silvis backup), the way a published week carrying both flags is read, with a warning in Setup
+    → East feed; **confirm**. (e) **"Give Fierce Memorial Day"** is read as the general rule of §3 (a holiday unit stays
+    with the derived surgeon on all its days - the holiday plan's rule since 9/30), not as a one-off lock on 5/31/2027;
+    **confirm the general reading** - its other case in 2027 is Labor Day Monday 9/6, as backup, after his backup week of
+    8/30. (f) **"Don't put him on if he has a vacation listed"** is read with the vacation's own trailing edge - the day
+    before a vacation is a primary rule (§1), so Wed 3/31 yields too, and he may still be backup that day under his
+    ordinary rules - and with a holiday unit yielding whole; **confirm**. His East backup call for the rest of that week
+    is Davenport's to cover. Both (e) and (f) are data: `groupRules.eastFeed.derivedWeeks { keepHolidayUnit,
+    yieldToVacation }`, on unless exactly `false` (Setup → Rules → Edit group rules as JSON; no key in the live blob
+    reads as on). (g) **The preview** (read-only: `scripts/preview-generate.js` 2027-01-04 → 2027-06-30, seed 7, bestOf
+    200, today 2026-11-23, the live rows of 11/11 evening; *before* = the lists ignored, *after* = the lists read the way
+    the refresh reads them, `--east-lists live`; the script cannot read offers, so the 11/23 Generate will fill
+    differently): Fierce is Silvis backup all week of 1/4, 2/22, 4/19 and 6/21 and Silvis primary all week of 2/1 and
+    5/24, the last through Memorial Day Monday 5/31 (Philip backup through the unit); the week of 3/29 is his on Monday
+    and Tuesday only. Open slots 4 → 4, the same four primaries (Tue 1/19, Tue 2/16, Wed 2/17, Thu 4/8 - none of them
+    this change's); no lock violation. Primary / backup days in the range, before → after: Khan 35 / 35 → 35 / 35;
+    Burchett 34 / 34 → 33 / 32; Acton 36 / 37 → 34 / 36; Philip 35 / 35 → 37 / 33; Fierce 34 / 37 → 35 / 42 (weighted
+    52.5 → 56; by month Feb 7 / 6 → 7 / 7, Mar 5 / 6 → 7 / 7, Apr 5 / 6 → 2 / 7, May 6 / 6 → 8 / 7, Jun 6 / 6 → 6 / 7);
+    Sarkar none either way (no window of hers in the range). With the lists but without (e) and (f) - the first run of
+    11/11 - Memorial Day Monday came out open and the week of 3/29 put him over his vacation with five lock violations.
+    The *before* run on this code equals the same run on the code before it, slot for slot: without the lists neither
+    rule changes anything. (h) **What changes for the group the moment the lists are cached:** the offer painter, the day
+    editor, trades and the Open-shifts board show those weeks as held for the role he has - while the Jan – Jun 2027 offer
+    period is still open (it closes 11/23); no published day is affected (the published schedule ends 1/3/2027, the first
+    list-only week is 2/22/2027). (i) **Status:** the app and the rules ship with the build that carries this;
+    `east-feed-refresh` v3 is prepared and waits for Faraz's deploy (`edge-functions/README.md` section 3, "2026-11-11 -
+    the East week lists") - until then, the daily 10:30 UTC run rewrites the cached weeks without the lists and an in-app
+    Refresh from Davenport puts them back (Setup says when the cache holds none, and so does a Generate preview). (j) **Open -
+    two of his derived weeks in different roles meeting on one holiday unit** (a backup week ending on the unit's weekend
+    and a primary week starting on its Monday, or the reverse; none in the 2027 lists): each week keeps its own days, with a
+    warning, and the unit then has slots nobody can hold - the generator leaves them open with reasons, as it did before
+    11/11. The yearly holiday plan reads such a unit as "primary only". **Faraz to decide** whether the engine should read
+    it the same way; a vacation of his on such a unit already yields it in both roles. (k) **After the independent review
+    (11/11)** these readings were tightened, none of them changing the preview above: a holiday unit stays with him only
+    while it is his (when all the unit's days of his week are someone else's, the day it would add is not his - §3); the lists ride in every week a refresh
+    writes, so a refresh whose main read is empty cannot drop them; an empty list is never taken beside a flagged
+    published week, even on a first read; only weeks a refresh has re-read lately vouch for a list; Generate warns when
+    the cache holds no lists. (l) **After the re-check of those fixes (11/11)**, the preview again unchanged: the vouching
+    window is 84 hours (72 sat exactly on the third daily run), and the guard's verdict follows the cache's age as well as
+    the read - after a longer gap a list that lost a week can be kept by one refresh and taken by the next, which finds
+    the weeks the first one re-read; the generator's warnings say, in one line per unit, what became of each day a unit
+    would add (his; held by another surgeon or an outside cover; left open; or his while days of the unit in his week
+    are not - a split, named); a `dayBeforeRules.trailingEdgeRoles` that is no list reads as primary only - in the
+    rules (with a warning), in the planner and in the server function.
+    **Faraz to see:** when a holiday unit is someone else's inside his week and that holder cannot take the day the unit
+    would have added, that day comes out OPEN with reasons (a unit keeps one holder - the rule before 11/11); the lock
+    never gives it to Fierce. Say so if it should fall back to him instead.

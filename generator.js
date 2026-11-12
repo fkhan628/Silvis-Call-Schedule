@@ -61,6 +61,12 @@
 //                     diagnostics.derivedYields with ONE warning per derived week
 //                     naming them; days whose holder IS the derived surgeon are
 //                     listed in diagnostics.derivedConfirmed (the week is whole).
+//                     Faraz 11/11: which days ARE derived is the context's reading
+//                     (rules.js rdDerivedUnitsAndVacations) - a holiday unit a
+//                     derived week touches is the derived surgeon's on all its
+//                     days (diagnostics.derivedUnitDays), and a day his own
+//                     vacation refuses him is no derived day at all
+//                     (diagnostics.derivedVacationYields; filled like any day).
 //   2 build units     holiday units (rules.holidayUnits) pre-empt weekend days;
 //                     leftover Fri/Sat/Sun form a reduced weekend unit; every
 //                     other day is a day unit. Tightness per unit/role is
@@ -225,6 +231,7 @@ function genRulesApi() {
       talliesFor: talliesFor, runThrough: rdRunThrough, resolveWeight: resolveWeight, monthlyCapFor: monthlyCapFor, defaultWeights: defaultWeights,
       standingEastDays: standingEastDays,
       eastConflicts: eastConflicts,
+      derivedUnitLost: derivedUnitLost, // 11/11 review: is a day a holiday unit added to a derived week still his? (genSeedLocks)
       eastVacationConflicts: eastVacationConflicts,
       offerState: offerState, offeredOn: offeredOn, outsideOffersOn: outsideOffersOn, // Prompt 14 P2; painting fix B (10/18)
       shiftWeightsOf: shiftWeightsOf, // Prompt 32 step 2: the ONE reader of groupRules.shiftAccounting.weights
@@ -692,9 +699,15 @@ function genSeedLocks(G, original) {
     G.fixedCount += (fixedP ? 1 : 0) + (fixedB ? 1 : 0);
   });
   var yieldWeeks = {};
+  // the week a yield is reported under is the DERIVED week's: a day a holiday unit added to it lies outside its Mon - Sun
+  // (11/11 review - rules.js ctx.derivedUnitBase names that week; the warning used to name a week that is not derived)
+  function yieldWeekOf(d, role, derivedId) {
+    var ub = ctx.derivedUnitBase ? ctx.derivedUnitBase[d + "|" + role + "|" + derivedId] : null;
+    return ub && ub.weekMonday ? ub.weekMonday : genMondayOf(d);
+  }
   function yieldOn(d, role, derivedId, holderId, holderRole, holderSource) {
     G.derivedYields.push({ day: d, role: role, derivedId: derivedId, holderId: holderId, holderRole: holderRole, holderSource: holderSource || null });
-    var k = genMondayOf(d) + "|" + role + "|" + derivedId;
+    var k = yieldWeekOf(d, role, derivedId) + "|" + role + "|" + derivedId;
     (yieldWeeks[k] = yieldWeeks[k] || []).push(d);
   }
   G.days.forEach(function (d) {
@@ -713,6 +726,17 @@ function genSeedLocks(G, original) {
       if (e[other + "Locked"] && e[other] === id) {
         G.warnings.push("derived lock skipped: " + d + " " + role + " derived " + id + " but he is import-locked as " + other + " that day");
         yieldOn(d, role, id, id, other, e.source);
+        return;
+      }
+      // 11/11 review: a day a holiday unit ADDED to his derived week is seeded only while the unit is his. When every unit
+      // day of his week is someone else's in this working copy - a fixed slot inside the range, a published row outside it
+      // - the unit belongs to that holder and its one-holder rule decides this day (rules.js derivedUnitLost, the one
+      // reading; eligibility asks the same of the run's schedule). Before, he was locked onto the day and the unit split.
+      if (G.R.derivedUnitLost(ctx, base, d, role, id)) {
+        var ub = ctx.derivedUnitBase[d + "|" + role + "|" + id], hb = base[ub.base[0]] || {};
+        var heldBy = hb[role] && hb[role] !== id ? hb[role] : (role === "primary" && hb.externalCover ? "ext:" + hb.externalCover : id);
+        G.warnings.push("holiday unit not kept with the derived week: " + d + " " + role + " is not seeded for " + id + " - the unit's days of his week (" + ub.base.join(", ") + ") are held by " + (heldBy === id ? "him as " + other : heldBy));
+        yieldOn(d, role, id, heldBy, heldBy === id ? other : role, hb.source || null);
         return;
       }
       e[role] = id;
@@ -2026,6 +2050,49 @@ function genDiagnostics(G, best, meta) {
     }
   });
   if (lockViolations.length) warnings.push(lockViolations.length + " locked slot(s) break a rule - kept as facts, see lockViolations");
+  // Faraz 11/11 (rules.js rdDerivedUnitsAndVacations - the context decides, this only reports): the days a holiday unit
+  // adds to a derived week (derivedUnitDays - seeded as derived locks like the week's own days) and the derived days that
+  // yield to the derived surgeon's own vacation (derivedVacationYields - no lock is seeded there; the slot is filled like
+  // any other day). In-range days only; ONE warning per unit and per yielding week + role.
+  var inRun = function (x) { return x.day >= G.start && x.day <= G.end; };
+  var derivedUnitDays = (ctx.derivedUnitDays || []).filter(inRun).map(function (x) { return { day: x.day, role: x.role, surgeonId: x.surgeonId, unit: x.unit }; });
+  var derivedVacationYields = (ctx.derivedVacationYields || []).filter(inRun).map(function (x) { return { day: x.day, role: x.role, surgeonId: x.surgeonId, reason: x.reason, unit: x.unit }; });
+  var derivedName = function (id) { var r = ctx.rosterById[id]; return (r && r.name) || id; };
+  var derivedGroups = function (list, keyOf) { var m = {}; list.forEach(function (x) { var k = keyOf(x); (m[k] = m[k] || []).push(x.day); }); return m; };
+  // 11/11 review: the two warnings state the OUTCOME, read from the final schedule - a day the unit would add that is
+  // someone else's, open or split is said so, and so is a day that yields to his vacation while a held slot (a lock, or a
+  // fixed slot of the fill-open-only mode, a claim or a trade) keeps him there.
+  var holdsIt = function (d, role, id) { return !!W[d] && W[d][role] === id; };
+  // An added day, in the end (the 11/11 re-checks): HIS (he holds it and every unit day of his week the run holds a row
+  // of is his too), SPLIT (he holds it - a derived lock, a standing lock or the ordinary fill - while one or more of
+  // those days are not his: named), held by someone else (a surgeon, or an outside cover - a row with externalCover and
+  // no primary is the cover's, never "open"), or left open (the unit's holder could not take it - the unit rule's own
+  // outcome). ONE line per unit: "kept ... stays with" only when every added day is his and nothing is split; otherwise
+  // "not kept whole" with each added day's fate - never both lines for one unit.
+  var unitGroups = derivedGroups(derivedUnitDays, function (x) { return x.unit + "|" + x.role + "|" + x.surgeonId; });
+  Object.keys(unitGroups).sort().forEach(function (k) {
+    var p = k.split("|"), role = p[1], id = p[2], whole = true;
+    var fates = unitGroups[k].map(function (d) {
+      var e = W[d] || {}, holder = e[role] || null;
+      var ub = ctx.derivedUnitBase ? ctx.derivedUnitBase[d + "|" + role + "|" + id] : null;
+      var notHis = ub && ub.base ? ub.base.filter(function (x) { return !!W[x] && W[x][role] !== id; }) : [];
+      if (holder === id && !notHis.length) return d + " is his";
+      whole = false;
+      if (holder === id) return d + " is his while " + notHis.join(", ") + " of the unit " + (notHis.length === 1 ? "is" : "are") + " not (split - settle it by hand)";
+      if (holder) return d + " held by " + derivedName(holder);
+      if (role === "primary" && e.externalCover) return d + " held by an outside cover (" + e.externalCover + ")";
+      return d + " left open";
+    });
+    if (whole) warnings.push("holiday unit kept with the derived week: " + p[0] + " stays with " + derivedName(id) + " (Silvis " + role + ") - " + unitGroups[k].join(", ") + " added to his derived days");
+    else warnings.push("holiday unit: " + p[0] + " is not kept whole with " + derivedName(id) + "'s derived week (Silvis " + role + ") - " + fates.join("; "));
+  });
+  var vacGroups = derivedGroups(derivedVacationYields, function (x) { return genMondayOf(x.day) + "|" + x.role + "|" + x.surgeonId; });
+  Object.keys(vacGroups).sort().forEach(function (k) {
+    var p = k.split("|");
+    var kept = vacGroups[k].filter(function (d) { return holdsIt(d, p[1], p[2]); }), free = vacGroups[k].filter(function (d) { return !holdsIt(d, p[1], p[2]); });
+    if (free.length) warnings.push("vacation: the derived week of " + p[0] + " (" + derivedName(p[2]) + " Silvis " + p[1] + ") does not place him on " + free.join(", ") + " - filled like any other day");
+    if (kept.length) warnings.push("vacation: the derived week of " + p[0] + " (" + derivedName(p[2]) + " Silvis " + p[1] + ") yields on " + kept.join(", ") + ", but a held slot keeps him there (lockViolations / fixedViolations list it when the vacation itself refuses that day)");
+  });
   // Prompt 12 N (9/22 evening): window weeks of every windows surgeon that overlap the range. primaries /
   // backups count her days over the whole Mon-Sun week (published days outside the range included, as
   // eligibility counts them); status: partial = some window days lie outside the range, else met / under /
@@ -2100,6 +2167,8 @@ function genDiagnostics(G, best, meta) {
     fixedViolations: fixedViolations,
     derivedYields: G.derivedYields.slice(),
     derivedConfirmed: G.derivedConfirmed.slice(),
+    derivedUnitDays: derivedUnitDays,             // Faraz 11/11: [{ day, role, surgeonId, unit }]
+    derivedVacationYields: derivedVacationYields, // Faraz 11/11: [{ day, role, surgeonId, reason, unit }]
     holidayUnits: holidayUnitsOut,
     weekendUnits: weekendUnitsOut,
     impliedTargets: G.targets.implied,

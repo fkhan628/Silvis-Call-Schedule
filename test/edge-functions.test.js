@@ -47,6 +47,13 @@ const RETRY_DEPLOYED_SHA256 = {
   "send-notification": "03ba467016d57ae29cbdb6a3c408d16bb97cffdd85f2d98593e7dc75e0631a21",
 };
 const sha256Of = (rel) => require("crypto").createHash("sha256").update(fs.readFileSync(path.join(ROOT, rel))).digest("hex");
+// 2026-11-11 (Prompt 34, the East week lists - README section 3, "2026-11-11 - the East week lists"): east-feed-refresh's source
+// changed, so it is no longer the deployed v2 (RETRY_DEPLOYED_SHA256 above stays the record of v2's bytes - the README quotes it,
+// and the deploy script's backup must equal it). Its header's retry wording flipped to deployed, as the flip rule says, and the
+// new paragraph reads "v3 on base v2 - prepared, NOT deployed". This is the PREPARED v3, raw bytes: the file deploy-east-lists.sh
+// stages (its NEW hash) - a source change moves this pin and that script's hash together. It becomes the deployed pin at the
+// deploy's record step.
+const EAST_LISTS_PREPARED_SHA256 = "0291ed8628defb4abc666b8093cdbf0705a6c3ef0011a9eba655eeedcbda461c";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -2713,7 +2720,9 @@ const ER_API = ["EAST_AHEAD_DAYS", "EAST_VACATIONS_HORIZON_DAYS", "efPad2", "efF
   "attachVacationsToWeeks", "keepCachedVacations", "planVacationCache", "eastVacations", "toEastFeedRows", "coverageOf",
   "eastResolveFakId", "eastFetchWeeks", "eastFeedPerson", "eastVacationCodes", "eastVacationReadGuard", "eastGuardText",
   "eastMainPlan", "eastExtraPlan", "eastCacheAfter", "eastRangeRows", "eastNewRanges", "eastShortDays", "eastTrailingRoles",
-  "eastHeldSpan", "eastHeldDays", "centralYmd", "eastRefreshResult", "eastRefreshSummary"];
+  "eastHeldSpan", "eastHeldDays", "centralYmd", "eastRefreshResult", "eastRefreshSummary",
+  // Prompt 34 (11/11): the East week lists - east-feed.js's, function for function
+  "efIsMonday", "eastListsFromBlob", "eastCachedLists", "eastListsGuard", "eastListsGuardText", "eastListsPlan", "eastAttachLists"];
 let ER = null;
 check("A2: east-feed-refresh carries a plain-JS '@eastRefresh' mirror block defining the ported east-feed.js pieces (UTC), the codes, the A7 guard, the plans, the warning days, centralYmd and the summary", () => {
   assert.ok(erSrc.length > 0, "edge-functions/east-feed-refresh/index.ts exists");
@@ -2831,6 +2840,56 @@ async function erParityChild() {
     // 6. a roster code -> its Davenport id
     [[{ id: "s6", name: "FAK" }, { id: "s2", name: "mab" }], [{ id: "s9" }, null, { id: "s3", name: 5 }, { id: "s6", name: "Fak" }], [], null]
       .forEach((ro) => ["FAK", "fak", "MAB", "", null, "XYZ"].forEach((c) => same("eastResolveFakId", [ro, c])));
+    // 6b. Prompt 34 (11/11): the East week lists - a Monday test on every day, the parse (valid Mondays, junk, missing /
+    //     non-array keys), the cached copy (newest readAt, forecast rows, malformed copies), the guard (missing, empty,
+    //     lost weeks, published weeks, the flags, today), its words, the plan (trusted / kept, the window's floor), the attach
+    for (let k = -60; k <= 1930; k++) same("efIsMonday", [ymd(k)]);
+    [null, "", "2026-02-30", "2026-13-01", 20261013, {}, "2026-1-5", "0099-01-05", "2028-02-29"].forEach((v) => same("efIsMonday", [v]));
+    const mondayish = () => { const t = int(12); if (t === 0) return ymd(int(1500)); if (t === 1) return pick([null, 42, "junk", "2026-02-30", { a: 1 }, "x".repeat(60), ["2026-01-05"]]); return mon(int(260)); };
+    const listOf = (max) => { const out = [], k = int(max + 1); for (let q = 0; q < k; q++) out.push(mondayish()); return out; };
+    const blobOf = () => {
+      const b = { surgeons: [] }, t = int(10);
+      if (t !== 0) b.backupMondays = pick([listOf(8), listOf(8), listOf(8), [], null, "2026-01-05", { a: 1 }]);
+      if (t !== 1) b.fierceBackup = pick([listOf(8), listOf(8), listOf(8), [], null, 7]);
+      return pick([b, b, b, b, b, null, "x"]);
+    };
+    const copyOf = () => pick([undefined, undefined, null, "x", { eastPrimary: listOf(5), eastBackup: listOf(5), readAt: "2026-1" + int(3) + "-0" + (1 + int(9)) + "T10:30:0" + int(10) + ".000Z", dropped: int(3) },
+      { eastPrimary: listOf(3), eastBackup: "x", readAt: "2026-11-01T00:00:00.000Z" }, { eastPrimary: [], eastBackup: [] }, { eastPrimary: listOf(2), eastBackup: listOf(2), readAt: "" }]);
+    const listWeeks = (key) => {
+      const out = [], k = int(14), base = int(200);
+      for (let q = 0; q < k; q++) {
+        const d = { dayCall: "s2" };
+        if (rnd() < 0.25) d.isBackup = true;
+        if (rnd() < 0.25) d.isFierceBackup = pick([true, true, false]);
+        if (rnd() < 0.05) d.isForecast = true;
+        const c = copyOf(); if (c !== undefined) d.eastLists = c;
+        const r = { data: d }; r[key] = mon(base + q + (rnd() < 0.15 ? int(5) : 0));
+        if (key === "week_monday") r.fetched_at = "2026-11-0" + (1 + int(9)) + "T10:30:00+00:00";
+        out.push(r);
+      }
+      if (rnd() < 0.1) out.push(null);
+      if (rnd() < 0.05) { const r = { data: {} }; r[key] = "bad"; out.push(r); }
+      return out;
+    };
+    for (let t = 0; t < 600; t++) {
+      const blob = blobOf();
+      same("eastListsFromBlob", [blob]);
+      const read = ef.eastListsFromBlob(clone(blob));
+      const cachedRows = listWeeks("week_monday"), fetched = listWeeks("weekMonday"), today = ymd(int(1500)), from = pick([mon(int(260)), mon(int(260)), null, "bad"]);
+      same("eastCachedLists", [pick([cachedRows, fetched, null])]);
+      const cachedCopy = ef.eastCachedLists(cachedRows);
+      // a read that holds most of what the cache holds, so the lost-week / healthy branches are reached, not only the key problems
+      const near = cachedCopy ? { eastPrimary: cachedCopy.eastPrimary.filter(() => rnd() < 0.8).concat(rnd() < 0.3 ? [mon(int(260))] : []).sort(), eastBackup: cachedCopy.eastBackup.filter(() => rnd() < 0.8).sort(), problems: [], dropped: [] } : read;
+      const reads = [read, near, near, null, "x", { eastPrimary: [], eastBackup: [], problems: [], dropped: [] }, { eastPrimary: null, eastBackup: [], problems: [], dropped: [] }];
+      const known = pick([fetched.concat(cachedRows), cachedRows, fetched, null]);
+      const todays = [today, today, null, "bad", "2026-02-30"];
+      const rd = pick(reads), td = pick(todays), cc = pick([cachedCopy, cachedCopy, null]);
+      same("eastListsGuard", [rd, cc, known, td]);
+      let g = null; try { g = ef.eastListsGuard(clone(rd), clone(cc), clone(known), td); } catch (e) { g = null; }
+      ((g && g.problems) || []).concat([null, { list: "backupMondays", why: "missing" }, { list: "fierceBackup", why: "not-array" }, { list: "x", why: "lost-week" }]).forEach((p) => same("eastListsGuardText", [p]));
+      same("eastListsPlan", [pick([{ weeks: fetched, fetchedAt: "2026-11-23T10:30:08.000Z", lists: pick([read, near, near, undefined, null]) }, null, {}]), cachedRows, td, from]);
+      same("eastAttachLists", [fetched, pick([cachedCopy, { eastPrimary: listOf(3).filter((x) => typeof x === "string"), eastBackup: listOf(3).filter((x) => typeof x === "string"), readAt: "2026-11-23T10:30:08.000Z", dropped: 1 }, null, "x", { eastPrimary: [] }])]);
+    }
     // 7. the three Davenport reads: the same requests in the same order and the same result (fetchedAt aside), failures alike
     const RAW = ef.EAST_PROJECT.url + "/rest/v1/";
     const respond = (sc, p) => {
@@ -2842,12 +2901,14 @@ async function erParityChild() {
       }
       if (table === "call_schedule_data") {
         const surgeons = [{ id: "s6", name: "FAK" }, { id: "s2", name: "MAB" }, { id: "s3", name: "bda" }];
+        // Prompt 34: the same blob carries the two week lists (sc.lists: both, one, junk, a non-array, or none) - the
+        // result's `lists` must come out the same from both readers, whatever the roster variant
         if (sc.roster === "missing") return { status: 200, body: [] };
-        if (sc.roster === "string") return { status: 200, body: [{ data: J({ surgeons }) }] };
+        if (sc.roster === "string") return { status: 200, body: [{ data: J(Object.assign({ surgeons }, sc.lists || {})) }] };
         if (sc.roster === "badjson") return { status: 200, body: [{ data: "{bad" }] };
-        if (sc.roster === "none") return { status: 200, body: [{ data: {} }] };
+        if (sc.roster === "none") return { status: 200, body: [{ data: Object.assign({}, sc.lists || {}) }] };
         if (sc.roster === "fail") return { status: 503, body: "down" };
-        return { status: 200, body: [{ data: { surgeons } }] };
+        return { status: 200, body: [{ data: Object.assign({ surgeons }, sc.lists || {}) }] };
       }
       if (table === "time_off") {
         if (sc.timeOffStatus === "nonarray") return { status: 200, body: { x: 1 } };
@@ -2864,6 +2925,7 @@ async function erParityChild() {
         weeksStatus: pick([200, 200, 200, 200, 200, 500]),
         timeOffStatus: pick([200, 200, 200, 200, 500, "nonarray"]),
         timeOff: Array.from({ length: int(6) }, () => toRow()).filter(Boolean),
+        lists: pick([undefined, { backupMondays: listOf(8), fierceBackup: listOf(8) }, { backupMondays: listOf(8), fierceBackup: listOf(8) }, { backupMondays: listOf(5) }, { backupMondays: "2026-01-05", fierceBackup: [] }, { backupMondays: null, fierceBackup: { a: 1 } }]),
       };
       const from = pick([mon(base), mon(base), "2026-1-5"]), to = mon(base + len);
       const opts = pick([undefined, {}, { vacationCodes: ["FAK"] }, { codes: ["FAK"], vacationCodes: ["fak", "XYZ"] }, { codes: ["mab"] },
@@ -2950,7 +3012,12 @@ check("A2: eastFeedPerson / eastVacationCodes = the in-app refresh's vacationCod
 const RULES_SRC = read("rules.js");
 check("A2: eastTrailingRoles = rules.js buildContext's reading (groupRules.dayBeforeRules.trailingEdgeRoles, default [\"primary\"])", () => {
   if (!ER) throw new Error("the @eastRefresh block did not load");
-  assert.ok(RULES_SRC.includes("  var dayBefore = groupRules.dayBeforeRules || {};") && RULES_SRC.includes("    trailingEdgeRoles: dayBefore.trailingEdgeRoles || [\"primary\"],"), "rules.js still reads the trailing-edge roles this way");
+  // (11/11, the re-check of Prompt 34's fixes: a value that is no list reads as the default on BOTH sides - rules.js reads
+  // it once, in buildContext, and the planner in helpers.js the same way)
+  assert.ok(RULES_SRC.includes("  var dayBefore = groupRules.dayBeforeRules || {};") && RULES_SRC.includes("    trailingEdgeRoles: Array.isArray(dayBefore.trailingEdgeRoles) ? dayBefore.trailingEdgeRoles : [\"primary\"],"), "rules.js still reads the trailing-edge roles this way");
+  assert.ok(read("helpers.js").includes("  var trailing = groupRules.dayBeforeRules && Array.isArray(groupRules.dayBeforeRules.trailingEdgeRoles) ? groupRules.dayBeforeRules.trailingEdgeRoles : [\"primary\"];"), "...and so does the planner (helpers.js)");
+  ["backup", "primary", 7, true, { primary: true }, null].forEach((bad) => assert.deepStrictEqual(ER.eastTrailingRoles({ dayBeforeRules: { trailingEdgeRoles: bad } }), ["primary"], "a value that is no list (" + JSON.stringify(bad) + ") reads as the default"));
+  assert.deepStrictEqual(ER.eastTrailingRoles(null), ["primary"]);
   assert.deepStrictEqual(ER.eastTrailingRoles(undefined), ["primary"]);
   assert.deepStrictEqual(ER.eastTrailingRoles({}), ["primary"]);
   assert.deepStrictEqual(ER.eastTrailingRoles({ dayBeforeRules: {} }), ["primary"]);
@@ -3122,9 +3189,12 @@ function erWorld(over) {
       { person_id: "s2", kind: "vacation", start_date: "2026-10-26", end_date: "2026-10-30" },   // not asked
       { person_id: "s6", kind: "vacation", start_date: "2028-06-05", end_date: "2028-06-09" },   // past the read's horizon
     ],
+    // Prompt 34: the two week lists in Davenport's blob, unsorted - 2026-10-05 is the one published week carrying isBackup
+    // (ER_DAV_WEEKS k = 40); 11/30, 1/4 and 12/14 lie past the published weeks (through 2026-11-09). null = the blob has neither key.
+    davLists: { backupMondays: ["2026-11-30", "2026-10-05", "2027-01-04"], fierceBackup: ["2026-12-14"] },
     fail: {},
   }, over || {});
-  ["blob", "cache", "forecast", "reviews", "schedule", "shortDays", "davWeeks", "davRoster", "davTimeOff"].forEach((k) => { w[k] = erClone(w[k]); });
+  ["blob", "cache", "forecast", "reviews", "schedule", "shortDays", "davWeeks", "davRoster", "davTimeOff", "davLists"].forEach((k) => { w[k] = erClone(w[k]); });
   w.calls = []; w.logs = []; w.upserts = []; w.audit = []; w.rpc = []; w.feedDeletes = []; w.jsonReads = 0; w.davWeeksReads = 0;
   return w;
 }
@@ -3171,7 +3241,7 @@ function erFetch(w) {
         const lim = q.getAll("week_monday").map((x) => x.slice(4));
         return out(erClone(w.davWeeks.filter((r) => r.week_monday >= lim[0] && r.week_monday <= lim[1])));
       }
-      if (table === "call_schedule_data") { if (f["dav:roster"]) return out({ message: "boom" }, f["dav:roster"]); return out([{ data: { surgeons: erClone(w.davRoster) } }]); }
+      if (table === "call_schedule_data") { if (f["dav:roster"]) return out({ message: "boom" }, f["dav:roster"]); return out([{ data: Object.assign({ surgeons: erClone(w.davRoster) }, w.davLists ? erClone(w.davLists) : {}) }]); }
       if (table === "time_off") {
         if (f["dav:time_off"] === "empty") return out([]);
         if (f["dav:time_off"]) return out({ message: "boom" }, f["dav:time_off"]);
@@ -3233,7 +3303,7 @@ async function erCall(w, opts) {
 }
 // What the IN-APP refresh writes for the same world, re-stated with east-feed.js from the app's own lines (pinned below).
 async function erClientExpect(w0) {
-  const w = erWorld(erClone({ blob: w0.blob, cache: w0.cache, forecast: w0.forecast, reviews: w0.reviews, schedule: w0.schedule, shortDays: w0.shortDays, davWeeks: w0.davWeeks, davRoster: w0.davRoster, davTimeOff: w0.davTimeOff, fail: w0.fail }));
+  const w = erWorld(erClone({ blob: w0.blob, cache: w0.cache, forecast: w0.forecast, reviews: w0.reviews, schedule: w0.schedule, shortDays: w0.shortDays, davWeeks: w0.davWeeks, davRoster: w0.davRoster, davTimeOff: w0.davTimeOff, davLists: w0.davLists, fail: w0.fail }));
   const win = ef.eastRefreshWindows("2026-10-16");
   const codes = new Function("surgeons", "surgeonRules", "eastVacationPerson", APP_CODES_LINES + "\nreturn vacationCodes;")(w.blob.roster, w.blob.surgeonRules, appEastVacationPerson);
   const RealDate = global.Date, realFetch = globalThis.fetch;
@@ -3249,15 +3319,20 @@ async function erClientExpect(w0) {
     const vacGuard = ef.eastVacationReadGuard(feed, cacheBefore, codes, win.main.from);
     const vacTrusted = vacGuard.ok && !!feed.vacations;
     const plan = vacTrusted ? ef.planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: win.main.from }) : { weeks: ef.keepCachedVacations(feed.weeks, cacheBefore), rewritten: [], carriers: 0 };
-    const weekRows = ef.toEastFeedRows(plan.weeks).map((r) => ({ ...r, fetched_at: feed.fetchedAt }));
+    // pin moved deliberately 11/11: Prompt 34 - the in-app refresh plans the East week lists over the same cache (east-feed.js
+    // eastListsPlan, the Central today, the window's first Monday) and attaches them to the weeks it writes; the
+    // re-statement follows the app's lines (pinned below)
+    const listsPlan = ef.eastListsPlan(feed, cacheBefore, "2026-10-16", win.main.from);
+    const weekRows = ef.toEastFeedRows(ef.eastAttachLists(plan.weeks, listsPlan.lists)).map((r) => ({ ...r, fetched_at: feed.fetchedAt }));
     const rewrittenRows = plan.rewritten.map((x) => ({ week_monday: x.weekMonday, data: x.data, fetched_at: x.fetchedAt || feed.fetchedAt }));
     const mainRows = weekRows.concat(rewrittenRows);
     const cacheRows = erClone(w.cache);
     mainRows.forEach((r) => { const i = cacheRows.findIndex((x) => x.week_monday === r.week_monday); if (i >= 0) cacheRows[i] = erClone(r); else cacheRows.push(erClone(r)); });
     const more = await ef.fetchEastWeeks(win.extra.from, win.extra.to, {});
     const sel = ef.eastExtraWeeks(feed.weeks, more.weeks, win);
-    const extraRows = ef.toEastFeedRows(ef.keepCachedVacations(sel.weeks, cacheRows)).map((r) => ({ ...r, fetched_at: more.fetchedAt }));
-    return { win, codes, feed, plan, mainRows, coverage: ef.coverageOf(feed.weeks), extraRows, sel, davCalls: w.calls.map((c) => c.at + c.search) };
+    // pin moved deliberately 11/11 (review A): the extra leg's weeks carry the lists too - the app's line (pinned below)
+    const extraRows = ef.toEastFeedRows(ef.eastAttachLists(ef.keepCachedVacations(sel.weeks, cacheRows), listsPlan.lists)).map((r) => ({ ...r, fetched_at: more.fetchedAt }));
+    return { win, codes, feed, plan, listsPlan, mainRows, coverage: ef.coverageOf(feed.weeks), extraRows, sel, davCalls: w.calls.map((c) => c.at + c.search) };
   } finally { global.Date = RealDate; globalThis.fetch = realFetch; }
 }
 const erAt = (w) => w.calls.map((c) => c.at);
@@ -3434,6 +3509,313 @@ acheck("A2 handler: dryRun reads everything (Silvis, Davenport's main and extra 
   assert.strictEqual(r.body.ok, true);
   assert.ok(/^Server refresh of the East feed, DRY RUN \(nothing written\)/.test(r.body.summary), r.body.summary);
   assert.strictEqual(r.body.audit, undefined, "no audit row in a dry run");
+  // Prompt 34: a dry run reads the lists too and says what the weeks would carry
+  assert.deepStrictEqual(r.body.lists, { trusted: true, eastPrimary: 3, eastBackup: 1, readAt: ER_NOW, written: true, dropped: [], guard: [] }, "P34 dryRun: the lists leg is planned and named, nothing written");
+  assert.ok(/East week lists read: 3 East-primary \+ 1 East-backup week\(s\)/.test(r.body.summary), r.body.summary);
+});
+
+/* ---- Prompt 34 (Faraz 11/11): the East week lists in the server refresh ----
+   The roster blob the run already reads holds backupMondays (Fierce East PRIMARY -> Silvis backup) and fierceBackup (Fierce
+   East BACKUP -> Silvis primary). The run caches them in the main-window weeks' payload (data.eastLists) behind the lists
+   guard; the rows equal the in-app refresh's (erClientExpect runs the app's own lines). */
+const ER_LISTS_COPY = { eastPrimary: ["2026-10-05", "2026-11-30", "2027-01-04"], eastBackup: ["2026-12-14"], readAt: ER_NOW, dropped: 0 };
+const ER_LISTS_OLD = { eastPrimary: ["2026-10-05", "2026-11-30", "2027-01-04"], eastBackup: ["2026-12-14"], readAt: "2026-10-15T10:30:07.000Z", dropped: 0 };
+// the default cache with the lists an earlier refresh left on its main-window weeks (2026-09-07 on)
+const erCacheWithLists = (copy) => erWorld().cache.map((r) => (r.week_monday >= "2026-09-07" ? Object.assign({}, r, { data: Object.assign({}, r.data, { eastLists: erClone(copy) }) }) : r));
+acheck("P34 handler: a live run takes the two lists from the roster blob it reads anyway (no request added: the Davenport calls are unchanged), keeps valid Mondays from the main window's Monday on, sorted, and writes them into EVERY week it writes (data.eastLists, the run's time) - the main upsert's and, since the 11/11 review, the extra leg's; the rows equal the in-app refresh's; the answer, the audit detail and the summary name the lists leg", async () => {
+  const w = erWorld(), exp = await erClientExpect(w);
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  assert.deepStrictEqual(erAt(w), ER_LIVE_ORDER, "the order is the old one: no request was added for the lists");
+  assert.strictEqual(w.calls.filter((c) => c.at === "GET dav:call_schedule_data").length, 2, "the roster blob is read once per leg, as before");
+  assert.ok(w.calls.filter((c) => c.at === "GET dav:call_schedule_data").every((c) => c.search === "?id=eq.main&select=data"), "the same blob read");
+  assert.deepStrictEqual(w.upserts[0], exp.mainRows, "the main upsert = the in-app refresh's rows, lists included");
+  assert.strictEqual(exp.listsPlan.trusted, true, "fixture: the in-app plan trusts the read");
+  assert.ok(w.upserts[0].length === 9 && w.upserts[0].every((x) => JSON.stringify(x.data.eastLists) === JSON.stringify(ER_LISTS_COPY)), "every main-window week carries the lists: " + JSON.stringify(w.upserts[0][0].data.eastLists));
+  // pin moved deliberately 11/11 (review A): the weeks outside the main window carry the SAME copy (they carried none) -
+  // a week that slides out of the main window is rewritten by this leg, and the copy must not leave the cache with it
+  assert.deepStrictEqual(w.upserts[1], exp.extraRows, "the extra upsert = the in-app refresh's rows");
+  assert.ok(w.upserts[1].length > 0 && w.upserts[1].every((x) => JSON.stringify(x.data.eastLists) === JSON.stringify(ER_LISTS_COPY)), "every week outside the main window carries the same copy: " + JSON.stringify(w.upserts[1][0] && w.upserts[1][0].data.eastLists));
+  assert.ok(w.cache.every((x) => JSON.stringify(x.data.eastLists) === JSON.stringify(ER_LISTS_COPY)), "after the run every cached week the refresh can reach holds one copy");
+  assert.deepStrictEqual(r.body.lists, { trusted: true, eastPrimary: 3, eastBackup: 1, readAt: ER_NOW, written: true, dropped: [], guard: [] });
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.errors));
+  const a = w.audit[0];
+  assert.deepStrictEqual(a.detail.lists, r.body.lists, "the audit detail carries the lists leg");
+  assert.ok(/East week lists read: 3 East-primary \+ 1 East-backup week\(s\)/.test(a.detail.summary), a.detail.summary);
+  // what the client derives from the cache this run left: the published isBackup week, then the three listed weeks
+  const derived = ef.deriveFierceWeeks(w.cache.map((x) => ({ weekMonday: x.week_monday, data: x.data })), { deriveFrom: "2026-09-28" });
+  assert.deepStrictEqual(derived.map((x) => x.weekMonday + ":" + x.silvisRole + ":" + x.source), ["2026-10-05:backup:feed", "2026-11-30:backup:list", "2026-12-14:primary:list", "2027-01-04:backup:list"], "the app derives the listed weeks from the cache alone");
+});
+acheck("P34 handler (the read guard): the cache holds the lists; the blob comes back without a key, with a key that is no list, with both lists empty, or with a list that lost an upcoming week AND a published one - the weeks written keep the CACHED lists with the time of the last good read (never 'no Fierce weeks'), the run is ok:false and says kept; the vacation leg, the reset and the extra leg go on as before; the rows still equal the in-app refresh's", async () => {
+  const bads = [
+    [{ fierceBackup: ["2026-12-14"] }, "missing", /backupMondays list did not come back/],
+    [{ backupMondays: ["2026-10-05", "2026-11-30", "2027-01-04"], fierceBackup: "2026-12-14" }, "not-array", /fierceBackup is not a list/],
+    [{ backupMondays: [], fierceBackup: [] }, "empty-while-cached", /backupMondays came back empty/],
+    [{ backupMondays: ["2026-11-30"], fierceBackup: ["2026-12-14"] }, "lost-week", /backupMondays lost 2027-01-04; it also lacks the published 2026-10-05/],
+    [null, "missing", /did not come back/],
+  ];
+  for (const [davLists, why, text] of bads) {
+    const w = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), davLists }), exp = await erClientExpect(w);
+    const r = await erCall(w, {});
+    const label = "bad lists " + JSON.stringify(davLists);
+    assert.strictEqual(r.status, 200, label + ": " + r.text.slice(0, 300));
+    erCommon(w, r, label);
+    assert.deepStrictEqual(erAt(w), ER_LIVE_ORDER, label + ": the run goes on - the weeks, the prune, the reset, the extra leg, the warning, the audit row");
+    assert.deepStrictEqual(w.upserts[0], exp.mainRows, label + ": the main upsert = the in-app refresh's rows");
+    assert.ok(w.upserts[0].every((x) => JSON.stringify(x.data.eastLists) === JSON.stringify(ER_LISTS_OLD)), label + ": every week written keeps the cached lists and their readAt: " + JSON.stringify(w.upserts[0][0].data.eastLists));
+    assert.strictEqual(r.body.ok, false, label + ": not ok");
+    assert.ok(r.body.lists.trusted === false && r.body.lists.guard.some((p) => p.why === why) && r.body.lists.readAt === ER_LISTS_OLD.readAt && r.body.lists.eastPrimary === 3, label + ": " + JSON.stringify(r.body.lists));
+    assert.ok(r.body.errors.some((e) => text.test(e) && /the cached lists are kept/.test(e) && e.length <= 200), label + ": the error names it and says kept: " + JSON.stringify(r.body.errors));
+    assert.strictEqual(r.body.vacations.trusted, true, label + ": the vacation leg is judged on its own");
+    assert.strictEqual(w.rpc.filter((x) => x[0] === "reset").length, 1, label + ": the review reset still runs (the lists do not gate it)");
+    assert.ok(/East week lists NOT trusted - cached lists kept/.test(r.body.summary) && /NOT OK/.test(r.body.summary), label + ": " + r.body.summary);
+    assert.strictEqual(w.audit.length === 1 && w.audit[0].detail.ok, false, label + ": the audit row says ok:false");
+    // the client still derives the cached weeks
+    const derived = ef.deriveFierceWeeks(w.cache.map((x) => ({ weekMonday: x.week_monday, data: x.data })), { deriveFrom: "2026-09-28" });
+    assert.deepStrictEqual(derived.map((x) => x.weekMonday), ["2026-10-05", "2026-11-30", "2026-12-14", "2027-01-04"], label + ": the derived weeks are unchanged");
+  }
+  // nothing cached and an untrusted read: no key is written (unknown stays unknown) and the run says none cached
+  const w0 = erWorld({ davLists: null }), exp0 = await erClientExpect(w0), r0 = await erCall(w0, {});
+  assert.deepStrictEqual(w0.upserts[0], exp0.mainRows, "no cache: the rows = the in-app refresh's");
+  assert.ok(w0.upserts[0].every((x) => x.data.eastLists === undefined), "no cache and no trusted read: no key written");
+  assert.ok(r0.body.ok === false && r0.body.lists.trusted === false && r0.body.lists.readAt === null && r0.body.lists.written === false && /cached lists kept \(none cached\)/.test(r0.body.summary), JSON.stringify(r0.body.lists) + " " + r0.body.summary);
+});
+acheck("P34 handler: a list that lost an upcoming week but still holds every week Davenport published with that flag is a real edit - taken (ok true); a week added is taken; an entry that is no Monday is dropped, named in the answer and the audit row (never in the cache, which keeps a count), and does not fail the run", async () => {
+  const w = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), davLists: { backupMondays: ["2026-10-05", "2026-11-30", "2027-02-22"], fierceBackup: ["2026-12-14", "2026-12-15", 7] } }), exp = await erClientExpect(w);
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  assert.deepStrictEqual(w.upserts[0], exp.mainRows, "the rows = the in-app refresh's");
+  const copy = { eastPrimary: ["2026-10-05", "2026-11-30", "2027-02-22"], eastBackup: ["2026-12-14"], readAt: ER_NOW, dropped: 2 };
+  assert.ok(w.upserts[0].every((x) => JSON.stringify(x.data.eastLists) === JSON.stringify(copy)), "1/4 left the list and 2/22 joined it; 10/5, published with isBackup, is still there: taken - " + JSON.stringify(w.upserts[0][0].data.eastLists));
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.errors));
+  assert.deepStrictEqual(r.body.lists, { trusted: true, eastPrimary: 3, eastBackup: 1, readAt: ER_NOW, written: true, dropped: [{ list: "fierceBackup", value: "2026-12-15" }, { list: "fierceBackup", value: "7" }], guard: [] });
+  assert.ok(/East week lists read: 3 East-primary \+ 1 East-backup week\(s\), 2 entries dropped/.test(r.body.summary), r.body.summary);
+  assert.ok(JSON.stringify(w.cache).indexOf("2026-12-15") < 0, "the dropped entry's text never reaches the cache");
+  assert.deepStrictEqual(w.audit[0].detail.lists.dropped, r.body.lists.dropped, "the audit row names the dropped entries");
+  // review C (11/11): the answer and the audit row name at most 20 dropped entries; the cache keeps the full count
+  const junk = Array.from({ length: 25 }, (_, i) => "junk-" + i);
+  const wj = erWorld({ davLists: { backupMondays: ["2026-10-05", "2026-11-30", "2027-01-04"].concat(junk), fierceBackup: ["2026-12-14"] } });
+  const rj = await erCall(wj, {});
+  assert.deepStrictEqual([rj.body.ok, rj.body.lists.dropped.length, rj.body.lists.dropped[19], wj.audit[0].detail.lists.dropped.length, wj.upserts[0][0].data.eastLists.dropped], [true, 20, { list: "backupMondays", value: "junk-19" }, 20, 25], "25 dropped entries: 20 named, the cache counts 25");
+  assert.ok(/, 20 or more entries dropped/.test(rj.body.summary), "the summary cannot know the count past the 20 it names - it says so: " + rj.body.summary);
+});
+acheck("P34 handler: Davenport returns no published week at all (neither leg) - no week is written, so the cached lists stay where they are (the answer and the summary say not cached); the blob read failing stops the run as before (502, nothing written)", async () => {
+  const w = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), davWeeks: [] }), exp = await erClientExpect(w);
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  assert.strictEqual(r.body.weeks, 0, "no published week came back");
+  assert.deepStrictEqual(w.upserts[0] || [], exp.mainRows, "what is written (older cached weeks whose vacation list moved) = the in-app refresh's rows");
+  assert.ok((w.upserts[0] || []).every((x) => !x.data.eastLists || x.data.eastLists.readAt === ER_LISTS_OLD.readAt), "a cached week rewritten for its vacations keeps the copy it had - this run's read is written nowhere");
+  assert.ok(r.body.lists.trusted === true && r.body.lists.written === false, "the lists were read but no week row holds them this run: " + JSON.stringify(r.body.lists));
+  assert.ok(/East week lists read: 3 East-primary \+ 1 East-backup week\(s\) - NOT cached \(no published week row to hold them\)/.test(r.body.summary), "review A (11/11): the summary says the read was not cached: " + r.body.summary);
+  assert.deepStrictEqual(ef.eastCachedLists(w.cache), ER_LISTS_OLD, "the cache still holds the earlier copy");
+  const w2 = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), fail: { "dav:roster": 503 } });
+  const r2 = await erCall(w2, {});
+  assert.strictEqual(r2.status, 502, "a failed blob read stops the run");
+  assert.deepStrictEqual([w2.upserts.length, ef.eastCachedLists(w2.cache)], [0, ER_LISTS_OLD], "nothing written; the cached lists stand");
+  // the re-check (11/11): the MAIN upsert refused - the run stops (502, "nothing was written") and must not say written
+  const w3 = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), fail: { "upsert#1": 500 } });
+  const r3 = await erCall(w3, {});
+  assert.strictEqual(r3.status, 502, "a refused main upsert stops the run: " + r3.text.slice(0, 200));
+  assert.ok(r3.body && r3.body.lists && r3.body.lists.trusted === true && r3.body.lists.written === false, "...and its answer does not claim the lists were written: " + JSON.stringify(r3.body && r3.body.lists));
+  assert.deepStrictEqual(ef.eastCachedLists(w3.cache), ER_LISTS_OLD, "...the cache keeps the earlier copy");
+  // ...and the other way round (found by a mutant that never set written after the main upsert and still passed): the main
+  // upsert went through and the EXTRA one is refused - the main-window weeks hold this run's lists, so written is true
+  const w4 = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), fail: { "upsert#2": 500 } });
+  const r4 = await erCall(w4, {});
+  assert.ok(r4.status === 200 && r4.body.ok === false && r4.body.extra.weeks === 0 && /outside the window were NOT cached/.test(r4.body.error), "fixture: the extra upsert was refused: " + r4.text.slice(0, 300));
+  assert.ok(r4.body.lists.trusted === true && r4.body.lists.written === true, "the main-window weeks hold the lists - written: " + JSON.stringify(r4.body.lists));
+  assert.deepStrictEqual(ef.eastCachedLists(w4.cache), ER_LISTS_COPY, "...and the cache holds this run's copy");
+  assert.ok(!/NOT cached \(no published week row/.test(r4.body.summary), "...the summary does not say the lists were not cached: " + r4.body.summary);
+  // a DRY run says what would be, from the main leg alone when the extra leg plans nothing (the reviewer of round 3:
+  // every dry-run case also had extra-leg rows, so the main leg's own expression was pinned by nothing but the byte pin):
+  // no week at all -> false; main-window weeks while the extra read fails -> true; nothing is written either way
+  const w5 = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), davWeeks: [] });
+  const r5 = await erCall(w5, { body: { dryRun: true } });
+  assert.ok(r5.status === 200 && r5.body.dryRun === true && r5.body.lists.trusted === true && r5.body.lists.written === false, "a dry run with no week to hold the lists: written false - " + r5.text.slice(0, 300));
+  const w6 = erWorld({ cache: erCacheWithLists(ER_LISTS_OLD), fail: { "dav:weeks#2": 500 } });
+  const r6 = await erCall(w6, { body: { dryRun: true } });
+  assert.ok(r6.status === 200 && r6.body.dryRun === true && r6.body.extra.error && r6.body.lists.trusted === true && r6.body.lists.written === true, "a dry run whose extra read fails: the main-window weeks would hold the lists - written true: " + r6.text.slice(0, 300));
+  assert.deepStrictEqual([w5.upserts.length, w6.upserts.length, w5.audit.length, w6.audit.length], [0, 0, 0, 0], "a dry run writes nothing");
+});
+acheck("P34 handler (review A, 11/11): Davenport's newest published week has slid out of the main window - the main read is empty and the extra leg re-reads the very weeks that carry the lists. The copy stays in the cache: the extra leg's weeks carry it too (a trusted read: this run's lists, written true; an untrusted one: the cached copy as it was) - the answer never says 'read' or 'kept' about lists the run has just stripped; a dry run plans the same", async () => {
+  // Davenport's weeks end 2026-08-31, before the main window (2026-09-07 on). The cache ends there too; its weeks 2026-08-03 ..
+  // 08-31 carry the copy an earlier refresh left (they were its main-window weeks then)
+  const davWeeks = ER_DAV_WEEKS.filter((x) => x.week_monday <= "2026-08-31");
+  const cache = () => erWorld().cache.filter((x) => x.week_monday <= "2026-08-31").map((x) => (x.week_monday >= "2026-08-03" ? Object.assign({}, x, { data: Object.assign({}, x.data, { eastLists: erClone(ER_LISTS_OLD) }) }) : x));
+  const listed = (w) => ef.deriveFierceWeeks(w.cache.map((x) => ({ weekMonday: x.week_monday, data: x.data })), { deriveFrom: "2026-09-28" }).map((x) => x.weekMonday + ":" + x.silvisRole + ":" + x.source);
+  const LISTED = ["2026-10-05:backup:list", "2026-11-30:backup:list", "2026-12-14:primary:list", "2027-01-04:backup:list"];
+  // a trusted read
+  const w = erWorld({ cache: cache(), davWeeks }), exp = await erClientExpect(w);
+  assert.deepStrictEqual(listed(w), LISTED, "fixture: before the run the four listed weeks derive from the cached copy");
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  erCommon(w, r, "zero main weeks");
+  assert.strictEqual(r.body.weeks, 0, "fixture: the main read is empty");
+  assert.ok(exp.extraRows.length > 5 && ["2026-08-03", "2026-08-31"].every((m) => exp.extraRows.some((x) => x.week_monday === m)), "fixture: the extra leg rewrites the weeks that carried the copy");
+  assert.deepStrictEqual(w.upserts[w.upserts.length - 1], exp.extraRows, "the extra upsert = the in-app refresh's rows");
+  assert.ok(w.upserts[w.upserts.length - 1].every((x) => JSON.stringify(x.data.eastLists) === JSON.stringify(ER_LISTS_COPY)), "every week of the extra leg carries this run's lists");
+  assert.deepStrictEqual(ef.eastCachedLists(w.cache), ER_LISTS_COPY, "the cache holds the lists after the run (it held none before the fix)");
+  assert.deepStrictEqual(listed(w), LISTED, "the listed weeks still derive");
+  assert.deepStrictEqual(r.body.lists, { trusted: true, eastPrimary: 3, eastBackup: 1, readAt: ER_NOW, written: true, dropped: [], guard: [] }, "written: the extra leg's weeks hold them");
+  assert.ok(/East week lists read: 3 East-primary \+ 1 East-backup week\(s\)/.test(r.body.summary) && !/NOT cached/.test(r.body.summary), r.body.summary);
+  assert.deepStrictEqual(w.audit[0].detail.lists, r.body.lists, "the audit detail says the same");
+  // an untrusted read (a key missing): the cached copy is KEPT - on the weeks the extra leg rewrites too
+  const wb = erWorld({ cache: cache(), davWeeks, davLists: { fierceBackup: ["2026-12-14"] } }), expb = await erClientExpect(wb);
+  const rb = await erCall(wb, {});
+  assert.strictEqual(rb.status, 200, rb.text.slice(0, 300));
+  assert.deepStrictEqual(wb.upserts[wb.upserts.length - 1], expb.extraRows, "untrusted: the extra upsert = the in-app refresh's rows");
+  assert.deepStrictEqual(ef.eastCachedLists(wb.cache), ER_LISTS_OLD, "untrusted: the cache still holds the copy of the last good read, its own readAt");
+  assert.deepStrictEqual(listed(wb), LISTED, "untrusted: the listed weeks still derive - 'the cached lists are kept' is true");
+  assert.ok(rb.body.ok === false && rb.body.lists.trusted === false && rb.body.lists.readAt === ER_LISTS_OLD.readAt && rb.body.lists.written === true && rb.body.errors.some((e) => /the cached lists are kept/.test(e)), JSON.stringify(rb.body.lists) + " " + JSON.stringify(rb.body.errors));
+  // the extra UPSERT refused (the re-check, 11/11): nothing this run wrote holds the lists - written stays false
+  const nUp = w.upserts.length;
+  const wu = erWorld({ cache: cache(), davWeeks, fail: { ["upsert#" + nUp]: 500 } });
+  const ru = await erCall(wu, {});
+  assert.ok(ru.status === 200 && ru.body.lists.trusted === true && ru.body.lists.written === false && ru.body.ok === false && /NOT cached \(no published week row to hold them\)/.test(ru.body.summary), "a refused extra upsert: read but not written - " + JSON.stringify(ru.body.lists) + " " + ru.body.summary);
+  assert.deepStrictEqual(ef.eastCachedLists(wu.cache), ER_LISTS_OLD, "a refused extra upsert: the earlier copy stands");
+  // the extra leg failing leaves the cache as it was (the copies stand where they were)
+  const wc = erWorld({ cache: cache(), davWeeks, fail: { "dav:weeks#2": 503 } });
+  const rc = await erCall(wc, {});
+  assert.ok(rc.status === 200 && rc.body.lists.written === false && rc.body.ok === false, "a failed extra leg: nothing holds this run's lists - " + JSON.stringify(rc.body.lists));
+  assert.deepStrictEqual(ef.eastCachedLists(wc.cache), ER_LISTS_OLD, "a failed extra leg: the earlier copy stands");
+  // a dry run plans the same and writes nothing
+  const wd = erWorld({ cache: cache(), davWeeks });
+  const rd = await erCall(wd, { body: { dryRun: true } });
+  assert.ok(rd.status === 200 && rd.body.lists.trusted === true && rd.body.lists.written === true && wd.upserts.length === 0, "dry run: the lists would be written with the extra leg's weeks; nothing is - " + JSON.stringify(rd.body.lists));
+});
+acheck("P34 handler (review C, 11/11) - the run's own floor and today reach the lists plan: a Monday before the main window's first Monday is not cached and that first Monday is (the floor is win.main.from, >=); a cached Monday of a PAST week that left the list is no loss (today is the run's Central date); an empty list over a cache with no copy is not taken while a published week carries its flag", async () => {
+  // (1) the floor
+  const win = ef.eastRefreshWindows("2026-10-16"), FLOOR = win.main.from, BEFORE = erMon(30);
+  assert.ok(BEFORE < FLOOR && FLOOR < "2026-10-05" && ef.efIsMonday(BEFORE) && ef.efIsMonday(FLOOR), "fixture: " + BEFORE + " lies before the main window's first Monday " + FLOOR);
+  const w = erWorld({ davLists: { backupMondays: ["2026-11-30", BEFORE, "2026-10-05", "2027-01-04"], fierceBackup: ["2026-12-14", FLOOR] } });
+  const r = await erCall(w, {});
+  assert.strictEqual(r.status, 200, r.text.slice(0, 300));
+  const copy = { eastPrimary: ["2026-10-05", "2026-11-30", "2027-01-04"], eastBackup: [FLOOR, "2026-12-14"], readAt: ER_NOW, dropped: 0 };
+  assert.ok(w.upserts[0].length > 0 && w.upserts[0].every((x) => JSON.stringify(x.data.eastLists) === JSON.stringify(copy)), "the copy starts AT the main window's first Monday: " + JSON.stringify(w.upserts[0][0].data.eastLists));
+  assert.deepStrictEqual([r.body.lists.eastPrimary, r.body.lists.eastBackup, r.body.ok], [3, 2, true], JSON.stringify(r.body.lists));
+  // (2) today: the cached copy names 2026-09-28 - a week Davenport never published, already past on 10/16 - and the list
+  // no longer has it (nor the published, flagged 10/05). A past week is no loss, so the read is taken; were today not the
+  // run's date, 9/28 would count as lost and the list, lacking the published 10/05, would be refused
+  const past = "2026-09-28", noPast = (rows) => rows.filter((x) => x.week_monday !== past);
+  const cachePast = noPast(erCacheWithLists({ eastPrimary: [past, "2026-11-30"], eastBackup: ["2026-12-14"], readAt: "2026-10-15T10:30:07.000Z", dropped: 0 }));
+  const w2 = erWorld({ cache: cachePast, davWeeks: noPast(ER_DAV_WEEKS), davLists: { backupMondays: ["2026-11-30"], fierceBackup: ["2026-12-14"] } });
+  const r2 = await erCall(w2, {});
+  assert.ok(r2.status === 200 && r2.body.lists.trusted === true && r2.body.ok === true, "a past week that left the list is no loss - the read is taken: " + JSON.stringify(r2.body.lists) + " " + JSON.stringify(r2.body.errors));
+  assert.deepStrictEqual(ef.eastCachedLists(w2.cache), { eastPrimary: ["2026-11-30"], eastBackup: ["2026-12-14"], readAt: ER_NOW, dropped: 0 }, "...and cached");
+  // (3) a cache with no copy and an EMPTY backupMondays while the published 10/05 carries isBackup: not taken, no key written
+  const w3 = erWorld({ davLists: { backupMondays: [], fierceBackup: ["2026-12-14"] } }), exp3 = await erClientExpect(w3);
+  const r3 = await erCall(w3, {});
+  assert.deepStrictEqual(w3.upserts[0], exp3.mainRows, "cold cache, an empty list: the rows = the in-app refresh's");
+  assert.ok(w3.cache.every((x) => x.data.eastLists === undefined), "nothing is cached - unknown stays unknown, never two lists with one of them wiped");
+  assert.ok(r3.body.ok === false && r3.body.lists.trusted === false && r3.body.lists.readAt === null && r3.body.lists.guard.length === 1 && r3.body.lists.guard[0].why === "empty-while-published" && r3.body.errors.some((e) => /backupMondays came back empty although 1 published week\(s\) carry its flag \(2026-10-05\)/.test(e)), JSON.stringify(r3.body.lists) + " " + JSON.stringify(r3.body.errors));
+  assert.ok(/East week lists NOT trusted - cached lists kept \(none cached\)/.test(r3.body.summary), r3.body.summary);
+});
+acheck("P34 handler (the re-check, 11/11): the verdict follows the cache's AGE as well as the read - after a gap longer than the vouching window (84 h) a list that lost an upcoming week is KEPT although it still names every published week carrying its flag, when that week lies outside the main window and its cached row is six days old (nothing this run read vouches for the list); the run's extra leg re-reads that week, so the NEXT run takes the very same read. With the row re-read a day ago the first run takes it", async () => {
+  // Davenport: the ONE isBackup week is 2026-08-03 - before the main window (2026-09-07 on). backupMondays still names it
+  // but no longer the cached, unpublished 2026-11-30 (a real edit there: the mark was taken off)
+  const davWeeks = ER_DAV_WEEKS.map((x) => Object.assign({}, x, { data: Object.assign({}, x.data, { isBackup: x.week_monday === "2026-08-03" }) }));
+  const davLists = { backupMondays: ["2027-01-04", "2026-08-03"], fierceBackup: ["2026-12-14"] };
+  const OLD = { eastPrimary: ["2026-11-30", "2027-01-04"], eastBackup: ["2026-12-14"], readAt: "2026-10-10T12:00:07.000Z", dropped: 0 };
+  const NEW = { eastPrimary: ["2027-01-04"], eastBackup: ["2026-12-14"], readAt: ER_NOW, dropped: 0 };
+  // the cache as the refresh of 10/10 12:00 left it (every row stamped then - 142.5 h before this run): the flag on 8/3
+  const cacheAt = (iso) => erCacheWithLists(OLD).map((x) => Object.assign({}, x, { fetched_at: iso, data: Object.assign({}, x.data, { isBackup: x.week_monday === "2026-08-03" }) }));
+  const w = erWorld({ cache: cacheAt("2026-10-10T12:00:00+00:00"), davWeeks, davLists });
+  const r1 = await erCall(w, {});
+  assert.strictEqual(r1.status, 200, r1.text.slice(0, 300));
+  assert.deepStrictEqual([r1.body.lists.trusted, r1.body.lists.guard], [false, [{ list: "backupMondays", why: "lost-week", weeks: ["2026-11-30"], unmatched: [], published: 0 }]], "run 1: kept - no week this run can vouch for carries the flag: " + JSON.stringify(r1.body.lists));
+  assert.ok(r1.body.ok === false && r1.body.errors.some((e) => e === "Davenport's backupMondays lost 2026-11-30; no published week to check it against - the cached lists are kept"), "run 1 is not ok and says which week: " + JSON.stringify(r1.body.errors));
+  assert.deepStrictEqual(ef.eastCachedLists(w.cache), OLD, "run 1: the cached lists stand as they were, their own readAt");
+  const aug = w.cache.find((x) => x.week_monday === "2026-08-03");
+  assert.ok(aug.data.isBackup === true && Date.parse(aug.fetched_at) === Date.parse(ER_NOW), "run 1's extra leg re-read the flagged week (stamped by this run): " + aug.fetched_at);
+  const r2 = await erCall(w, {});
+  assert.strictEqual(r2.status, 200, r2.text.slice(0, 300));
+  assert.deepStrictEqual([r2.body.lists.trusted, r2.body.lists.guard, r2.body.lists.written], [true, [], true], "run 2: the same read is taken - the flagged week was re-read by run 1: " + JSON.stringify(r2.body.lists));
+  assert.ok(!r2.body.errors.some((e) => /backupMondays|fierceBackup/.test(e)), "run 2 names no list problem: " + JSON.stringify(r2.body.errors));
+  assert.deepStrictEqual(ef.eastCachedLists(w.cache), NEW, "run 2: the cache holds the edited list (11/30 gone)");
+  // the same world with the cache one day old: taken at once
+  const wf = erWorld({ cache: cacheAt("2026-10-15T10:30:07+00:00"), davWeeks, davLists });
+  const rf = await erCall(wf, {});
+  assert.deepStrictEqual([rf.status, rf.body.lists.trusted, rf.body.lists.guard], [200, true, []], "a cache re-read yesterday: the read is taken on the first run");
+  assert.deepStrictEqual(ef.eastCachedLists(wf.cache), NEW, "...and cached");
+});
+check("P34 guard = the in-app refresh's: the @eastRefresh eastListsGuard / eastListsGuardText / eastListsPlan equal east-feed.js's on the named cases (a missing key, a non-array, an empty list, a lost week with and without the published weeks still listed, a published week, a forecast row, the first read) - the generated battery above runs them under six time zones", () => {
+  if (!ER) throw new Error("the @eastRefresh block did not load");
+  const row = (m, data) => ({ week_monday: m, data: data || {} });
+  const pub = [row("2026-11-09", { isBackup: true }), row("2026-12-07", { isFierceBackup: true }), row("2027-01-04", { isBackup: true }), row("2027-02-01", { isFierceBackup: true }), row("2027-02-15")];
+  const cached = { eastPrimary: ["2027-02-22", "2027-04-19"], eastBackup: ["2027-03-29", "2027-05-24"], readAt: "2026-11-12T10:30:08.000Z", dropped: 0 };
+  const full = { eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22", "2027-04-19"], eastBackup: ["2026-12-07", "2027-02-01", "2027-03-29", "2027-05-24"], problems: [], dropped: [] };
+  const reads = [full, null, Object.assign({}, full, { eastPrimary: null, problems: [{ list: "backupMondays", why: "missing" }] }), Object.assign({}, full, { eastBackup: null, problems: [{ list: "fierceBackup", why: "not-array" }] }),
+    Object.assign({}, full, { eastPrimary: [] }), Object.assign({}, full, { eastPrimary: [], eastBackup: [] }), Object.assign({}, full, { eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] }),
+    Object.assign({}, full, { eastPrimary: ["2026-11-09", "2027-02-22"] }), Object.assign({}, full, { eastBackup: ["2027-02-01", "2027-03-29"] })];
+  // review A (11/11): the vouched rows - worlds whose rows carry a fetched_at (re-read yesterday, three weeks ago, one a
+  // year ago whose Monday has left the list, one that is no time), judged with and without the refresh's own time
+  const stamped = (rows, iso) => rows.map((r) => Object.assign({}, r, { fetched_at: iso }));
+  const staleFlag = Object.assign(row("2025-10-06", { isBackup: true }), { fetched_at: "2025-11-20T10:30:00+00:00" });
+  const worlds = [pub, pub.concat([row("2027-02-22", { isBackup: false })]), pub.concat([row("2027-02-22", { isForecast: true, isBackup: true })]), pub.map((r) => row(r.week_monday, Object.assign({}, r.data, { isBackup: false }))), [], null,
+    stamped(pub, "2026-11-22T10:30:09+00:00"), stamped(pub, "2026-11-01T10:30:00+00:00"), pub.concat([staleFlag]), stamped(pub, "2026-11-22T10:30:09+00:00").concat([staleFlag]), stamped(pub, "soon"), pub.map((r) => Object.assign({ fetchedAt: "2026-11-01T10:30:00.000Z" }, r)),
+    // the re-check (11/11): the window's own edges against the plan's time 2026-11-23T10:30:08Z (84 h back = 11-19T22:30:08Z) -
+    // exactly on it, one millisecond past it, two days and four days back (inside / outside), a day ahead, no time at all - and a
+    // stale row that PUBLISHES a week a read has lost (it is no loss whoever publishes it). A mirror whose window, comparison or
+    // reading of an odd stamp drifts from east-feed.js gives another verdict on one of these.
+    stamped(pub, "2026-11-19T22:30:08.000Z"), stamped(pub, "2026-11-19T22:30:07.999Z"), stamped(pub, "2026-11-21T10:30:08.000Z"), stamped(pub, "2026-11-19T10:30:08.000Z"),
+    stamped(pub, "2026-11-24T10:30:08.000Z"), stamped(pub, null), pub.concat([Object.assign(row("2027-04-19", {}), { fetched_at: "2025-01-01T00:00:00+00:00" })])];
+  const NOWS = [undefined, "2026-11-23T10:30:08.000Z", "2027-03-01T10:30:08.000Z", "no time"];
+  let n = 0, kept = 0, byNow = 0, floorKept = 0;
+  reads.forEach((rd) => worlds.forEach((w) => [cached, null].forEach((c) => ["2026-11-23", "2027-03-01", null].forEach((today) => {
+    NOWS.forEach((now) => {
+      const a = ER.eastListsGuard(erClone(rd), erClone(c), erClone(w), today, now), b = ef.eastListsGuard(erClone(rd), erClone(c), erClone(w), today, now);
+      assert.deepStrictEqual(a, b, "guard " + JSON.stringify([rd && rd.eastPrimary, c && 1, w && w.length, today, now]));
+      a.problems.forEach((p) => { assert.strictEqual(ER.eastListsGuardText(p), ef.eastListsGuardText(p), "words for " + p.why); assert.ok(ER.eastListsGuardText(p).length <= 200 && /kept/.test(ER.eastListsGuardText(p)), "the words say kept, <= 200 characters"); });
+      n++; if (!a.ok) kept++;
+      if (now !== undefined && a.ok !== ER.eastListsGuard(erClone(rd), erClone(c), erClone(w), today).ok) byNow++;
+    });
+    // the plan: the cache rows as the database returns them (the copy on each, a fetched_at where the world has one)
+    const feed = { weeks: (w || []).filter((r) => r.fetched_at === undefined && r.fetchedAt === undefined).map((r) => ({ weekMonday: r.week_monday, data: r.data })), fetchedAt: "2026-11-23T10:30:08.000Z", lists: rd };
+    const cacheRows = (w || pub).map((r) => Object.assign({}, r, { data: c ? Object.assign({}, r.data, { eastLists: c }) : r.data }));
+    // review C (11/11): the floor at a listed Monday too (2026-11-09 is on the list: >= keeps it, > would drop it), and none
+    ["2026-10-26", "2026-11-09", null].forEach((from) => {
+      const pa = ER.eastListsPlan(erClone(feed), erClone(cacheRows), today, from), pb = ef.eastListsPlan(erClone(feed), erClone(cacheRows), today, from);
+      assert.deepStrictEqual(pa, pb, "plan " + JSON.stringify([rd && rd.eastPrimary, c && 1, w && w.length, today, from]));
+      if (pa.trusted && from === "2026-11-09" && rd.eastPrimary.indexOf("2026-11-09") >= 0) { assert.strictEqual(pa.lists.eastPrimary[0], "2026-11-09", "the floor's own Monday is kept"); floorKept++; }
+    });
+  }))));
+  assert.ok(floorKept > 20, "the floor's own Monday was on the list in " + floorKept + " trusted plans");
+  assert.ok(n === reads.length * worlds.length * 2 * 3 * NOWS.length && n === 4104 && kept > 600 && kept < n, "the cases reach both verdicts (" + kept + " kept of " + n + ")");
+  // the edges, said out loud on BOTH sides (a slip made on both sides alike is no parity failure)
+  const lossy = Object.assign({}, full, { eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] }), N1 = "2026-11-23T10:30:08.000Z";
+  const verdict = (side, stamp) => side.eastListsGuard(erClone(lossy), erClone(cached), stamped(pub, stamp), "2026-11-23", N1).ok;
+  [ER, ef].forEach((side) => assert.deepStrictEqual([verdict(side, "2026-11-19T22:30:08.000Z"), verdict(side, "2026-11-19T22:30:07.999Z"), verdict(side, "2026-11-20T10:30:00.000Z"), verdict(side, "2026-11-19T10:30:08.000Z"), verdict(side, "2026-11-24T10:30:08.000Z"), verdict(side, null)],
+    [true, false, true, false, true, false], "the vouching window on " + (side === ER ? "the mirror" : "east-feed.js") + ": 84 h inclusive, three days back inside, four outside, a stamp ahead counts, none does not"));
+  assert.ok(byNow > 10, "the refresh's time changes the verdict in some cases (" + byNow + ") - the vouched-rows rule is exercised on both sides");
+  assert.strictEqual(ER.eastListsGuardText(null), ef.eastListsGuardText(null));
+  // review C (11/11): two copies carrying one readAt - both sides take the first row's (a mirror-only > / >= slip is seen)
+  const sameAt = [row("2027-01-04", { eastLists: { eastPrimary: ["2027-02-22"], eastBackup: [], readAt: "2026-11-12T10:30:08.000Z" } }), row("2027-01-11", { eastLists: { eastPrimary: ["2027-04-19"], eastBackup: [], readAt: "2026-11-12T10:30:08.000Z" } })];
+  assert.deepStrictEqual([ER.eastCachedLists(erClone(sameAt)), ER.eastCachedLists(erClone(sameAt)).eastPrimary], [ef.eastCachedLists(erClone(sameAt)), ["2027-02-22"]], "the cached copy: one readAt on two rows - the first row's, on both sides");
+});
+check("P34 edge-functions/README.md: the east-feed-refresh row names v3 as PREPARED, NOT deployed; section 3's '2026-11-11 - the East week lists' says why, the change (the lists from the blob already read - no request added; the seven mirrored functions; data.eastLists on the main upsert; the lists block in the answer and the audit row; the guard that keeps both cached lists), the order (the client first, the deploy the same day - v2 drops the key each morning until then), the deploy script and what it checks (the live copy = the deployed v2's bytes), the dry-run proof (the secret from Vault, never typed) and the rollback; section 5's sample and section 7's rollback name it; ASCII", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i = s3.indexOf("### 2026-11-11 - the East week lists (east-feed-refresh v3; Prompt 34)");
+  assert.ok(i > s3.indexOf("### 2026-10-26 - the PGRST303 retry") && s3.indexOf("### 2026-10-26 - the PGRST303 retry") > 0, "the subsection follows the retry's");
+  const rec = s3.slice(i), flat = rec.replace(/\s+/g, " ");
+  assert.ok(flat.includes("*Status: PREPARED, NOT deployed - `east-feed-refresh` v3 on base v2.") && !/Status: DEPLOYED/.test(flat), "Status: PREPARED, NOT deployed");
+  ["`backupMondays` (Fierce East primary -> Silvis backup all week)", "`fierceBackup` (Fierce East backup -> Silvis primary all week)", "no request is added",
+    "`efIsMonday`, `eastListsFromBlob`, `eastCachedLists`, `eastListsGuard`, `eastListsGuardText`, `eastListsPlan` and `eastAttachLists`",
+    "`data.eastLists = { eastPrimary, eastBackup, readAt, dropped }`", "`lists { trusted, eastPrimary, eastBackup, readAt, written, dropped, guard }`",
+    "keeps BOTH cached lists as they are", "Never \"no Fierce weeks\"", "No new secret, table, RPC or cron change", "The order: the client first",
+    "v2's 10:30 UTC upsert rewrites the main-window payloads WITHOUT the key", "`deploy-east-lists.sh`", "asks for DEPLOY in capital letters",
+    "the secret is read from Vault, never typed", "Rollback: section 7"].forEach((s) => assert.ok(flat.includes(s), "the record says: " + s));
+  assert.ok(flat.includes("`" + RETRY_DEPLOYED_SHA256["east-feed-refresh"].slice(0, 12) + "...`"), "the record names the deployed v2's hash - the live copy the script's backup must equal");
+  assert.ok(rec.includes("select net.http_post(\n  url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',") && rec.includes("  body := '{\"dryRun\":true}'::jsonb,\n  timeout_milliseconds := 60000);") && rec.includes("content::jsonb->'lists' as lists"), "the dry-run proof: the Prompt 31 statement, read back with the lists in view");
+  assert.ok(rec.includes("coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')") && !/eyJ|sb_secret_/.test(rec), "the secret comes from Vault; no key or secret value in the record");
+  ER_API.slice(-7).forEach((k) => assert.ok(flat.includes("`" + k + "`"), "the record names " + k));
+  const efRow = readme.split("\n").find((l) => l.startsWith("| `east-feed-refresh` |")) || "";
+  assert.ok(efRow.includes("v3 (the East week lists - Prompt 34, section 3's \"2026-11-11 - the East week lists\") PREPARED, NOT deployed | never |"), "the row names v3, prepared");
+  const s5 = readme.slice(readme.indexOf("### east-feed-refresh (Prompt 31 Part A"), readme.indexOf("## 6."));
+  assert.ok(s5.includes("\"lists\":{\"trusted\":true,\"eastPrimary\":N,\"eastBackup\":N"), "section 5's dry-run sample names the lists block");
+  const s7 = readme.slice(readme.indexOf("## 7."));
+  assert.ok(s7.includes("The East week lists (section 3, \"2026-11-11 - the East week lists\"; `east-feed-refresh` v3)") && s7.includes("backup-east-lists-<UTC stamp>") && s7.includes("The backup is the deployed v2 (the retry stays)"), "section 7: the rollback of the lists deploy");
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
 });
 acheck("A2 handler (critic A7): Davenport answers NO vacation for FAK while the cache holds his ranges in the window (an RLS-blocked read looks the same) - the cache keeps every list (the in-app plan would have cleared them), no review is reset, the weeks and the extra leg still refresh, ok:false names FAK; a cached range only BEFORE the window is a real 'none' (trusted, the reset runs)", async () => {
   const w = erWorld({ fail: { "dav:time_off": "empty" } }), exp = await erClientExpect(w);
@@ -3545,7 +3927,7 @@ acheck("A2 handler: the failure that stops a run leads errors and error even aft
   assert.ok(/^fetched 9 week\(s\) but couldn't cache them/.test(r.body.error), "the stop leads: " + r.body.error);
   assert.ok(/FAK/.test(r.body.errors[1]), "the guard problem follows: " + r.body.errors[1]);
   assert.strictEqual(w.audit.length, 1);
-  const boom = (js) => { const at = "const main = eastMainPlan(feed, cacheBefore, codes, win);"; assert.ok(js.indexOf(at) > 0, "the patch point exists"); return js.replace(at, "if (feed) throw new TypeError(\"boom-test\");\n" + at); };
+  const boom = (js) => { const at = "const main = eastMainPlan(feed, cacheBefore, codes, win, today);"; assert.ok(js.indexOf(at) > 0, "the patch point exists"); return js.replace(at, "if (feed) throw new TypeError(\"boom-test\");\n" + at); };
   const w2 = erWorld();
   const r2 = await erCall(w2, { patch: boom });
   assert.strictEqual(r2.status, 500, r2.text.slice(0, 300));
@@ -3626,12 +4008,18 @@ check("A2 source pins: the handler's FIRST statement is the gate (CRON_SECRET fr
   // (2026-10-20 01:42:59 UTC; the upload and the re-download were ff717c93077ac711379238d9d3bd73fa7acfb156b5b2b177f683081a7b3ac3f0) and
   // names the pending v2 on base v1; this source is that v2 (RETRY_DEPLOYED_SHA256, at the top of this file) - pin kept deliberately
   // 10/27 (the deploy's record step): v2 is deployed (2026-10-27 03:30:13 UTC), so the header keeps its as-deployed wording
+  // pin moved deliberately 11/11 (Prompt 34, the East week lists - the next source change): the flip rule ran - the header now
+  // records v2 as deployed (2026-10-27 03:30:13 UTC; its bytes are RETRY_DEPLOYED_SHA256's, kept as the record) and names the
+  // pending v3 on base v2; this source is that prepared v3 (EAST_LISTS_PREPARED_SHA256, at the top of this file)
   {
-    const top = erSrc.split("\n").slice(0, 16).join("\n");
+    const top = erSrc.split("\n").slice(0, 30).join("\n");
     assert.ok(!/NOT DEPLOYED/.test(top) && /^\/\/ Deployed 2026-10-20 01:42:59 UTC by Faraz \(v1\)\. /m.test(top), "the header records v1 as deployed 2026-10-20 01:42:59 UTC");
-    assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v2 on base v1 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(top), "the header keeps its as-deployed wording for the retry (v2 on base v1 - prepared, NOT deployed; v2 deployed 2026-10-27 03:30:13 UTC) until the next source change");
+    assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz; edge-functions\/README\.md$/m.test(top) && !/v2 on base v1 - prepared/.test(top), "the header records the retry (v2) as deployed 2026-10-27 03:30:13 UTC - the wording flipped at this source change");
+    assert.ok(/^\/\/ THE EAST WEEK LISTS \(Prompt 34, Faraz 2026-11-11; v3 on base v2 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(top) && /^\/\/ section 3 "2026-11-11 - the East week lists"\)/m.test(top), "the header names the pending v3 on base v2 - prepared, NOT deployed - and its README record");
+    assert.strictEqual(top.split("prepared, NOT deployed").length - 1, 1, "exactly one pending change in the header");
   }
-  assert.strictEqual(sha256Of("edge-functions/east-feed-refresh/index.ts"), RETRY_DEPLOYED_SHA256["east-feed-refresh"], "edge-functions/east-feed-refresh/index.ts must stay byte-identical to the deployed v2 (the PGRST303 retry, deployed 2026-10-27 03:30:13 UTC - the staged file and the re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
+  assert.notStrictEqual(sha256Of("edge-functions/east-feed-refresh/index.ts"), RETRY_DEPLOYED_SHA256["east-feed-refresh"], "the source is no longer the deployed v2 (it carries the East week lists)");
+  assert.strictEqual(sha256Of("edge-functions/east-feed-refresh/index.ts"), EAST_LISTS_PREPARED_SHA256, "edge-functions/east-feed-refresh/index.ts must stay byte-identical to the PREPARED v3 (the East week lists - the file deploy-east-lists.sh stages) until its deploy and record - a source change moves this pin and the deploy script's hash together");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(erSrc), "the source is ASCII");
 });
 check("A2 pins on the in-app refresh this function mirrors (index-source.html refreshEastFeed) - the lines the re-statement above runs: the main read with the codes, the plan (planVacationCache or keepCachedVacations), the two row maps, the merge-duplicates upsert, coverageOf + the forecast prune, the reload, the reset floor fromMon, the extra leg (fetchEastWeeks over eastWin.extra, eastExtraWeeks, keepCachedVacations over the reloaded cache) - and their order", () => {
@@ -3647,7 +4035,11 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
     // Davenport (this function's order), never the state's eastFeedRows
     "const vacGuard = eastVacationReadGuard(feed, cacheBefore, vacationCodes, fromMon);",
     "const plan = vacTrusted ? planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, cacheBefore), rewritten: [], carriers: 0 };",
-    "const weekRows = toEastFeedRows(plan.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));",
+    // pin moved deliberately 11/11: Prompt 34 - the East week lists are planned over the same cacheBefore (east-feed.js
+    // eastListsPlan with the Central today and the window's first Monday - behaviour-equal to this function's) and
+    // attached to the weeks written, before toEastFeedRows
+    "const listsPlan = eastListsPlan(feed, cacheBefore, todayCentral(), fromMon);",
+    "const weekRows = toEastFeedRows(eastAttachLists(plan.weeks, listsPlan.lists)).map(r => ({ ...r, fetched_at: feed.fetchedAt }));",
     "const rewrittenRows = plan.rewritten.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: w.fetchedAt || feed.fetchedAt }));",
     "Prefer: \"resolution=merge-duplicates,return=minimal\" }, body: JSON.stringify(rows) });",
     "const publishedCoverage = coverageOf(feed.weeks);",
@@ -3655,7 +4047,9 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
     "const reloaded = await loadEastTables();",
     "const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});",
     "const sel = eastExtraWeeks(feed.weeks, more.weeks, eastWin);",
-    "const extraRows = toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => ({ ...r, fetched_at: more.fetchedAt }));",
+    // pin moved deliberately 11/11 (review A): the extra leg attaches the lists too - a run whose main read is empty would
+    // otherwise rewrite every week that carried them without the key
+    "const extraRows = toEastFeedRows(eastAttachLists(keepCachedVacations(sel.weeks, cacheRows), listsPlan.lists)).map(r => ({ ...r, fetched_at: more.fetchedAt }));",
   ];
   let at = -1;
   lines.forEach((l) => { const k = f.indexOf(l); assert.ok(k > at, "in order: " + l); at = k; });
@@ -3673,7 +4067,7 @@ check("A2 pins on the in-app refresh this function mirrors (index-source.html re
   const rr = appSrc.slice(appSrc.indexOf("  const runEastReviewResets = async ({ trusted, cacheRows, vacationCodes, fromMon, feed }) => {"), appSrc.indexOf("  const saveEastOverride = async"));
   assert.ok(rr.length > 200 && rr.includes("const rpc = await derivedVacDb.resetStale(fromMon);") && rr.includes("st.review.end >= fromMon") && rr.includes("if (!trusted) return"), "the in-app reset floor is fromMon (= the main window's Monday, the server's p_from), the RPC first, a trusted read only");
   const resetAt = f.indexOf("const rr = await runEastReviewResets({ trusted: vacTrusted, cacheRows, vacationCodes, fromMon, feed });");
-  assert.ok(resetAt > f.indexOf(lines[9]) && resetAt < f.indexOf(lines[10]), "the reset sits after the reload and before the extra leg");
+  assert.ok(resetAt > f.indexOf("const reloaded = await loadEastTables();") && resetAt < f.indexOf("const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});") && f.indexOf("const reloaded = await loadEastTables();") > 0, "the reset sits after the reload and before the extra leg");
 });
 // A4 (Cowork's 10/16 4:40 AM review of the deploy record): Faraz's east-feed-refresh lines are concrete - every supabase line carries the
 // Silvis-linked workdir ON THE LINE (a CLI line without --workdir walks up from the current folder to the Davenport-linked one; a $wd set
@@ -3695,7 +4089,10 @@ check("A2 edge-functions/README.md: the east-feed-refresh row (v1 deployed 2026-
   // pin moved deliberately 10/20: the deploy's record step - the row says v1 deployed 2026-10-20 01:42:59 UTC and the job active (jobid 8)
   // pin moved deliberately 10/20 (the first-run record step): the row says the first scheduled run (2026-10-20 10:30 UTC) and its audit row's ok
   const efRow = (readme.match(/^\| `east-feed-refresh` \| `edge-functions\/east-feed-refresh\/index\.ts` \|[^\n]*\| never \|$/m) || [""])[0];
-  assert.ok(efRow.includes("Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC") && /jobid 8/.test(efRow) && !/NOT deployed|no cron job/.test(efRow), "the table row: " + efRow.slice(0, 200));
+  // pin moved deliberately 11/11 (Prompt 34): the row also names the pending v3 (the East week lists) as PREPARED, NOT deployed -
+  // what must never read "NOT deployed" is the part about v1 and v2, before it
+  const efRowLive = efRow.split("; v3 (the East week lists")[0];
+  assert.ok(efRow.includes("Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC") && /jobid 8/.test(efRow) && !/NOT deployed|no cron job/.test(efRowLive) && efRowLive.length < efRow.length, "the table row: " + efRow.slice(0, 200));
   assert.ok(efRow.includes("(jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`)") && !/not observed/i.test(efRow), "the table row: the first scheduled run, its audit row ok true - never 'not observed yet': " + efRow.slice(0, 200));
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### Deploy record - Prompt 31 Part A (east-feed-refresh");
@@ -4640,11 +5037,22 @@ check("10/26 retry: no PostgREST call of this project bypasses rest() - each fun
 });
 check("10/26 retry (pins kept deliberately 10/27 - the deploy's record step): each header keeps its as-deployed wording, the retry as 'prepared, NOT deployed' on its base (calendar-sync v8 on v7, daily-reminder v11 on v10, east-feed-refresh v2 on v1, office-notifications v7 on v6, send-notification v13 on v12 - all five deployed 2026-10-27 03:30 UTC), and each source is the deployed file RETRY_DEPLOYED_SHA256 pins (raw bytes)", () => {
   const V = { "calendar-sync": [8, 7], "daily-reminder": [11, 10], "east-feed-refresh": [2, 1], "office-notifications": [7, 6], "send-notification": [13, 12] };
+  // pin moved deliberately 11/11 (Prompt 34): east-feed-refresh met its next source change (the East week lists, v3 prepared), so
+  // ITS header flipped to the deployed wording and its source is the prepared v3 (EAST_LISTS_PREPARED_SHA256); the other four are
+  // untouched - still their deployed bytes, still the as-deployed wording
+  const FLIPPED = { "east-feed-refresh": "TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz;" };
   Object.entries(RETRY_FNS).forEach(([n, s]) => {
     const head = s.slice(0, s.indexOf("\nimport "));
     const [v, base] = V[n];
-    assert.strictEqual(head.split("TOKEN RACE RETRY (2026-10-26; v" + v + " on base v" + base + " - prepared, NOT deployed;").length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");
+    const pending = "TOKEN RACE RETRY (2026-10-26; v" + v + " on base v" + base + " - prepared, NOT deployed;";
     assert.ok(/PGRST303/.test(head) && /1 s, then 3 s/.test(head.replace(/\n\/\/\s*/g, " ")), n + ": the header says what the retry does");
+    if (FLIPPED[n]) {
+      assert.strictEqual(head.split(FLIPPED[n]).length - 1, 1, n + ": the header records the retry (v" + v + ") as deployed - once");
+      assert.strictEqual(head.split(pending).length - 1, 0, n + ": the as-deployed 'prepared, NOT deployed' wording for the retry is gone (the flip)");
+      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), EAST_LISTS_PREPARED_SHA256, n + ": the source is the prepared v3 (the East week lists) - RETRY_DEPLOYED_SHA256 keeps the deployed v2's bytes as the record");
+      return;
+    }
+    assert.strictEqual(head.split(pending).length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");
     assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), RETRY_DEPLOYED_SHA256[n], n + ": the source is the deployed v" + v + " (2026-10-27 03:30 UTC - the staged file and the re-download) - it must stay byte-identical until the next deploy; a source change flips the header wording and moves this pin with a new deploy and record");
   });
 });

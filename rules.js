@@ -37,6 +37,15 @@
 //   eastDerived   [{ surgeonId, weekMonday, silvisRole }] - deriveFierceWeeks()
 //                 returns rows WITHOUT surgeonId; the caller attaches the roster
 //                 id it resolves by code (never a literal id) before passing them.
+//                 Faraz 11/11 (rdDerivedUnitsAndVacations, read once in
+//                 buildContext): a holiday unit with a day in a derived week is
+//                 the derived surgeon's in that role on ALL its days (the days
+//                 outside the week become derived days - ctx.derivedUnitDays),
+//                 and a derived lock YIELDS on a day his own vacation refuses
+//                 him for that role (the day itself; for a trailing-edge role
+//                 the day before it; a holiday unit yields whole -
+//                 ctx.derivedVacationYields). A yielded day is filled like any
+//                 other day.
 //   eastBusyDays  { [surgeonId]: Array | Set | { 'YYYY-MM-DD': truthy } |
 //                 { busy: Set, reasons } } - the last is deriveKhanBusyDays()'s
 //                 own return shape.
@@ -707,9 +716,12 @@ function buildContext(input) {
     holidayUnitsAll: [],
     holidayUnitsGapped: [],             // review 10/18: units whose days are not consecutive (restBetweenStretches; filled below)
     derivedByDay: Object.create(null),
+    derivedUnitDays: [],                // Faraz 11/11: [{ day, role, surgeonId, unit }] - the days a holiday unit adds to a derived week
+    derivedUnitBase: Object.create(null), // 11/11 review: "day|role|id" of an added day -> { base: the unit days of his week, weekMonday } (derivedUnitLost)
+    derivedVacationYields: [],          // Faraz 11/11: [{ day, role, surgeonId, reason, unit }] - derived days that yield to his own vacation
     eastCoverage: null,
     forecastThreshold: forecastThreshold,
-    trailingEdgeRoles: dayBefore.trailingEdgeRoles || ["primary"],
+    trailingEdgeRoles: Array.isArray(dayBefore.trailingEdgeRoles) ? dayBefore.trailingEdgeRoles : ["primary"],   // a non-list reads as the default (warned below; helpers.planHolidays reads it the same way)
     aledoDayBeforeRoles: dayBefore.aledoDayBeforeRoles || ["primary"],
     countBackupInConsecutive: !!groupRules.countBackupInConsecutive,
     defaultMaxConsecutive: typeof groupRules.defaultMaxConsecutiveDays === "number" ? groupRules.defaultMaxConsecutiveDays : 2,
@@ -735,6 +747,7 @@ function buildContext(input) {
   }
   if (heldBad) ctx.warnings.push("heldSchedule is not a { 'YYYY-MM-DD': row } object (review 2, 10/1): read as nothing held - every Tue/Thu inside a hardNeverWeekdays notice is judged as a new placement");
   if (todayIn !== undefined && todayIn !== null && !todayOk) ctx.warnings.push("today " + JSON.stringify(todayIn) + " is not a 'YYYY-MM-DD' date (Prompt 23): read as the Central date " + today + " - the hardNeverWeekdays notice is measured from it");
+  if (dayBefore.trailingEdgeRoles !== undefined && dayBefore.trailingEdgeRoles !== null && !Array.isArray(dayBefore.trailingEdgeRoles)) ctx.warnings.push("groupRules.dayBeforeRules.trailingEdgeRoles = " + JSON.stringify(dayBefore.trailingEdgeRoles) + " is not a list (11/11): read as [\"primary\"] - the day before a vacation refuses primary only");
   if (defaultCapLegacy) ctx.warnings.push("groupRules.defaultMonthlyCap.total is a legacy key (Prompt 12 K, 9/22): read as defaultMonthlyCap.primary = " + defaultCap + " (a cap on PRIMARY days per month) - rename it in Setup");
   if (defaultPreferredBad) ctx.warnings.push("groupRules.defaultMonthlyCap.preferred = " + JSON.stringify(dmc.preferred) + " is not a positive number (Prompt 32): ignored - the group has no soft monthly limit; set it in Setup -> Rules");
   // Prompt 32 step 1: an unreadable shift weight would fall back silently - say so once, with what is read instead
@@ -842,6 +855,7 @@ function buildContext(input) {
       eastClear: new Set(),                  // 'home' days: a dated availability for both roles + the east-clear primary bonus
       eastVacationRanges: [],                // [{ start, end, state }] as derived (display / conflicts)
       derived: Object.create(null), // date -> forced Silvis role
+      derivedYield: Object.create(null), // Faraz 11/11: date -> the derived role that yielded to his vacation that day (he is still on East call that week)
       eastDays: new Set(),          // every day he holds ANY East call (busy days + derived weeks) - display / East-only tallies
       // 9/22 (Prompt 12 K): the days of his East PRIMARY weeks only (derived Silvis
       // backup, silvisRole "backup") - the East days a countsEastDays cap adds.
@@ -1179,11 +1193,111 @@ function buildContext(input) {
       slot[w.silvisRole] = w.surgeonId;
     }
   });
+  // Faraz 11/11: holiday units and his own vacations, over the derived days just set.
+  rdDerivedUnitsAndVacations(ctx);
 
   // Offers + periods (Prompt 14 P2).
   rdBuildOffers(ctx, input);
 
   return ctx;
+}
+
+// rdDerivedUnitsAndVacations(ctx) - Faraz 11/11, the two calls he made on Prompt 34's preview. Read HERE, once, so every
+// consumer of P.derived / ctx.derivedByDay (eligibility, the generator's lock seeding, the conflict reports, the UI) sees
+// one picture:
+//  (1) "Give Fierce Memorial Day." A holiday unit with a day in a derived week belongs to the derived surgeon in that role
+//      on ALL its days - the holiday plan's reading since Prompt 25 (helpers.planHolidays: "a unit on any day of a derived
+//      week takes the surgeon in that role"). The unit's days outside the week (a Sat - Mon unit against a Mon - Sun week)
+//      become derived days: ctx.derivedUnitDays. Before, the lock put him on the unit's days inside the week, the unit's
+//      one-holder rule kept everyone else off the rest, and his own run limit refused him there - a slot nobody could
+//      hold. Never before his eastFeed.deriveFrom; never over a day his other derived week gives him the OTHER role (a
+//      warning), never over another surgeon's derived slot. And only while the unit IS his (the 11/11 review): an added
+//      day keeps the unit days of his week behind it (ctx.derivedUnitBase), and when every one of them is held by
+//      someone else in that role the added day counts as overridden - derivedUnitLost, read LIVE from the schedule by
+//      rdDerivedOverridden and by the generator's lock seeding (a unit Acton holds on Sat + Sun is Acton's on Monday).
+//  (2) "Don't put him on if he has a vacation listed." A derived lock YIELDS on a day the vacation rules refuse him for
+//      that role: the vacation day itself (time-off, a derived East vacation included), and for a trailing-edge role
+//      (ctx.trailingEdgeRoles - primary) the day before it. A holiday unit is one piece: refused on ANY of its days, the
+//      lock yields on all of them (reason 'holiday-unit' on the days the vacation itself does not touch) - read per
+//      role BEFORE the two-roles check below, so a unit two derived weeks meet on in different roles yields in both
+//      when a vacation touches it (the 11/11 review). The day leaves
+//      P.derived and ctx.derivedByDay, so it is filled like any other day; P.derivedYield keeps the role that yielded -
+//      he is still on East call that week (eligibility keeps an East PRIMARY week out of Silvis primary there).
+// ctx.derivedVacationYields: [{ day, role, surgeonId, reason: 'time-off' | 'day-before-vacation' | 'holiday-unit', unit }]
+// by surgeon (roster order), then day. Needs P.vacation / P.dayBeforeVacation and ctx.holidayByDay (all set above).
+// Both readings are DATA (groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation } - on unless the key is
+// exactly false; no Setup field, the group rules' Edit-as-JSON): keepHolidayUnit false leaves a unit's days outside the
+// week alone (the reading before 11/11: the unit's one-holder rule and his run limit decide), yieldToVacation false keeps
+// the lock over his vacation (the lock stands; the generator lists the days as lockViolations).
+function rdDerivedUnitsAndVacations(ctx) {
+  var dwRules = (ctx.groupRules && ctx.groupRules.eastFeed && ctx.groupRules.eastFeed.derivedWeeks) || {};
+  var keepUnit = dwRules.keepHolidayUnit !== false, yieldVac = dwRules.yieldToVacation !== false;
+  var trailing = ctx.trailingEdgeRoles;   // always a list: buildContext reads a non-list as ["primary"], with a warning
+  function refusal(P, d, role) {
+    if (!yieldVac) return null;
+    if (P.vacation.has(d)) return "time-off";
+    if (P.dayBeforeVacation.has(d) && trailing.indexOf(role) >= 0) return "day-before-vacation";
+    return null;
+  }
+  function yieldDay(P, id, d, role, reason, unit) {
+    delete P.derived[d];
+    P.derivedYield[d] = role;
+    var slot = ctx.derivedByDay[d];
+    if (slot && slot[role] === id) { delete slot[role]; if (!slot.primary && !slot.backup) delete ctx.derivedByDay[d]; }
+    ctx.derivedVacationYields.push({ day: d, role: role, surgeonId: id, reason: reason, unit: unit ? unit.name : null });
+  }
+  ctx.allIds.forEach(function (id) {
+    var P = ctx.per[id];
+    if (!P) return;
+    var base = Object.keys(P.derived).sort();
+    if (!base.length) return;
+    var ef = (P.rules && P.rules.eastFeed) || {};
+    var fromN = ef.deriveFrom ? rdInfo(ef.deriveFrom).n : -Infinity;
+    var yields = [], seen = Object.create(null);
+    // the holiday units his derived days touch - each once per role
+    base.forEach(function (d) {
+      var role = P.derived[d], u = ctx.holidayByDay[d];
+      if (!role || !u) return;
+      var key = u.name + "|" + u.days[0] + "|" + role;
+      if (seen[key]) return;
+      seen[key] = true;
+      var own = u.days.filter(function (x) { return ctx.holidayByDay[x] === u && rdIsDateStr(x) && rdInfo(x).n >= fromN; });
+      // (2) first, per role: a vacation that refuses him this role on ANY day of the unit yields his days of the unit in
+      // this role (the other role of a unit two weeks meet on is judged on its own turn through this loop)
+      if (own.some(function (x) { return refusal(P, x, role); })) {
+        own.forEach(function (x) { if (P.derived[x] === role) yields.push({ day: x, role: role, reason: refusal(P, x, role) || "holiday-unit", unit: u }); });
+        return;
+      }
+      // his other derived week gives him the OTHER role on a day of this unit: nobody can hold both - leave the days as they are
+      var clash = own.filter(function (x) { return P.derived[x] && P.derived[x] !== role; });
+      if (clash.length) {
+        if (role === "primary") ctx.warnings.push("derived weeks: " + id + " holds both roles on " + u.name + " " + u.year + " (" + clash.join(", ") + " in the other role) - each week keeps its own days; check the unit by hand");
+        return;
+      }
+      if (!keepUnit) return;
+      // (1) the unit days of his week(s) in this role - what an added day stands on (derivedUnitLost)
+      var mine = own.filter(function (x) { return P.derived[x] === role; });
+      own.forEach(function (x) {
+        if (P.derived[x] === role) return;
+        var slot = ctx.derivedByDay[x] || (ctx.derivedByDay[x] = {});
+        if (slot[role] && slot[role] !== id) { ctx.warnings.push("derived weeks: " + u.name + " " + u.year + " " + role + " on " + x + " is " + slot[role] + "'s by his own derived week - not added to " + id + "'s"); return; }
+        P.derived[x] = role;
+        slot[role] = id;
+        ctx.derivedUnitDays.push({ day: x, role: role, surgeonId: id, unit: u.name });
+        ctx.derivedUnitBase[x + "|" + role + "|" + id] = { base: mine.slice(), weekMonday: rdInfo(d).monday };
+      });
+    });
+    // every other derived day his vacation refuses
+    Object.keys(P.derived).forEach(function (d) {
+      var role = P.derived[d];
+      if (yields.some(function (y) { return y.day === d && y.role === role; })) return;
+      var why = refusal(P, d, role);
+      if (why) yields.push({ day: d, role: role, reason: why, unit: null });
+    });
+    yields.sort(function (a, b) { return a.day < b.day ? -1 : a.day > b.day ? 1 : 0; });
+    yields.forEach(function (y) { yieldDay(P, id, y.day, y.role, y.reason, y.unit); });
+  });
+  ctx.derivedUnitDays.sort(function (a, b) { return a.day < b.day ? -1 : a.day > b.day ? 1 : a.surgeonId < b.surgeonId ? -1 : a.surgeonId > b.surgeonId ? 1 : 0; });
 }
 
 /* ------------------------------------------------------ offers + periods */
@@ -1476,12 +1590,35 @@ function weekendCapCounts(ctx, surgeonId, month, schedule) {
 // derived week, and lists the days whose locked holder IS the derived surgeon
 // (Fierce's explicit backup rows 11/9-11/15) in diagnostics.derivedConfirmed -
 // those days yield nothing and the week stays whole.
+//   (c) the 11/11 review - a day a HOLIDAY UNIT added to his derived week (rdDerivedUnitsAndVacations) stands only while
+//       the unit is his: when every unit day of his week is someone else's in that role, the unit belongs to that
+//       holder and the added day is no derived day of his (derivedUnitLost).
 function rdDerivedOverridden(ctx, date, role, id) {
+  if (derivedUnitLost(ctx, ctx.schedule, date, role, id)) return true;
   var e = ctx.schedule[date];
   if (!e) return false;
   if (e[role + "Locked"] && e[role] && e[role] !== id) return true;
   var other = role === "primary" ? "backup" : "primary";
   return !!(e[other + "Locked"] && e[other] === id);
+}
+// derivedUnitLost(ctx, schedule, date, role, id) -> boolean. (date, role) is a day a holiday unit ADDED to id's derived
+// week (ctx.derivedUnitBase) AND every unit day of that week - the days the added one stands on - is lost to him in
+// `schedule`: someone else holds it in that role (a row is a fact here, locked or not: a published holder owns the unit),
+// an outside cover holds its primary, or he is locked into the other role there. An open or unwritten day is not lost.
+// The schedule is a parameter because the generator asks while it seeds its own working copy (genSeedLocks - in-range
+// rows that are not fixed are already cleared there, so a regenerate over published rows keeps the unit with him);
+// everything else asks about ctx.schedule through rdDerivedOverridden. Never true for a day of the derived week itself.
+function derivedUnitLost(ctx, schedule, date, role, id) {
+  var ub = ctx && ctx.derivedUnitBase ? ctx.derivedUnitBase[date + "|" + role + "|" + id] : null;
+  if (!ub || !ub.base || !ub.base.length || !schedule) return false;
+  var other = role === "primary" ? "backup" : "primary";
+  return ub.base.every(function (x) {
+    var e = schedule[x];
+    if (!e) return false;
+    if (e[role] && e[role] !== id) return true;
+    if (role === "primary" && e.externalCover && !e.primary) return true;
+    return !!(e[other + "Locked"] && e[other] === id);
+  });
 }
 
 // The weekday-pattern family for one (surgeon, date, role): recurring blacklist,
@@ -1958,10 +2095,17 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
       // An import/manual lock overrode his derived slot. He is still on East call
       // that week: the ordinary weekday pattern applies to the role being asked
       // about, and an East PRIMARY week (derived Silvis backup) blocks Silvis
-      // primary because the primary must be on site at Silvis.
+      // primary because the primary must be on site at Silvis. (11/11 review: only on a day of
+      // the East week itself - a day a holiday unit added lies outside it, and he is not on East call there.)
       if (st.patternDeferred) rdPatternRules(ctx, P, info, role, !!opts.asBlockMember, st.rowAvail, hard, soft);
-      if (dRole === "backup" && role === "primary" && ctx.groupRules.noOperatingElsewhereWhilePrimary !== false) hard.push("east-busy");
+      if (dRole === "backup" && role === "primary" && P.eastDays.has(dateStr) && ctx.groupRules.noOperatingElsewhereWhilePrimary !== false) hard.push("east-busy");
     }
+  } else if (P.derivedYield[dateStr] === "backup" && role === "primary" && ctx.groupRules.noOperatingElsewhereWhilePrimary !== false) {
+    // Faraz 11/11: the derived lock yielded here to his vacation (reached on a day that yielded with its holiday unit -
+    // on the vacation day itself the static layer has refused him already). He is still East PRIMARY that week, and the
+    // Silvis primary must be on site - the same reading as an overridden derived backup day above. The ordinary weekday
+    // pattern was applied by the static layer (the day is no derived day).
+    hard.push("east-busy");
   }
   var dslot = ctx.derivedByDay[dateStr];
   if (dslot && dslot[role] && dslot[role] !== surgeonId && !rdDerivedOverridden(ctx, dateStr, role, dslot[role])) hard.push("derived-lock-held:" + dslot[role]);
@@ -2701,8 +2845,10 @@ function eastConflicts(ctx, days) {
       var r = eligibility(ctx, day, role, id, { ignoreLocks: true, asBlockMember: rdHoldsFullBlock(ctx, day, role, id) });
       var reasons = (r.lockHolder ? (r.conflicts || []) : (r.hard || [])).filter(function (x) { return rdIsEastConflictReason(x) || (patternCounts && rdStartsWithAny(x, RD_EAST_PATTERN_PREFIXES)); });
       if (dslot) {
-        if (dslot[role] && dslot[role] !== id && e[other] !== dslot[role]) reasons.push("derived-lock-held:" + dslot[role]);
-        if (dslot[other] === id) reasons.push("derived-lock:" + other);
+        // 11/11 review: a day a holiday unit added to a derived week is no derived slot once the unit is someone else's
+        // (derivedUnitLost) - the collision is reported on the days of the East week itself, not on the added day
+        if (dslot[role] && dslot[role] !== id && e[other] !== dslot[role] && !derivedUnitLost(ctx, ctx.schedule, day, role, dslot[role])) reasons.push("derived-lock-held:" + dslot[role]);
+        if (dslot[other] === id && !derivedUnitLost(ctx, ctx.schedule, day, other, id)) reasons.push("derived-lock:" + other);
       }
       var seen = Object.create(null);
       reasons = reasons.filter(function (x) { if (seen[x]) return false; seen[x] = true; return true; });
@@ -2748,6 +2894,7 @@ if (typeof module !== "undefined") {
     buildContext: buildContext,
     eligibility: eligibility,
     eastConflicts: eastConflicts,
+    derivedUnitLost: derivedUnitLost, // 11/11 review: is a day a holiday unit added to a derived week still his? (the generator asks of its working copy)
     eastVacationConflicts: eastVacationConflicts,
     weekendUnitPatterns: weekendUnitPatterns,
     holidayUnits: holidayUnits,

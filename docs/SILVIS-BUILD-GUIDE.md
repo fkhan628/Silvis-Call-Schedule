@@ -181,7 +181,7 @@ Paste `sql/schema.sql` into the Supabase SQL editor once. Summary:
 | `schedule_days` (`day date pk`, `primary_id`, `backup_id`, `primary_locked`, `backup_locked`, `source`, `external_cover`, `note`, `version int`, `updated_by`, `updated_at`) | One row per day. Publish = upsert changed days with compare-and-swap on `version`. | replaces `schedule_weeks` |
 | `time_off` (`id uuid`, `person_id`, `start_date`, `end_date`, `note`, `created_by`, `created_at`) | **Vacations only** (no `kind` column — there are no no-call days). Self-entered by surgeons, no approval; a DB trigger refuses a range that overlaps a published day where that surgeon is primary or backup (see schema). Generator source. | adapted |
 | `availability` (`id uuid`, `person_id`, `kind: available\|unavailable\|avoid\|prefer\|backup_only\|no_backup`, `role: any\|primary\|backup`, `start_date`, `end_date`, `note`, `source`, `created_by`, `created_at`) | Dated availability statements (Sarkar windows, Burchett December list, Philip weeks, Acton October days…). Recurring patterns live in the config blob, not here. | new |
-| `east_feed` (`week_monday date pk`, `data jsonb`, `fetched_at`) + `east_overrides` (`day date pk`, `person_id`, `busy bool`, `note`) + `east_forecast` (`week_monday date pk`, `data jsonb`, `generated_at`) | Cached *published* Davenport weeks, manual corrections, and the separate East forecast (§7) | new |
+| `east_feed` (`week_monday date pk`, `data jsonb`, `fetched_at`; since 11/11 the payload also carries `data.eastLists`, the two East week lists - §26) + `east_overrides` (`day date pk`, `person_id`, `busy bool`, `note`) + `east_forecast` (`week_monday date pk`, `data jsonb`, `generated_at`) | Cached *published* Davenport weeks, manual corrections, and the separate East forecast (§7) | new |
 | `east_vacation_reviews` (`id uuid pk`, `person_id`, `"start" date`, `"end" date`, `decision: away\|home`, `decided_at`, `decided_by`; `unique (person_id, "start", "end")`) | The **away / home** decision per mirrored Davenport vacation range (§18). The ranges themselves stay in the `east_feed` payload `data.vacations`, and no `time_off` row is ever written for them. **Authenticated-read only — not in the anon list.** Applied live 2026-09-23 04:37 (orchestrator, linked CLI) from `sql/migrations/2026-09-23-east-vacation-reviews.sql` (schema revision d); the observed strings are in `docs/SCHEMA-REVIEW.md`. | new |
 | `shift_trade_requests` (`from_id`, `to_id`, `day`, `role`, `return_day`, `return_role`, `status`, …) | trades by day+role instead of week+shift | adapted |
 | `notifications`, `notification_preferences`, `audit_log`, `call_schedule_snapshots`, `client_versions`, `office_contacts`, `user_profiles` | same roles as Davenport (`office_contacts` drives office notifications; `client_versions` drives refresh; `call_schedule_snapshots` drives data management) | yes |
@@ -655,7 +655,7 @@ where ids are Davenport ids (FAK = `s6`). Resolve FAK by matching the Davenport 
 Derivations (pure functions, unit-tested):
 - **Khan busy days:** `dayCall === FAK` → Mon…Sat busy (service week; Sat 07:00→Sun 07:00 is his); `nights.mon/tue/wed/thu === FAK` → that day busy; `nights.wknd === FAK` → Fri and Sun busy (Sat 07:00–Sun 07:00 is not his, but a lone Silvis Saturday breaks his block style — allow only as fallback); `holidayCoverage[d].surgeonId === FAK` → `d` busy. Busy days block Silvis **primary only** — Khan may be Silvis **backup** on an East call day (Faraz 9/21). East backup weeks (`isBackup` true) count as busy for primary too — but only the shifts he actually holds in such a week (his dayCall / override / night / weekend / holiday days), never all seven days; pinned by `test/east-feed.test.js` ("never busy wholesale").
 - **Precedence on one date: holiday 24h > `dayCallOverrides` > `dayCall`.** A `holidayCoverage[d]` entry for *another* surgeon means that surgeon holds the whole 07:00→07:00 day (Davenport's calendar drops the Svc/Sat/Ngt/Wknd entries for `d`; its generator reassigns the night/weekend slot), so `d` carries **no** Khan reason — not service-week, override, night or weekend. Verified on the live row 2026-09-07 (dayCall FAK, Labor Day held by another surgeon). In the milestone window this matters for Thanksgiving Thu–Sat 2026 and New Year 12/31–1/2 whenever FAK is the East service surgeon (reviewer finding east-1, 2026-09-22).
-- **Fierce derived weeks:** `isBackup` → Silvis **backup** Mon–Sun; `isFierceBackup` → Silvis **primary** Mon–Sun. Faraz's stated weeks (`surgeonRules.s5.eastFeed.statedWeeks`) fill only weeks with no *published* row.
+- **Fierce derived weeks:** `isBackup` → Silvis **backup** Mon–Sun; `isFierceBackup` → Silvis **primary** Mon–Sun. Faraz's stated weeks (`surgeonRules.s5.eastFeed.statedWeeks`) fill only weeks with no *published* row. ⟶ **11/11 (Prompt 34, §26): between the two sits the Davenport app's own pair of week lists** — `deriveFierceWeeks` reads a published week, then the lists the cache rows carry (`data.eastLists`), then the stated weeks; and since 11/11 the rules read a holiday unit a derived week touches as the derived surgeon's on all its days, and let a derived lock yield to his own vacation (§26.5).
 - Cache each fetched week into `east_feed`; the generator reads the cache, never the network. Setup shows "East feed: fetched 2026-09-21 14:02, 26 weeks, next Fierce primary week 2026-12-07" plus a manual override list (`east_overrides`) for days Faraz knows differ. If the fetch fails, keep the cache and warn — never treat failure as "no East call".
 - **Forecast rows live in their own table `east_forecast`** (`week_monday pk`, `data`, `generated_at`; printed by `scripts/east-forecast.js --sql`, never executed by the script). `east_feed` holds published Davenport rows only. A forecast row is `{ isForecast:true, runs, generatedAt, fakBusyProbabilityByDay:{date:p}, fierceWeekProbability }` and is consumed only via `forecastFromFeedRows(rows)` → `forecastToBusy(forecast, groupRules.eastFeed.forecast.busyThreshold)`. As a second guard, `deriveKhanBusyDays`, `deriveFierceWeeks`, `coverageOf` and `toEastFeedRows` treat any `data.isForecast === true` row as absent, so a forecast can never read as "published" (Khan silently free, a stated Fierce week suppressed, coverage claimed) — reviewer finding east-2, 2026-09-22.
 - **Precedence, pruning and the conflict report (Prompt 12 C, 9/22): published > override > forecast.** Inside the published coverage (`ctx.eastCoverage` = `coverageOf` of the cached Davenport weeks) the forecast is never consulted — no `east-forecast-busy`, no soft `east-forecast`; only the busy set derived from published rows counts, so a stale probability can never block Khan after Davenport publishes (published-free day + forecast 0.9 = eligible). `east_overrides` reach `buildContext` as their own input (`eastOverrides[id] = { day: true|false }`, grouped by `overridesByPerson`): `busy:false` clears the day whether it came from a published row or from the forecast (the day stays "known", never `east-unknown`), `busy:true` is `east-busy` regardless of the forecast; `applyOverrides` on the busy set stays for older callers. Outside the coverage the forecast rule stands as before (`forecastOutsideCoverage` prunes the map the app and `scripts/preview-generate.js` pass). **Refreshing the feed** caches Davenport's published weeks and then `DELETE`s every `east_forecast` row whose `week_monday` lies inside the new published coverage (`Prefer: return=representation` to count them; a failed delete is a toast + warning, never silent); the `east.refresh` audit row carries `forecastRowsDeleted`. The forecast only ever fills weeks Davenport has not published. **Conflict report:** `rules.eastConflicts(ctx, days)` walks the held slots of the given days and lists `{ day, role, id, reasons }` where the East data makes the holder ineligible — `east-busy`, `east-forecast-busy`, `derived-lock:` (the derived surgeon held in the other role of his derived week) and `derived-lock-held:` (someone else in his derived slot); locks are reported too (a lock is a fact that now collides), a holder who is the derived surgeon in the derived role is fine. The generator puts it in `diagnostics.eastConflicts` over the final schedule (empty for generated slots; locked ones may conflict) and the East feed card shows "Conflicts with the published schedule" over the whole schedule map after every load or refresh, each row opening the day editor. `scripts/east-forecast.js` defaults `--runs` to the seed's `groupRules.eastFeed.forecast.runs` (200), the budget to 900 s, and writes `requestedRuns` and `runs` (executed) into `docs/east-forecast-latest.json`. **Fix round (review 9/22):** the app prunes the forecast with the *same* coverage the engine receives (null while an East id is unresolved, so a hard forecast block never degrades to `east-unknown`); the East card's own forecast strip reads the pruned map and names how many rows lie inside the coverage (ignored); a `DELETE` that returns no array records `forecastRowsDeleted: null` ("count unknown"), never a confident 0, and one final toast (tone error) carries a prune failure; an `east_overrides` map for a surgeon whose East feature blocks no role is dropped with a `ctx.warnings` entry; My schedule's F badge honours `busy:false` (an O badge marks the cleared day; the month grid has carried no F badge since item E2, 9/25). For a holder with `outsideDerivedWeeks` the conflict report also keeps `weekday-pattern:` / `weekend-block-only` on days outside his current derived weeks and from his `eastFeed.deriveFrom` on (evaluated as a block member when he holds the whole Fri+Sat+Sun block, as the generator does) — that is a derived week that moved away; before `deriveFrom` nothing was ever derived, so Faraz's single locked 10/12 is never listed; a former derived week where he holds *backup* is undetectable here (backup is open) and is covered by `diagnostics.derivedYields` and the day editor's "East week -> Silvis <role> (derived)" line, or at a glance Setup > East feed's derived-weeks list (`east-derived`) (plus My schedule's E badge; the month grid's E badge came off on 9/25, item E2). `scripts/preview-generate.js` dumps `diagnostics.eastConflicts` in the report and the backfill section. Contiguity assumption: `coverageOf` is one `[first Monday, last Sunday]` range with no gap check, so the prune `DELETE` and `rdInPublishedCoverage` both assume Davenport's published weeks are contiguous (they are today, 2026-06-01..2026-11-09); a gap week inside the range would be pruned and read as known-clear.
@@ -3388,3 +3388,185 @@ window is Part B's (section 24.5); the Davenport side is never written.
 - **Still open:** the 60-day horizon of an unreviewed range (rules doc section 8 item 17); phantom weeks (decision 14); the wording on
   a future East-code surgeon's own lines if he is not the scheduler ("set by the scheduler" while he decides them himself - decision
   12); server enforcement in `CL009` / `apply_trade` / `OF002` (decision 17).
+
+## 26. Fierce's weeks from the DSG lists (Faraz 11/11; Prompt 34)
+
+*Faraz's decision of 2026-11-11 (Prompt 34): "Silvis reads Fierce's Davenport weeks from the DSG app, for the weeks Davenport
+hasn't published." Built 11/11 on branch `feat/fierce-weeks-from-dsg`; the client and the rules ship with the merge, the server
+function's v3 is prepared and waits for its deploy (26.6). Rules doc: section 3 (Fierce) and section 8 item 29.*
+
+### 26.1 The source - two lists, one fact
+
+The Davenport app keeps two lists of Mondays in its setup row (`call_schedule_data` `main`, the row `fetchEastWeeks` already
+reads for the roster): `backupMondays` and `fierceBackup`, each written as an array from a Set (unsorted, past weeks kept).
+Its generator stamps a week's flags from them (`isBackup = backupMondays.has(monday)`, `isFierceBackup =
+fierceBackup.has(monday)`), and its Backup Weeks card writes a mark and an existing week's flag in one action - "two
+representations of one fact"; a Monday on a list with no generated week is its own pending mark. So:
+
+| Davenport list | week flag | Fierce at East | Silvis | key here |
+|---|---|---|---|---|
+| `backupMondays` | `isBackup` | primary | backup all week | `eastPrimary` |
+| `fierceBackup` | `isFierceBackup` | backup | primary all week | `eastBackup` |
+
+(the key names are `statedWeeks`' own). Read 11/11: 13 Mondays on each list, none invalid, none on both; every one of
+Davenport's 60 published weeks carried exactly the flags the lists say.
+
+### 26.2 The cache - no schema change
+
+Both refreshes already read that row and already upsert the main-window `east_feed` rows, so the lists ride in those rows'
+payload, beside `data.vacations`: `data.eastLists = { eastPrimary: [Mondays], eastBackup: [Mondays], readAt, dropped }` -
+valid Mondays from the refresh window's first Monday on, sorted; `readAt` the time of the last TRUSTED read; `dropped` a
+count. `fetchEastWeeks` returns `lists: eastListsFromBlob(blob)` (no request added: the same GETs, request for request in
+both refreshes), `eastListsPlan(feed, cacheBefore, today, from)` decides what the weeks written carry, `eastAttachLists` writes
+it into every week a refresh writes (the main upsert's and the extra leg's), and `eastCachedLists(rows)` reads the copy with the
+newest `readAt` back. Nothing else
+of the Davenport row is cached; an entry that is no Monday never reaches the cache as text (the scheduler's toast and audit
+row name it). No table, column, policy, RPC or apply; `east_feed` stays anon-readable and holds Mondays only.
+
+Why not its own table: a migration, RLS, a verify-rls section, an apply script and its harness, a smoke route and a
+missing-table contract in the client and the function - for one small object both writers can already place. Why not the
+Silvis blob (a second row or a column): its autosave, compare-and-swap and wipe guards. Why not a marked week row in
+`east_feed`: every reader of that table takes a row for a published week (coverage, Khan's busy days, the calendar feed, the
+digest). The price of riding in the rows: a refresh by an OLDER writer rewrites the payload without the key (26.6), and the
+copy is repeated on every row the two legs write (about sixty rows - some 30 KB in all).
+
+A refresh that fetches no week at all writes nothing, so the copies stay; a cached week rewritten for its vacation list keeps
+the copy it had. **The weeks of the extra leg (outside the main window) carry the copy too** (the 11/11 review - they carried
+none): a week that slides out of the main window is rewritten by that leg, so a run whose MAIN read is empty (Davenport's
+newest published week more than five weeks back - exactly when the lists are the only source of his weeks) rewrote every week
+that held the lists without them, while its toast said "read" or "kept". `written` (the answer, the audit detail) is true
+when a week of either leg holds the lists; "NOT cached" is said when none does.
+
+### 26.3 The read guard (`eastListsGuard`) - the rule chosen
+
+On the pattern of `eastVacationReadGuard`. Trusted when both keys are arrays and no upcoming week is lost. NOT trusted - both
+cached lists kept as they are, nothing new taken, the run ok:false with the words of `eastListsGuardText`:
+
+- `missing` / `not-array` - a key did not come back as an array;
+- `empty-while-cached` - a list has no valid Monday, or
+- `lost-week` - it no longer names a cached Monday of this week or later that Davenport has not published - **unless the read
+  is clearly healthy: that list still holds every week Davenport has published with its flag** (the weeks just fetched, then
+  the cached rows; forecast rows never), and there is at least one such week;
+- `empty-while-published` (the 11/11 review) - a list has no valid Monday while a published week carries its flag, whatever
+  the cache holds - a cache with no copy included. Davenport keeps past weeks on its lists, so an empty list beside a flagged
+  week is a wipe or a reset; before, such a read over a cold cache was taken as "0 weeks", ok true. An empty list is taken
+  only when nothing speaks against it: no cached upcoming week of it, and no published week with its flag.
+
+**Which published weeks count (the 11/11 review):** the ones the run can vouch for - a week it just fetched, or a cached row a
+refresh re-read within `EAST_LISTS_VOUCH_HOURS` (84) before the run's own time (`eastListsPlan` passes `feed.fetchedAt`; the
+daily server run re-reads both windows, so two missed runs are tolerated - 72 h, the first choice, sat exactly on the third
+run, and a run a second later in its minute found the rows stale). A cached row no refresh reads any more - older than
+the 12-month window, or a week Davenport no longer returns - keeps whatever flag it had: counted, one such row whose Monday had
+left the list refused every later edit of that list for months, with nothing on this side able to accept the read. It
+neither blocks nor vouches. Whether a lost week is PUBLISHED is still read from any row.
+
+**So the verdict follows the cache's age as well as the read** (the re-check, 11/11). After a gap longer than the window, a
+list that lost a week and is vouched for only by flagged weeks OUTSIDE the main window is kept by the first refresh - whose
+extra leg re-reads those weeks - and taken by the next (`test/edge-functions.test.js` runs the two refreshes through the
+handler). A flagged week inside the main window is fetched by the run itself and vouches at once, and with the daily run in
+place no cached row is that old.
+
+A lost week Davenport HAS published is no loss (the published row decides); a past week neither; with no cache nothing can be
+lost, so a first read that names weeks is taken as it is. What it catches: a wiped, reset or reformatted list, and one reverted past a published
+marked week. What it cannot: a revert that loses only marks made after Davenport's last publish - indistinguishable from a
+real edit on our side. A kept list clears by itself when Davenport publishes the week, when the mark is repaired there, or
+when the week passes. The blob read itself failing fails the whole refresh as before (the roster comes from the same read).
+
+### 26.4 Precedence, warnings and Setup
+
+`deriveFierceWeeksDetail(weeks, opts)` -> `{ weeks, warnings, lists }` (`deriveFierceWeeks` returns `.weeks`): a published
+row first (flagged or not; a forecast row is no published row), then the lists - by default the copy the rows carry, so no
+caller passes them and none can forget them (`opts.listedWeeks` overrides; `null` = none) - then the stated weeks.
+`source` is `feed` | `list` | `stated`, shown as published / DSG list / stated (`eastSourceLabel`). Two warnings: `both-lists`
+(a Monday on both lists reads as East primary = Silvis backup, the reading of a published row with both flags) and
+`list-vs-stated` (the list stands). `deriveFrom` filters weeks and warnings. The app's `ctxInputs` carries the warnings
+(`eastDerivedWarnings`); `scripts/preview-generate.js` and `scripts/publish-preview.js` read the lists through the rows like
+the app.
+
+Setup > East feed > Derived weeks: the legend (`EAST_DERIVED_LEGEND`), the lists line (`eastListsStatus` /
+`eastListsStatusText`: last read, the counts, **KEPT** when a later refresh wrote an older copy back - a row stamped more than
+five minutes after the copy's read, since the extra leg's rows of the same refresh are stamped seconds after it - or "none in the cache"),
+the warnings, then the upcoming weeks each with its source and - from the rules context - the days a holiday unit adds or
+his vacation takes away; earlier weeks fold away. The Setup issues list says when a derive-weeks surgeon's cache holds weeks
+but no lists - and so does **Generate** (the 11/11 review: the notice was silent where the lists are used): a run in that state
+stamps its preview with a red warning beside Accept and warns in its toast, from the same two readings (`helpers.js`
+`suDerivesFromEast` / `suEastListsCached`); `scripts/preview-generate.js` prints the lists' state and records it in its JSON.
+The day editor's East line names the two new kinds of day: a day a holiday unit adds ("outside the East week") and a day whose
+derived lock yields to his vacation. The words that name the other app live in `east-feed.js`, not in `index-source.html` (the rebrand pin R.4).
+
+### 26.5 Faraz's two calls on the preview (11/11) - `rules.js` `rdDerivedUnitsAndVacations`
+
+Read once in `buildContext`, right after the derived days are set, so `eligibility`, the generator's lock seeding, the
+conflict reports and the UI see one picture:
+
+1. **"Give Fierce Memorial Day."** A holiday unit with a day in a derived week is the derived surgeon's in that role on ALL
+   its days: the unit's days outside the week become derived days (`ctx.derivedUnitDays`). Before, the lock held the unit's
+   days inside the week, the unit's one-holder rule kept everyone else off the rest and his run limit refused him there - a
+   slot nobody could hold. The yearly holiday plan has read it so since Prompt 25 (section 20); the generator now agrees.
+   Never before `deriveFrom`, never over a day his other derived week gives him the other role (a warning), never over another
+   surgeon's derived slot; an explicit locked row still beats it (the yield rule - rules doc section 3; `rdDerivedOverridden`).
+   **And only while the unit is his** (the 11/11 review): an added day keeps the unit days of his week behind it
+   (`ctx.derivedUnitBase`), and when every one of them is someone else's in that role - a hand lock, a trade, a published row,
+   an outside cover, or he himself locked into the other role - the unit is that holder's and the added day counts as
+   overridden (`derivedUnitLost`, read live from the schedule by `rdDerivedOverridden` and by the generator's lock seeding
+   over its working copy). Before that fix a unit Acton held on Saturday and Sunday was split: the Monday was locked to
+   Fierce. A regenerate over unlocked rows inside the range keeps the unit with him (those rows are cleared first).
+   The added day then follows the unit's one holder - or stays OPEN, with reasons, when that holder cannot take it (the unit
+   rule's own outcome, as before 11/11; rules doc section 8 item 29 (l)). With only PART of the unit's days of his week held
+   by someone else the unit is not lost: the added day stays his, and a lock of his on it stands whatever the rest holds
+   (locks never move) - the generator's warning names the split.
+2. **"Don't put him on if he has a vacation listed."** A derived lock yields on a day the vacation rules refuse him for that
+   role - `time-off`, and for a trailing-edge role (`ctx.trailingEdgeRoles` - read once, in `buildContext`: a value that is
+   no list reads as `["primary"]`, with a warning; the planner and the server function read it the same way, without
+   one) `day-before-vacation`; a holiday unit yields
+   whole (`holiday-unit` on the days the vacation itself does not touch). The day leaves `P.derived` and `ctx.derivedByDay`
+   (`ctx.derivedVacationYields`), so it is filled like any other day; `P.derivedYield` keeps the role, and `eligibility`
+   still keeps an East primary week out of Silvis primary there (`east-busy`, as on an overridden derived backup day).
+   `helpers.planHolidays` reads the same: a vacation on a unit of his derived week no longer leaves the unit open. The
+   unit-whole reading is taken per role BEFORE the two-roles check, so a unit two derived weeks meet on in different roles
+   yields in both when a vacation touches it (the 11/11 review). Without a vacation such a unit keeps each week's days, with
+   a warning, and has slots nobody can hold (the engine's reading before 11/11; the planner reads "primary only") - none in the
+   2027 lists, an open question in the rules doc (section 8 item 29 (j)).
+
+Both are data - `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation }`, on unless exactly `false` (the seed
+carries them; a blob without the key reads as on). The generator reports `diagnostics.derivedUnitDays` and
+`diagnostics.derivedVacationYields` with ONE warning per unit / per yielding week - each stating the OUTCOME as read from
+the finished schedule: the unit kept with him ("stays with", only when every added day is his and no unit day of his week is
+someone else's); or not kept whole, with what became of each added day (his; held by a named surgeon or an outside cover;
+left open; or his while named days of the unit in his week are not - a split to settle by hand); a held slot that keeps him
+on a vacation day is said so - and `test/generator-regression.js` restates both from the seed (80 runs: the week of
+3/29/2027 over a vacation, Memorial Day, Labor Day as backup, the review's cases - the unit held by someone else, a lock on
+the added day, standing locks on his vacation - the re-check's - the holder unable to take the added day, an outside cover
+on the unit's days or on the added day itself, he himself locked into the other role, a unit published to him and then
+given away - and a unit held in part, or added by a week that starts on the holiday).
+
+### 26.6 The server function - `east-feed-refresh` v3 (prepared; the deploy is Faraz's step)
+
+The same, function for function, in the `@eastRefresh` block (UTC): `efIsMonday`, `eastListsFromBlob`, `eastCachedLists`,
+`eastListsGuard`, `eastListsGuardText`, `eastListsPlan`, `eastAttachLists`; `eastFetchWeeks` returns the lists; `eastMainPlan`
+and `eastExtraPlan` attach them; the answer and the audit detail gain `lists`, the summary one clause; an untrusted read is one more entry in
+`errors` (after the vacation guard's). No new request, secret, table, RPC or cron change. `test/edge-functions.test.js`
+pins the block behaviour-equal to `east-feed.js` under six time zones, runs the handler against the fake Davenport (trusted,
+every guard verdict, a dropped entry, nothing fetched, a main read that is empty while the extra leg rewrites the weeks
+that held the lists, the run's own floor and today, an empty list over a cold cache, a refused upsert on either leg
+(`written` counts only an upsert that went through: the main one refused stops the run with it false, the extra one
+refused leaves it to the main leg's weeks), two refreshes after a long gap, dryRun) and pins the rows equal to the
+in-app refresh's. One line outside the lists changed with it: `eastTrailingRoles` reads a `trailingEdgeRoles` that is no
+list as the default, as `rules.js` does since 11/11 (26.5).
+
+**An older writer drops the key.** v2's 10:30 UTC run (and an old client's Refresh) rewrites the main-window payloads from
+Davenport's raw rows. Until v3 is deployed the lists leave the cache each morning and come back at the next in-app Refresh;
+meanwhile the app derives from published and stated weeks and says the lists are missing. So: merge, deploy v3 the same day
+(`deploy-east-lists.sh`, private; `edge-functions/README.md` section 3), press Refresh once, read Setup > East feed.
+
+### 26.7 Tests, the preview and the ship
+
+- **Tests (failing first):** `test/east-feed.test.js` (the parse, the cached copy, every guard verdict and its edges, the
+  plan, the attach, precedence from unsorted lists, a Monday on both lists, `deriveFrom`, the failed-read keep end to end,
+  the words); `test/rules.test.js` and `test/holiday-plan.test.js` (the two calls, their edges and their switches);
+  `test/generator-regression.js` (26.5); `test/edge-functions.test.js` (26.6); `test/data-layer.test.js` (the Refresh lifted
+  and run: a trusted read written, every bad read kept, a dropped entry named; the pins); `test/ui/smoke.mjs` (Setup's list
+  on lists the harness serves).
+- **The preview** (read-only; `scripts/preview-generate.js --east-lists cache|live|none`: the cache's copy, the lists read
+  from Davenport in memory the way the refresh reads them, or none): rules doc section 8 item 29 (g).
+- **The ship:** no apply. The merge is the client; then the one function deploy and its dry-run proof by Faraz.

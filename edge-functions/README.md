@@ -11,7 +11,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts. Revision z (v10, deployed 2026-10-22 23:18:10 UTC; its first live push not observed yet - section 3's "Deploy record - push reminders (revision z)"): v10 also pushes the day-before reminder to the same people's phones, and their followers', on `shift_reminders_push` (the hourly default mode only) |
-| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A"; v2 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:13 UTC (its first scheduled run 2026-10-27 10:30 UTC, its audit row `ok` `true`) | never |
+| `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A"; v2 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:13 UTC (its first scheduled run 2026-10-27 10:30 UTC, its audit row `ok` `true`); v3 (the East week lists - Prompt 34, section 3's "2026-11-11 - the East week lists") PREPARED, NOT deployed | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
 function. All four functions were first deployed on 9/22 (verify_jwt off). The
@@ -917,6 +917,86 @@ Not observed yet: `daily-reminder` v11's first `open-shifts` run (`silvis-open-s
 `send-notification` v13's first real send (the next trade, schedule-change or vacation e-mail), and a resend refused again (an
 `attempt 2 of 3` line).
 
+### 2026-11-11 - the East week lists (east-feed-refresh v3; Prompt 34)
+
+*Status: PREPARED, NOT deployed - `east-feed-refresh` v3 on base v2. Prepared 2026-11-11 by Claude Code on branch
+`feat/fierce-weeks-from-dsg` (Faraz 11/11, Prompt 34: Silvis reads Fierce's Davenport weeks from the Davenport app's two lists,
+for the weeks Davenport has not published). The paragraphs below are the plan as prepared; the observed paragraph is added at the
+deploy's record step.*
+
+Why: the other project's roster blob (its `call_schedule_data` `main` row - the row this function already reads for the roster)
+holds two lists of Mondays: `backupMondays` (Fierce East primary -> Silvis backup all week) and `fierceBackup` (Fierce East backup
+-> Silvis primary all week). They are the lists that project's generator stamps `isBackup` / `isFierceBackup` from, and a Monday
+on a list with no published week is its own pending mark - so the lists name Fierce's weeks months before those weeks are
+published. Until now Silvis knew such a week only from Setup's stated weeks, typed by hand.
+
+The change, in `east-feed-refresh` only (v2 -> v3; no other function reads the lists): `eastFetchWeeks` returns the two validated
+lists from the blob it reads anyway - no request is added, the same GETs per leg, request for request with the in-app refresh. The
+`@eastRefresh` block gains east-feed.js's `efIsMonday`, `eastListsFromBlob`, `eastCachedLists`, `eastListsGuard`,
+`eastListsGuardText`, `eastListsPlan` and `eastAttachLists`, function for function (`test/edge-functions.test.js` pins them
+behaviour-equal under six time zones). `eastMainPlan` attaches the lists to the weeks of the ONE main upsert - `data.eastLists =
+{ eastPrimary, eastBackup, readAt, dropped }`, beside `data.vacations` - and `eastExtraPlan` attaches the same copy to the weeks
+outside the main window (the 11/11 review: a week that slides out of the main window is rewritten by that leg, and a run whose main
+read is empty - the other project's newest published week more than five weeks back - would otherwise strip the lists from every
+week that held them while answering "read" or "kept"). The answer
+and the audit detail gain `lists { trusted, eastPrimary, eastBackup, readAt, written, dropped, guard }` and the summary one clause
+(`written`: a week of either leg holds them - counted only once an upsert of this run carrying them has gone through, never
+for a refused one; the summary says "NOT cached" when none does).
+The guard: a missing key, a non-array, a list that lost a cached Monday of this week or later that the other
+project has not published - unless that list still holds every week published with its flag, and there is at least one - or an
+empty list while a published week carries its flag (whatever the cache holds: a wiped list read over a cache with no copy is not
+"no weeks") keeps
+BOTH cached lists as they are, takes nothing new from that read, adds its words to `errors` and answers `ok` false. Never "no
+Fierce weeks". The published weeks that vouch for a list are the ones the run just fetched and the cached rows a refresh re-read
+within 84 hours (`EAST_LISTS_VOUCH_HOURS` - this function re-reads both windows daily, so two missed runs are tolerated): a row
+no refresh reads any more keeps whatever flag it had and neither blocks an edit nor vouches for one. So after a longer gap a list
+that lost a week, vouched for only by flagged weeks outside the main window, is kept by the first run - whose extra leg re-reads
+those weeks - and taken by the next. One line outside the lists changes too: `eastTrailingRoles` reads a
+`dayBeforeRules.trailingEdgeRoles` that is no list as the default (primary only), as `rules.js` does since 11/11 - before, the
+held-days warning searched a string as text (a number or an object already read as the default there). Nothing else of that
+blob is cached; an entry that is no Monday is dropped, counted in the cache and named in the
+audit row only. No new secret, table, RPC or cron change; no mode, no gate, no mail; `dryRun` reports the same and writes nothing.
+
+The order: the client first (a push to `main` - the build that reads `data.eastLists` and whose own Refresh from Davenport writes
+it), then this deploy the same day. Until v3 runs, v2's 10:30 UTC upsert rewrites the main-window payloads WITHOUT the key: the
+lists leave the cache each morning until someone presses Refresh from Davenport, the app derives from published and stated weeks
+as before Prompt 34, and Setup says so (its issues list, and "none in the cache" in the East feed panel). The other order - v3
+first - is as safe: an older client ignores the key, and its own Refresh drops it until the next 10:30 UTC run.
+
+The deploy: `deploy-east-lists.sh` in the private apply-scripts folder (it carries machine paths, so it stays out of this repo),
+run from a clean `main` that carries this change - `deploy-rest-retry.sh` cut down to this one function. `--dry-run` first: it
+checks the CLI and the `supa-silvis` link, reads `functions list` (`east-feed-refresh` ACTIVE, `verify_jwt` false - the cron job
+sends no JWT), downloads the live function into a fresh backup folder and stops unless it is the deployed v2 byte for byte
+(CRLF-normalised `0cd0d9b7198e...`, section 3's "2026-10-26 - the PGRST303 retry" - anything else was deployed outside these
+records: stop), and stages the new file against the hash it pins (`test/edge-functions.test.js` pins the same bytes); nothing is
+deployed, and the workdir is left holding the live copy. The real run reads the clock (not 10:20-10:35 UTC - the East refresh),
+asks for DEPLOY in capital letters at the terminal, reads the clock again, deploys the one function (`--no-verify-jwt --use-api`),
+reads `functions list` again (one version up, `verify_jwt` still false), re-downloads it and compares it with the staged file,
+and checks that an unauthenticated POST still answers 401. Then its PASTE THIS BACK block, for the record step.
+
+The proof after it (Faraz, the SQL editor - the secret is read from Vault, never typed): the dry run of "Deploy record - Prompt 31
+Part A" step 4, read back with the lists in view -
+```sql
+select net.http_post(
+  url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/east-feed-refresh',
+  headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+    coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+  body := '{"dryRun":true}'::jsonb,
+  timeout_milliseconds := 60000);
+-- pg_net answers asynchronously: wait 20-30 s, then
+select status_code, content::jsonb->'ok' as ok, content::jsonb->'errors' as errors, content::jsonb->'lists' as lists
+from net._http_response where content::text like '{"dryRun":true%' order by created desc limit 1;
+```
+[`200`, `ok` `true`, `errors` `[]`, and `lists` reading `"trusted": true` with the two counts, `"written": true` and an empty
+`guard`. `ok` `false` names the problem in `errors` - a list that came back missing, empty or short is repaired in the
+Davenport app, where the two lists are edited (nothing on this side accepts a read the guard refuses); look at it before the next
+10:30 UTC run.] Then, in the app: Setup > East
+feed > Refresh from Davenport once (or wait for 10:30 UTC), and read "Derived weeks" - the lists' last-read time and every
+upcoming week with its source (published / DSG list / stated).
+
+Rollback: section 7 (the backup the script took is the deployed v2; with v2 back the lists leave the cache at its next run and the
+app says so - nothing else to undo).
+
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
 Both jobs were created 2026-09-22, AFTER the secret was set and the functions
@@ -1264,6 +1344,8 @@ curl.exe -s -i "$URL/east-feed-refresh" -H "x-cron-secret: $SECRET" | Select-Obj
 #   -> 200 {"dryRun":true,"ok":true,"error":null,"errors":[],"failed":false,"source":"cron","today":"YYYY-MM-DD","from":"<Monday>","to":"<that Monday + 210 days>",
 #       "weeks":N,"coverage":{"from":...,"to":...},...,"vacations":{"codes":["FAK"],"ranges":N,...,"trusted":true,"guard":[]},...,
 #       "extra":{"from":...,"to":...,"weeks":N,...},"newRanges":[...],...,"would":{"upsert":N,"weekRows":N,"rewrittenRows":N,"prune":{...},"reset":{"p_from":"<Monday>"},"extra":N}}
+#   v3 (the East week lists, prepared - section 3's "2026-11-11 - the East week lists") adds, before "would":
+#       "lists":{"trusted":true,"eastPrimary":N,"eastBackup":N,"readAt":"<the run's time>","written":true,"dropped":[],"guard":[]}
 ```
 The first two checks are `scripts/verify-rls.sh` 20i, graded on every plain run since the deploy's record step (the flag is
 gone; the run after the deploy read both PASS - section 3) - which also requires the function's own body
@@ -1345,6 +1427,14 @@ deploys anything, into `$env:USERPROFILE\projects\supa-silvis\backup-rest-retry-
 lines of each function it deployed - copy that backup over the workdir's `supabase\functions\<slug>\index.ts`, then that function's
 deploy line (`--no-verify-jwt --use-api`). The backups are main `57dd93d`'s files, so the rollback only takes the retry away; no data
 and no database change is involved.
+
+The East week lists (section 3, "2026-11-11 - the East week lists"; `east-feed-refresh` v3): `deploy-east-lists.sh` downloads the
+live function before it deploys, into `$env:USERPROFILE\projects\supa-silvis\backup-east-lists-<UTC stamp>\east-feed-refresh\index.ts`,
+and prints the rollback lines - copy that backup over the workdir's `supabase\functions\east-feed-refresh\index.ts`, then the
+deploy line (`--no-verify-jwt --use-api`). The backup is the deployed v2 (the retry stays). With v2 back, its next run rewrites the
+main-window weeks without `data.eastLists`: the lists leave the cache until an in-app Refresh from Davenport, the app derives from
+published and stated weeks and Setup says the lists are not in the cache. No data and no database change is involved; the client
+needs no rollback.
 
 `east-feed-refresh` (Prompt 31 Part A), in this order. Stop the job first, in the SQL editor:
 `select cron.unschedule('silvis-east-feed-daily');`. Then leave the function (it is gated and nothing else calls it)

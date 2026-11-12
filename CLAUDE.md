@@ -148,6 +148,17 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   review - never "no vacations"), and the review resets go through ONE SQL function, `east_vacation_reset_stale` (the 9/23
   client loop while it is missing); since revision aa (applied 2026-10-22 04:50:53Z) it keeps every review of an East person the
   cache holds no range of ending on or after its first day, with one `eastvac.reset.kept` audit row.
+- **The East week lists (Prompt 34, Faraz 11/11; rules doc §8 item 29, build guide §26):** for the weeks Davenport has not
+  published, Fierce's weeks come from the Davenport app's two lists of Mondays (`backupMondays` = East primary = Silvis
+  backup, `fierceBackup` = East backup = Silvis primary). Both refreshes take them from the Davenport setup row they already
+  read (no request added) and cache them in the payload of the `east_feed` rows they write - both legs (`data.eastLists`, beside
+  `data.vacations`; Mondays only - no schema change); `deriveFierceWeeks` reads a published week, then the lists, then
+  Setup's stated weeks. Guarded like the vacations (`eastListsGuard`): a missing key, a non-list, a list
+  that lost an upcoming unpublished week without still holding every week Davenport published with that flag, or an empty
+  list beside a published week carrying its flag (a cold cache included) keeps both
+  cached lists - never "no Fierce weeks"; only weeks a refresh re-read in the last 84 h vouch. A writer that predates this
+  (the function before v3, an old client) rewrites those payloads without the key; the app then says the lists are not in
+  the cache - in Setup's issues and on a Generate preview.
 
 ## Rules engine + generator contract
 
@@ -156,7 +167,15 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
 - No surgeon-specific `if (name === ...)` in code: every rule is data in `call_schedule_data.data.surgeonRules` and
   editable in Setup. Fierce's derived weeks and Khan's East dependency are generic `eastFeed` features; Acton's rest
   preference is the generic soft `restBetweenStretches { minDaysOff, weight }` (10/18 - `short-rest` between call stretches,
-  both roles; Setup > Rules > Limits; it acts once Faraz enters it there).
+  both roles; Setup > Rules > Limits; it acts once Faraz enters it there). Since 11/11 (Faraz, on Prompt 34's preview)
+  `buildContext` reads two more generic things about a derived week (`rdDerivedUnitsAndVacations`; data:
+  `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation }`, on unless exactly `false`): a holiday unit with a
+  day in the week is the derived surgeon's in that role on all its days ("Give Fierce Memorial Day"), and the lock yields on
+  a day his own vacation refuses him - the day itself, for primary the day before - a holiday unit whole ("don't put him on
+  if he has a vacation listed"); `helpers.planHolidays` reads the same. A day a unit adds stands only while the unit is his
+  (`derivedUnitLost`, read live by `rdDerivedOverridden` and the generator's lock seeding): when ALL the unit's days of his
+  week are someone else's the added day is not his - it follows that holder, or stays open with reasons when he cannot take
+  it; the generator's warnings say what became of each added day.
 - **Offers are the mechanism (Prompt 14):** `rules.buildContext` reads `offers` (`call_offers`) and `periods` (`call_periods`) and eligibility is offers-first inside a period (exhaustive / preferred per surgeon, rules-only by choice); the seed's dated lists (`explicitAvailable`, `offeredDays`, `availableWeeks`, tagged `surgeonRules.<id>.offerSources`) are **offer sources** the importer turns into `call_offers` rows for a surgeon with a mode in the period; recurring patterns, derived weeks and windows stay rules. **Since 10/18 (rules doc §8):** an *exhaustive* ("only these days") surgeon's dated lists are set aside for the period - his hard `not-offered` governs and the importer retires his month lists and available rows there, so for him they are never a second whitelist path; a *preferred* surgeon's dated lists STAND all period ("List always stands": painting only adds days - an offer lifts a list on its own date and role only) and the importer keeps his rows and months beside his offers (`offeredDays` is offers only). **Painting fix B:** in the generator a preferred painter's soft `outside-offers` is waived while a placement still brings him towards his share for the role and month and stands beyond it (`diagnostics.offers.outsideOffers` lists every off-list day either way). **Claims and trades** (`opts.claim`) skip the exhaustive `not-offered`, and for a surgeon submitted for the day's period (either mode) read the day as if his dated lists did not exist ("taking it counts as painting it"; his recurring whitelist and every other hard rule stand); rules-only / not-started surgeons, and every day outside a period, keep today's rules byte for byte.
 - `generator.js`: locks → weekend/day units → primary pass → backup pass → repair → target smoothing, wrapped in
   best-of-N; returns `{ schedule, diagnostics }` and **never silently leaves a slot empty** — open slots carry reasons.
@@ -195,4 +214,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   2026-10-20: v1 deployed 01:42:59 UTC, the dryRun 200 `"ok":true`, `silvis-east-feed-daily` active; recorded in
   `edge-functions/README.md` §3), and the first scheduled run's read-back (done - 2026-10-20 10:30 UTC: one `east.refresh` audit
   row from `cron`, `ok` true; README §3 step 6). Readings taken, to confirm: §8 items 25-27 (no-primary days, East
-  vacations' open questions, the rest rule).
+  vacations' open questions, the rest rule) and item 29 (Prompt 34: a Monday on both lists, the general reading of the
+  Memorial Day call, the day before a vacation). Faraz's own Prompt 34 step: the `east-feed-refresh` v3 deploy and its
+  dry-run proof (`edge-functions/README.md` §3, "2026-11-11 - the East week lists") - v3 is prepared and waits for it.

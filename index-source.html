@@ -3450,6 +3450,7 @@ function CallSchedule() {
     const forecastAll = forecastFromFeedRows(eastForecastRows);
     const eastOverrides = overridesByPerson(eastOverrideRows);
     const eastBusyDays = {}, eastForecast = {}, eastDerived = [], eastMeta = {};
+    const eastDerivedWarnings = []; // Prompt 34: [{ surgeonId, weekMonday, why, stands, stated? }] - shown in Setup > East feed (buildContext never reads it)
     const eastVacationRanges = {}; // Prompt 15: { rosterId: [{ start, end }] } - the person's Davenport vacations from the cache, by CODE
     const forecastIds = []; // surgeons whose eastFeed.forecast is on - filled after the prune below
     let unresolved = false;
@@ -3479,9 +3480,14 @@ function CallSchedule() {
       }
       if (ef.deriveFrom || ef.statedWeeks) {
         meta.derivedWeeks = true;
-        deriveFierceWeeks(weeks, { statedWeeks: ef.statedWeeks || null }).forEach(w => {
+        // Prompt 34 (Faraz 11/11): a published week, then the East week lists the cache rows carry (data.eastLists -
+        // deriveFierceWeeksDetail reads them from `weeks` itself, never from Davenport), then Setup's stated weeks. The
+        // warnings (a Monday in both lists; a listed week whose stated role differs) go to Setup > East feed.
+        const dd = deriveFierceWeeksDetail(weeks, { statedWeeks: ef.statedWeeks || null });
+        dd.weeks.forEach(w => {
           eastDerived.push({ surgeonId: s.id, weekMonday: w.weekMonday, silvisRole: w.silvisRole, source: w.source });
         });
+        dd.warnings.forEach(w => { if (!ef.deriveFrom || w.weekMonday >= ef.deriveFrom) eastDerivedWarnings.push({ surgeonId: s.id, ...w }); });
       }
       eastMeta[s.id] = meta;
     });
@@ -3497,7 +3503,7 @@ function CallSchedule() {
     return {
       roster: surgeons, surgeonRules: surgeonRules || {}, groupRules: groupRules || {}, holidays: holidays || {},
       timeOffRows, availabilityRows, schedule, offers: offerRows, periods: periodRows,
-      eastBusyDays, eastForecast, eastOverrides, eastDerived, eastFeedCoverage: coverage, eastMeta,
+      eastBusyDays, eastForecast, eastOverrides, eastDerived, eastFeedCoverage: coverage, eastMeta, eastDerivedWarnings,
       eastVacationRanges, eastVacationReviews: eastVacationReviewRows,
     };
     // offers / periods (Prompt 14 part 3c, U3c 9/23): the call_offers / call_periods rows the app already holds
@@ -3900,7 +3906,19 @@ function CallSchedule() {
       const plan = vacTrusted ? planVacationCache(cacheBefore, feed.weeks, feed.vacations, { from: fromMon }) : { weeks: keepCachedVacations(feed.weeks, cacheBefore), rewritten: [], carriers: 0 };
       const vacationCount = feed.vacations ? Object.keys(feed.vacations).reduce((acc, c) => acc + feed.vacations[c].length, 0) : null;
       const unresolvedWord = (feed.vacationCodesUnresolved || []).length ? ` (${feed.vacationCodesUnresolved.join(", ")} not in the Davenport roster)` : "";
-      const weekRows = toEastFeedRows(plan.weeks).map(r => ({ ...r, fetched_at: feed.fetchedAt }));
+      // Prompt 34 (Faraz 11/11): the two East week lists (the Mondays Davenport keeps behind isBackup / isFierceBackup - Fierce's
+      // weeks for the weeks Davenport has not published) come from the roster blob this refresh already read (feed.lists; no
+      // request is added) and ride in the payload of every week written here - the main window's and, since the 11/11
+      // review, the extra leg's (data.eastLists, beside
+      // data.vacations) - Generate, the day editor and the rules read the cache, never Davenport. Behind a guard
+      // (east-feed.js eastListsGuard; the server refresh runs the same one): a missing key, a non-array, an empty list or a
+      // list that lost an upcoming unpublished week without being clearly healthy keeps BOTH cached lists as they are - never
+      // "no Fierce weeks" - and the audit row says ok:false. Over cacheBefore, the cache as the database held it just before.
+      const listsPlan = eastListsPlan(feed, cacheBefore, todayCentral(), fromMon);
+      if (!listsPlan.trusted) console.warn("East week lists not trusted - the cached lists are kept", listsPlan.guard);
+      const weekRows = toEastFeedRows(eastAttachLists(plan.weeks, listsPlan.lists)).map(r => ({ ...r, fetched_at: feed.fetchedAt }));
+      // does some week this refresh writes hold the lists? A main-window week here, or a week of the extra leg below
+      let listsWritten = weekRows.length > 0 && !!listsPlan.lists;
       const rewrittenRows = plan.rewritten.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: w.fetchedAt || feed.fetchedAt }));
       const rows = weekRows.concat(rewrittenRows);
       if (rows.length) {
@@ -3956,11 +3974,15 @@ function CallSchedule() {
           const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});
           const sel = eastExtraWeeks(feed.weeks, more.weeks, eastWin);
           extra.skipped = sel.skipped;
-          const extraRows = toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => ({ ...r, fetched_at: more.fetchedAt }));
+          // Review A (11/11): these weeks carry the East week lists too (the lists leg's copy - the trusted read, or the
+          // cached copy kept). A week that has slid out of the main window is rewritten HERE; without the copy, a run whose
+          // main read is empty would strip the lists from every week that held them while saying "read" or "kept".
+          const extraRows = toEastFeedRows(eastAttachLists(keepCachedVacations(sel.weeks, cacheRows), listsPlan.lists)).map(r => ({ ...r, fetched_at: more.fetchedAt }));
           if (extraRows.length) {
             const res = await fetch(`${SUPABASE_URL}/rest/v1/east_feed`, { method: "POST", headers: { ...dbAuthHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(extraRows) });
             if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error("couldn't cache them: " + describeDbError(t)); }
             extra.weeks = extraRows.length; extra.past = sel.past; extra.ahead = sel.ahead;
+            if (listsPlan.lists) listsWritten = true;
             await loadEastTables();
           }
         } catch (e) { console.warn("East feed: the Davenport weeks outside the refresh window were not cached - cache kept", e); extra.error = errText(e).slice(0, 200); }
@@ -3984,16 +4006,24 @@ function CallSchedule() {
       // Prompt 31 Part B item 7: the extra leg, named in the audit row and the ONE final toast (a failure is tone error).
       const extraSummary = extra.error ? `; Davenport weeks outside the window NOT cached: ${extra.error}`
         : `; ${extra.weeks} more published week(s) cached (${extra.from}..${extra.to}${extra.skipped ? `; ${extra.skipped} after a gap skipped` : ""})`;
+      // Prompt 34: the lists leg, named in the audit row and the ONE final toast (an untrusted read is tone error; a dropped
+      // entry is named - its short text goes to the scheduler's audit row and toast only, never to the cache).
+      const listsCount = listsPlan.lists ? listsPlan.lists.eastPrimary.length + " East-primary + " + listsPlan.lists.eastBackup.length + " East-backup week(s)" : "none";
+      const droppedText = listsPlan.dropped.length ? `${listsPlan.dropped.length === 1 ? "1 entry that is not a Monday" : listsPlan.dropped.length + " entries that are not Mondays"} dropped (${listsPlan.dropped.slice(0, 5).map(d => d.list + " " + d.value).join(", ")}${listsPlan.dropped.length > 5 ? ", ..." : ""})` : "";
+      const listsSummary = listsPlan.trusted ? `; East week lists read: ${listsCount}${listsWritten ? "" : " - NOT cached (no published week row to hold them)"}${droppedText ? "; " + droppedText : ""}`
+        : `; East week lists NOT trusted (${listsPlan.guard.map(p => p.list + " " + p.why).join(", ")}) - cached lists kept${listsPlan.lists ? "" : " (none cached)"}`;
       // Prompt 31 Part A (A3, decision 5): the run's ok / error, in the server refresh's keys, so Setup > East feed reads the
       // in-app rows and the daily server's alike (eastRefreshStatus): ok = nothing below went wrong; error = the first.
       const refreshErrors = vacGuard.problems.map(eastGuardText)
+        .concat(listsPlan.guard.map(eastListsGuardText))
         .concat(forecastDeleteError ? ["forecast prune: " + String(forecastDeleteError).slice(0, 180)] : [])
         .concat(cacheRows ? [] : ["the cache did not reload - no review reset, no extra leg"])
         .concat(reviewResetFailures.length ? [reviewResetFailures.length + " East vacation review reset(s) FAILED - delete the row(s) by hand"] : [])
         .concat(rr.error ? ["review reset FAILED: " + String(rr.error).slice(0, 180)] : [])
         .concat(extra.error ? ["the Davenport weeks outside the window were NOT cached: " + String(extra.error).slice(0, 140)] : []);
-      const auditDone = logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}${rr.error ? "; the review reset FAILED" : ""}${extraSummary}`,
+      const auditDone = logAudit("east.refresh", `Refreshed the East feed: ${weekRows.length} published week(s) between ${fromMon} and ${toMon}; ${pruneSummary}; ${vacationSummary}${reviewResets.length || reviewResetFailures.length ? `; ${reviewResets.length} East vacation review(s) reset${reviewResetFailures.length ? ", " + reviewResetFailures.length + " reset FAILED" : ""}` : ""}${rr.error ? "; the review reset FAILED" : ""}${extraSummary}${listsSummary}`,
         { ok: refreshErrors.length === 0, error: refreshErrors[0] || null, errors: refreshErrors, source: "app",
+          lists: { trusted: listsPlan.trusted, eastPrimary: listsPlan.lists ? listsPlan.lists.eastPrimary.length : null, eastBackup: listsPlan.lists ? listsPlan.lists.eastBackup.length : null, readAt: listsPlan.lists ? listsPlan.lists.readAt : null, written: listsWritten, dropped: listsPlan.dropped.slice(0, 20), guard: listsPlan.guard },
           from: fromMon, to: toMon, weeks: weekRows.length, coverage: publishedCoverage, forecastRowsDeleted, forecastDeleteError: forecastDeleteError ? String(forecastDeleteError).slice(0, 200) : null,
           vacations: { codes: vacationCodes, ranges: vacationCount, to: feed.vacationsTo || null, rewrittenWeeks: rewrittenRows.length, unresolved: feed.vacationCodesUnresolved || [], error: feed.vacationsError ? String(feed.vacationsError).slice(0, 200) : null, trusted: vacTrusted, guard: vacGuard.problems },
           reviewResetVia: rr.via, reviewResetError: rr.error, reviewResetSkipped: rr.skipped,
@@ -4010,7 +4040,10 @@ function CallSchedule() {
       const extraWord = extra.error ? ` Davenport weeks outside the refresh window could NOT be cached (the call totals may undercount): ${extra.error}.`
         : (extra.weeks ? ` ${extra.weeks} more published week(s) cached.` : "")
           + (extra.skipped ? ` ${extra.skipped} later week(s) after a gap in Davenport's published weeks not cached (they follow once the weeks between are published).` : "");
-      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${resetWord}${extraWord}` : `East feed refreshed: Davenport has no published weeks in that window - its cached weeks are unchanged.${vacationWord}${resetWord}${extraWord}`, feed.vacationsError || !vacGuard.ok || reviewResetFailures.length || rr.error || extra.error ? "error" : weekRows.length ? (forecastDeleteError ? "error" : "success") : "info");
+      // Prompt 34: the lists leg's words - what was read (and cached with the weeks written), or why the cached lists were kept
+      const listsWord = !listsPlan.trusted ? ` ${listsPlan.guard.map(eastListsGuardText).join(" ")}`
+        : ` East week lists read: ${listsCount}${listsWritten ? "" : " - NOT cached (no published week row to hold them)"}.${droppedText ? " " + droppedText + "." : ""}`;
+      showToast(weekRows.length ? `East feed refreshed: ${weekRows.length} published week(s) cached.${pruneWord}${vacationWord}${listsWord}${resetWord}${extraWord}` : `East feed refreshed: Davenport has no published weeks in that window - its cached weeks are unchanged.${vacationWord}${listsWord}${resetWord}${extraWord}`, feed.vacationsError || !vacGuard.ok || !listsPlan.trusted || reviewResetFailures.length || rr.error || extra.error ? "error" : weekRows.length ? (forecastDeleteError ? "error" : "success") : "info");
       // Prompt 31 Part A (A3): Setup > East feed's last-refresh line follows this run's audit row
       auditDone.then(() => loadEastRefreshAudit());
     } catch (e) {
@@ -4208,6 +4241,11 @@ function CallSchedule() {
     const offersStale = ov.verdict === "stale" ? ov.why : null;
     setGenBusy(true);
     try {
+      // Prompt 34 (the 11/11 review): Generate reads the derived East weeks from the cache alone. When a surgeon's weeks
+      // derive from East and no cached week carries the two East week lists (a refresh by an older writer drops them; so
+      // does a cache that never held them), only published and stated weeks derive - the run goes on, and the preview and
+      // the toast say so (helpers.js suDerivesFromEast / suEastListsCached, the readings of Setup's issue line).
+      const eastListsMissing = suDerivesFromEast(surgeons, surgeonRules) && !suEastListsCached(eastFeedRows);
       const inputs = { ...ctxInputs, schedule: scheduleRef.current || schedule, rangeStart: start, rangeEnd: end };
       const runOpts = { seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, timeBudgetMs: 25000 };
       const t0 = Date.now();
@@ -4225,11 +4263,11 @@ function CallSchedule() {
       const ms = Date.now() - t0;
       const dg = res.diagnostics || {};
       if (dg.warnings && dg.warnings.length) console.warn("generate warnings:", dg.warnings);
-      setPreviewGen({ schedule: res.schedule || {}, diagnostics: dg, start, end, seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, ranAt: new Date().toISOString(), ms, offersStale });
+      setPreviewGen({ schedule: res.schedule || {}, diagnostics: dg, eastListsMissing, start, end, seed, bestOf, respectLocks: o.respectLocks !== false, fillOpenOnly: o.fillOpenOnly === true, ranAt: new Date().toISOString(), ms, offersStale });
       setGenOpts(p => ({ ...p, start, end, bestOf }));
       const sd = parse(start); setCalMonth(sd.getMonth()); setCalYear(sd.getFullYear());
       const open = (dg.uncovered || []).length;
-      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.${offersStale ? " WARNING: the offers may be stale (" + offersStale + ") - sign in again and re-run before accepting." : ""}`, offersStale ? "error" : open ? "info" : "success");
+      showToast(`Preview ready (seed ${seed}, ${dg.candidatesTried || bestOf} candidate(s), ${ms} ms${o.fillOpenOnly === true ? ", fill open slots only" : ""}): ${open ? open + " open slot(s) - see the diagnostics" : "every slot covered"}. Nothing is saved yet.${offersStale ? " WARNING: the offers may be stale (" + offersStale + ") - sign in again and re-run before accepting." : ""}${eastListsMissing ? " WARNING: the East week lists are not in the East feed cache - only published and stated East weeks were derived. Refresh in Setup > East feed and re-run before accepting." : ""}`, offersStale || eastListsMissing ? "error" : open ? "info" : "success");
     } catch (e) {
       console.warn("generate failed", e);
       showToast("Generate failed: " + errText(e).slice(0, 160), "error");
@@ -8565,7 +8603,7 @@ function CallSchedule() {
             // name the East feed, so they are the scheduler's only (eastDetailsVisible) - a surgeon, the office, a viewer and a
             // follower get the holiday badge alone (an East vacation day already shows as a vacation)
             if (!eastDetailsVisible) return out;
-            if (P && P.derived[d]) out.push({ k: "E", text: "E", title: "East week: Silvis " + P.derived[d] + " (derived from the Davenport feed)", bg: "#e8e0f8", fg: "#5a3a90" });
+            if (P && P.derived[d] && !(typeof derivedUnitLost === "function" && derivedUnitLost(rulesCtx, rulesCtx.schedule, d, P.derived[d], who || pid))) out.push({ k: "E", text: "E", title: "East week: Silvis " + P.derived[d] + " (derived from the Davenport feed)" + (P.eastDays.has(d) ? "" : " - a day its holiday unit adds, outside the East week"), bg: "#e8e0f8", fg: "#5a3a90" });
             // Fix round (9/22, finding 13): an override busy:false clears the day - no F badge
             // (the day editor says "no East call (override: force clear)"; the O badge mirrors it).
             const ovClear = !!(P && P.eastOverrides && P.eastOverrides[d] === false);
@@ -10474,8 +10512,15 @@ function eastStatusLines(ctx, ctxInputs, day, nameOf) {
       }
     }
     if (m.derivedWeeks && P) {
-      const dRole = P.derived[day];
-      if (dRole) out.push({ id, text: name + ": East week -> Silvis " + dRole + " (derived)", tone: "busy" });
+      // (a day a holiday unit added that is no longer his - the unit's days of his week are someone else's, rules.js
+      // derivedUnitLost - is no derived day here either: it reads "no East week")
+      const dRole = P.derived[day] && !(typeof derivedUnitLost === "function" && derivedUnitLost(ctx, ctx.schedule, day, P.derived[day], id)) ? P.derived[day] : null;
+      // 11/11 (Prompt 34, review B): two days read wrongly here - a day a holiday unit added to his derived week lies
+      // OUTSIDE the East week (it is his by the unit), and a day whose derived lock yielded to his own vacation is
+      // inside the East week but not derived - for that reason, not for the derive-from date
+      const yieldedRole = !dRole && P.derivedYield ? P.derivedYield[day] : null;
+      if (dRole) out.push({ id, text: name + ": East week -> Silvis " + dRole + " (derived)" + (P.eastDays.has(day) ? "" : " - a day its holiday unit adds, outside the East week"), tone: "busy" });
+      else if (yieldedRole) out.push({ id, text: name + ": on East call this week (the derived Silvis " + yieldedRole + " yields to his vacation - the day is filled like any other)", tone: "warn" });
       else if (P.eastDays.has(day)) out.push({ id, text: name + ": on East call this week (not derived - before the derive-from date)", tone: "warn" });
       else out.push({ id, text: name + ": no East week", tone: "ok" });
     }
@@ -13234,6 +13279,24 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
   const fetchedAt = (feedRows || []).map(r => r.fetched_at).filter(Boolean).sort().slice(-1)[0] || null;
   const derived = (ctxInputs && ctxInputs.eastDerived) || [];
   const nextPrimary = derived.filter(w => w.silvisRole === "primary" && w.weekMonday >= today).sort((a, b) => a.weekMonday < b.weekMonday ? -1 : 1)[0] || null;
+  // Prompt 34 (Faraz 11/11): the derived weeks by source - a published Davenport week, then the two DSG lists (the weeks
+  // Davenport has not published), then Setup's stated weeks - upcoming first; when the lists were last read; the two
+  // warnings (a Monday in both lists, a listed week whose stated role differs). Faraz's two calls of 11/11 show beside
+  // the week they touch: the days a holiday unit adds (ctx.derivedUnitDays) and the days that yield to his own vacation
+  // (ctx.derivedVacationYields) - rules.js decides both.
+  const derivedSorted = derived.slice().sort((a, b) => a.weekMonday < b.weekMonday ? -1 : a.weekMonday > b.weekMonday ? 1 : 0);
+  const derivedUpcoming = derivedSorted.filter(w => suAddDays(w.weekMonday, 6) >= today), derivedPast = derivedSorted.filter(w => suAddDays(w.weekMonday, 6) < today);
+  const derivedWarnings = ((ctxInputs && ctxInputs.eastDerivedWarnings) || []).filter(w => suAddDays(w.weekMonday, 6) >= today);
+  const listsStatus = typeof eastListsStatus === "function" ? eastListsStatus(feedRows || []) : { state: "none", readAt: null, writtenAt: null, eastPrimary: 0, eastBackup: 0, dropped: 0 };
+  const derivedNote = (w) => {
+    const sun = suAddDays(w.weekMonday, 6);
+    const off = ((ctx && ctx.derivedVacationYields) || []).filter(y => y.surgeonId === w.surgeonId && y.role === w.silvisRole && y.day >= w.weekMonday && y.day <= sun).map(y => y.day);
+    // (11/11 review: not for a unit someone else holds inside his week - rules.js derivedUnitLost, the engine's own reading)
+    const added = ((ctx && ctx.derivedUnitDays) || []).filter(u => u.surgeonId === w.surgeonId && u.role === w.silvisRole && ctx.holidayByDay && ctx.holidayByDay[u.day] && ctx.holidayByDay[u.day].days.some(d => d >= w.weekMonday && d <= sun)
+      && !(typeof derivedUnitLost === "function" && derivedUnitLost(ctx, ctx.schedule, u.day, u.role, u.surgeonId)));
+    return (off.length ? " - not on " + off.map(d => fmtMD(d)).join(", ") + " (his vacation)" : "") + (added.length ? " + " + added.map(u => fmtMD(u.day) + " (" + u.unit + ")").join(", ") : "");
+  };
+  const derivedRow = (w) => <div key={w.weekMonday + w.surgeonId} data-week={w.weekMonday} data-role={w.silvisRole} data-source={w.source}>{w.weekMonday} {nameOf(w.surgeonId)} Silvis {w.silvisRole} <span style={{ color: "#5B6B82" }}>({eastSourceLabel(w.source)})</span>{derivedNote(w)}</div>;
   const meta = (ctxInputs && ctxInputs.eastMeta) || {};
   const busyIds = Object.keys(meta).filter(id => meta[id].busyDays);
   // Fix round (9/22, findings 2 + 12): the strip reads the PRUNED map - published rows
@@ -13267,7 +13330,7 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
   return (
     <div data-testid="east-card">
       <div data-testid="east-status" style={{ fontSize: 12.5, color: "#1F2A3A", lineHeight: 1.6, marginBottom: 8 }}>
-        <strong>East feed:</strong> fetched {suFmtTs(fetchedAt)}, {weeks.length} week(s), coverage {cov ? cov.from + ".." + cov.to : "none"}, next derived primary week {nextPrimary ? nextPrimary.weekMonday + " (" + nameOf(nextPrimary.surgeonId) + ", " + nextPrimary.source + ")" : "none on file"}.
+        <strong>East feed:</strong> fetched {suFmtTs(fetchedAt)}, {weeks.length} week(s), coverage {cov ? cov.from + ".." + cov.to : "none"}, next derived primary week {nextPrimary ? nextPrimary.weekMonday + " (" + nameOf(nextPrimary.surgeonId) + ", " + eastSourceLabel(nextPrimary.source) + ")" : "none on file"}.
         <span style={{ marginLeft: 8, fontSize: 11 }}>cache: <span style={{ color: tone("feed") }}>{state("feed")}</span>, forecast: <span style={{ color: tone("forecast") }}>{state("forecast")}</span>, overrides: <span style={{ color: tone("overrides") }}>{state("overrides")}</span></span>
       </div>
       <div data-testid="east-refresh-status" data-state={auditState} style={{ fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
@@ -13332,9 +13395,16 @@ function EastFeedCard({ css, dk, feedRows, forecastRows, overrideRows, loadState
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 260px", border: "1px solid #e8ecf0", borderRadius: 8, padding: "8px 10px" }}>
           <div style={{ ...css.subT, margin: "0 0 4px" }}>Derived weeks (East week to Silvis role)</div>
+          {/* the legend and the status line are east-feed.js's words (EAST_DERIVED_LEGEND, eastListsStatusText): the other app is named there, never in this file (the rebrand pin R.4) */}
+          <p data-testid="east-derived-legend" style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 4px" }}>{typeof EAST_DERIVED_LEGEND === "string" ? EAST_DERIVED_LEGEND : ""}</p>
+          <div data-testid="east-lists-status" data-state={listsStatus.state} data-read-at={listsStatus.readAt || ""} style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 6, color: listsStatus.state === "read" ? "#1F2A3A" : "#c04040", fontWeight: listsStatus.state === "read" ? 400 : 700 }}>
+            {typeof eastListsStatusText === "function" ? eastListsStatusText(listsStatus, suFmtTs) : ""}
+          </div>
+          {derivedWarnings.length > 0 && <div data-testid="east-derived-warnings" style={{ fontSize: 12, color: "#c04040", fontWeight: 700, lineHeight: 1.5, marginBottom: 6 }}>{derivedWarnings.map(w => <div key={w.surgeonId + w.weekMonday + w.why} data-week={w.weekMonday} data-why={w.why}>{nameOf(w.surgeonId)}: {eastDerivedWarningText(w)}</div>)}</div>}
           {derived.length === 0 ? <p style={{ fontSize: 12, color: "#5B6B82", margin: 0 }}>None derived.</p> : (
             <div data-testid="east-derived" style={{ fontSize: 12, fontFamily: mono, lineHeight: 1.6 }}>
-              {derived.slice().sort((a, b) => a.weekMonday < b.weekMonday ? -1 : 1).map(w => <div key={w.weekMonday + w.surgeonId}>{w.weekMonday} {nameOf(w.surgeonId)} Silvis {w.silvisRole} <span style={{ color: "#5B6B82" }}>({w.source})</span></div>)}
+              {derivedUpcoming.length === 0 ? <div style={{ color: "#5B6B82" }}>No upcoming derived week.</div> : derivedUpcoming.map(derivedRow)}
+              {derivedPast.length > 0 && <details data-testid="east-derived-past" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer", color: "#5B6B82" }}>{derivedPast.length} earlier week(s)</summary>{derivedPast.map(derivedRow)}</details>}
             </div>
           )}
         </div>
@@ -13725,6 +13795,7 @@ function GeneratePanel({ css, presets, opts, setOpts, busy, busyMode, preview, o
             <strong style={{ color: "#5a3a9f" }}>Preview</strong>
             <span data-testid="gen-preview-meta" style={{ fontSize: 12, color: "#3a4a58" }}>{fmtMD(preview.start)} - {fmtMD(preview.end)} ({Object.keys(preview.schedule || {}).length} days), seed <span style={{ fontFamily: mono }}>{String(preview.seed)}</span>, best of {preview.bestOf}{preview.fillOpenOnly ? ", fill open slots only" : ""}, {preview.ms} ms, open slots {(preview.diagnostics.uncovered || []).length}. Shown on the calendar with a dashed outline - not saved.</span>
             {preview.offersStale && <span data-testid="gen-preview-offers-warning" role="alert" style={{ fontSize: 12, fontWeight: 700, color: "#a83232", flexBasis: "100%" }}>WARNING: the offers may be stale - {preview.offersStale}. Offered days may not have been placed first; sign in again and re-run before accepting.</span>}
+            {preview.eastListsMissing && <span data-testid="gen-preview-lists-warning" role="alert" style={{ fontSize: 12, fontWeight: 700, color: "#a83232", flexBasis: "100%" }}>WARNING: the East week lists are not in the East feed cache - only published and stated East weeks were derived. Refresh in Setup &gt; East feed, then re-run before accepting.</span>}
             <span style={{ flex: 1 }} />
             <button data-testid="gen-reroll" onClick={onReroll} disabled={busy} style={css.mini(false)}>Re-roll (new seed)</button>
             <button data-testid="gen-accept" onClick={onAccept} disabled={busy} style={{ ...css.btn(true), padding: "5px 14px" }}>Accept &amp; Publish</button>

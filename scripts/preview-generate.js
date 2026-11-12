@@ -39,6 +39,12 @@
  * Khan's 9/30 keys before they were live). The report and the JSON name the file and every key it changed.
  * --today YYYY-MM-DD (Prompt 23): the rules' today (ctx.today - the hardNeverWeekdaysNoticeDays notice is measured from
  * it); absent = the Central date when the script runs, the same as the app's Generate.
+ * --east-lists cache|live|none (Prompt 34, Faraz 11/11): the two East week lists behind Fierce's derived weeks for the
+ * weeks Davenport has not published. cache (the default) = the copy the cached east_feed rows carry, exactly what the
+ * app's Generate reads. live = read the two lists from Davenport now (GET only - the refresh's own read, parse and guard,
+ * east-feed.js eastListsPlan) and lay them over the rows IN MEMORY: what Generate will read once a refresh has cached
+ * them (an untrusted read stops the script). none = ignore any cached copy (the picture before Prompt 34). The report
+ * names which one ran; nothing is written either way.
  */
 const fs = require("fs");
 const os = require("os");
@@ -50,17 +56,18 @@ const EF = require(path.join(REPO, "east-feed.js"));
 const G = require(path.join(REPO, "generator.js"));
 
 function usage() {
-  console.log("usage: node scripts/preview-generate.js [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--bestOf N] [--seed N] [--out <report.md>] [--backfill YYYY-MM-DD..YYYY-MM-DD] [--rules-override <rules.json>] [--today YYYY-MM-DD]\n" +
+  console.log("usage: node scripts/preview-generate.js [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--bestOf N] [--seed N] [--out <report.md>] [--backfill YYYY-MM-DD..YYYY-MM-DD] [--rules-override <rules.json>] [--today YYYY-MM-DD] [--east-lists cache|live|none]\n" +
     "  Reads the LIVE anon-readable rows and runs generator.generate() - nothing is written to the database.\n" +
     "  --rules-override: { surgeonRules: { id: { key: value|null } }, groupRules: { key: value|null } } applied to the blob in memory only (null deletes a key).\n" +
     "  --today: the rules' today for the hardNeverWeekdays notice (default: the Central date now).\n" +
+    "  --east-lists: the two East week lists - cache (default: the copy the cached rows carry), live (read from Davenport now, GET only, in memory) or none (ignored).\n" +
     "  --out defaults to <os tmpdir>/silvis-preview-<start>-to-<end>.md (+ .json beside it); writing under docs/ is an explicit choice:\n" +
     "  the committed docs/PREVIEW-*.{md,json} are the record of a publish and are never regenerated in place (a new range = a new file name).");
 }
 // The same contract as scripts/import-seed.js / east-forecast.js (audit T1, 9/23): -h/--help is help (exit 0), an
 // unknown token or a flag missing its value is refused (exit 1) - a typo can never start a live-data generate.
 function parseArgs(argv) {
-  const a = { start: "2026-11-02", end: "2027-01-03", bestOf: 200, seed: 7, out: null, backfill: null, rulesOverride: null, today: null };
+  const a = { start: "2026-11-02", end: "2027-01-03", bestOf: 200, seed: 7, out: null, backfill: null, rulesOverride: null, today: null, eastLists: "cache" };
   const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
   const value = (i, flag) => { const v = argv[i]; if (v === undefined || /^--/.test(v)) { console.error("FAIL: " + flag + " needs a value"); usage(); process.exit(1); } return v; };
   for (let i = 0; i < argv.length; i++) {
@@ -73,6 +80,7 @@ function parseArgs(argv) {
     else if (t === "--backfill") a.backfill = value(++i, t); // "YYYY-MM-DD..YYYY-MM-DD" (Prompt 12 T)
     else if (t === "--rules-override") a.rulesOverride = path.resolve(value(++i, t)); // Prompt 23: in-memory blob override (read-only)
     else if (t === "--today") a.today = value(++i, t); // Prompt 23: the rules' today (ctx.today)
+    else if (t === "--east-lists") a.eastLists = value(++i, t); // Prompt 34: cache | live | none
     else if (t === "-h" || t === "--help") { usage(); process.exit(0); }
     else { console.error("unknown argument: " + t); usage(); process.exit(1); }
   }
@@ -85,6 +93,7 @@ function parseArgs(argv) {
   }
   const realDay = (s) => { if (!isDate(s)) return false; const t = Date.parse(s + "T00:00:00Z"); return !isNaN(t) && new Date(t).toISOString().slice(0, 10) === s; };
   if (a.today !== null && !realDay(a.today)) { console.error("FAIL: --today wants a real YYYY-MM-DD day (got " + a.today + ")"); process.exit(1); }
+  if (["cache", "live", "none"].indexOf(a.eastLists) < 0) { console.error("FAIL: --east-lists wants cache, live or none (got " + a.eastLists + ")"); process.exit(1); }
   if (a.rulesOverride !== null) {
     let o;
     try { o = JSON.parse(fs.readFileSync(a.rulesOverride, "utf8")); } catch (e) { console.error("FAIL: --rules-override " + a.rulesOverride + " is not a readable JSON file (" + e.message + ")"); process.exit(1); }
@@ -169,6 +178,31 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     };
   }
 
+  // Prompt 34 (Faraz 11/11): the two East week lists behind the derived weeks of the weeks Davenport has not published.
+  // cache: whatever copy the cached rows carry (deriveFierceWeeks reads it from the rows - the app's Generate does the
+  // same). live: the refresh's own read of Davenport (GET only), parse and guard, laid over the rows in memory. none: no
+  // lists at all. eastListsNote goes into the report's first line.
+  let listedWeeksOpt; // undefined = read the rows' copy; null = none
+  let eastListsNote;
+  if (ARGS.eastLists === "live") {
+    const todayFor = TODAY || (typeof H.todayCentral === "function" ? H.todayCentral() : new Date().toISOString().slice(0, 10));
+    const win = EF.eastRefreshWindows(todayFor);
+    if (!win) throw new Error("--east-lists live: no refresh window for " + todayFor);
+    const live = await EF.fetchEastWeeks(win.main.from, win.main.to, {});
+    const lp = EF.eastListsPlan(live, feedRows, todayFor, win.main.from);
+    if (!lp.trusted || !lp.lists) throw new Error("--east-lists live: the read was not trusted (" + lp.guard.map(EF.eastListsGuardText).join(" | ") + ") - nothing was run");
+    listedWeeksOpt = lp.lists;
+    eastListsNote = "read LIVE from Davenport for this run, in memory only (" + lp.lists.eastPrimary.length + " East-primary + " + lp.lists.eastBackup.length + " East-backup Mondays from " + win.main.from + (lp.dropped.length ? "; " + lp.dropped.length + " entr" + (lp.dropped.length === 1 ? "y" : "ies") + " dropped" : "") + ")";
+  } else if (ARGS.eastLists === "none") {
+    listedWeeksOpt = null;
+    eastListsNote = "ignored (--east-lists none)";
+  } else {
+    const st = EF.eastListsStatus(feedRows);
+    eastListsNote = st.state === "none" ? "none in the cache" : "from the cache (" + st.eastPrimary + " East-primary + " + st.eastBackup + " East-backup Mondays, last read " + st.readAt + (st.state === "kept" ? ", KEPT by the refresh of " + st.writtenAt : "") + ")";
+    // 11/11 review: a cache without the lists must not be silent where it is used - the console says so, not only the report
+    if (st.state === "none") console.warn("WARNING: the East week lists are not in the cache - only published and stated East weeks derive in this run (--east-lists live reads them from Davenport in memory; Setup > East feed > Refresh from Davenport caches them)");
+  }
+  console.log("East week lists: " + eastListsNote);
   // East: derive per surgeon from rules (no name branches)
   const weeks = feedRows.map(r => ({ weekMonday: r.week_monday, data: r.data }));
   // Prompt 12 C (9/22): published > override > forecast. The forecast is pruned to
@@ -184,7 +218,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   const fc0 = (forecastRows[0] && forecastRows[0].data) || {};
   const forecastCode = fc0.code ? String(fc0.code).toUpperCase() : null;
   const fakIdEast = fc0.fakId || null;
-  const eastBusyDays = {}, eastForecast = {}, eastDerived = [];
+  const eastBusyDays = {}, eastForecast = {}, eastDerived = [], eastDerivedWarnings = [];
   for (const s of roster) {
     const ef = (surgeonRules[s.id] || {}).eastFeed || {};
     if (!ef.enabled) continue;
@@ -200,7 +234,12 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
       if (ef.forecast) eastForecast[s.id] = forecast;
     }
     if (ef.deriveFrom || ef.statedWeeks) {
-      for (const w of EF.deriveFierceWeeks(weeks, { deriveFrom: ef.deriveFrom, statedWeeks: ef.statedWeeks })) eastDerived.push({ weekMonday: w.weekMonday, surgeonId: s.id, silvisRole: w.silvisRole, source: w.source });
+      // a published week, then the East week lists (listedWeeksOpt undefined = the rows' own copy), then the stated weeks
+      const opts = { deriveFrom: ef.deriveFrom, statedWeeks: ef.statedWeeks };
+      if (listedWeeksOpt !== undefined) opts.listedWeeks = listedWeeksOpt;
+      const dd = EF.deriveFierceWeeksDetail(weeks, opts);
+      for (const w of dd.weeks) eastDerived.push({ weekMonday: w.weekMonday, surgeonId: s.id, silvisRole: w.silvisRole, source: w.source });
+      for (const w of dd.warnings) eastDerivedWarnings.push(nameOf(s.id) + ": " + EF.eastDerivedWarningText(w));
     }
   }
   const input = { roster, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastBusyDays, eastForecast, eastOverrides, eastFeedCoverage, eastDerived, rangeStart: START, rangeEnd: END };
@@ -216,8 +255,9 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   const L = [];
   L.push(`# Generate preview ${START} -> ${END}`);
   L.push("");
-  L.push(`*Generated ${new Date().toISOString()} by scripts/preview-generate.js from the LIVE rows (read-only; nothing published). seed ${SEED}, bestOf ${BEST_OF}, candidates tried ${dg.candidatesTried != null ? dg.candidatesTried : "?"}, generate() ${t2 - t1} ms, data fetch ${t1 - t0} ms. East feed coverage ${eastFeedCoverage ? eastFeedCoverage.from + ".." + eastFeedCoverage.to : "none"}; forecast rows ${forecastRows.length}; derived weeks ${eastDerived.map(d => d.weekMonday + ":" + d.silvisRole).join(", ") || "none"}; rules today ${ctx.today || "-"}${TODAY ? " (--today)" : " (the Central date)"}.*`);
+  L.push(`*Generated ${new Date().toISOString()} by scripts/preview-generate.js from the LIVE rows (read-only; nothing published). seed ${SEED}, bestOf ${BEST_OF}, candidates tried ${dg.candidatesTried != null ? dg.candidatesTried : "?"}, generate() ${t2 - t1} ms, data fetch ${t1 - t0} ms. East feed coverage ${eastFeedCoverage ? eastFeedCoverage.from + ".." + eastFeedCoverage.to : "none"}; forecast rows ${forecastRows.length}; derived weeks ${eastDerived.map(d => d.weekMonday + ":" + d.silvisRole + "(" + EF.eastSourceLabel(d.source) + ")").join(", ") || "none"}; East week lists ${eastListsNote}; rules today ${ctx.today || "-"}${TODAY ? " (--today)" : " (the Central date)"}.*`);
   if (overrideApplied.length) { L.push(""); L.push(`**Rules override (in memory only - nothing saved): ${md(ARGS.rulesOverride)}** - ${md(overrideApplied.join(", "))}.`); }
+  if (eastDerivedWarnings.length) { L.push(""); L.push(`**Derived-week warnings:** ${md(eastDerivedWarnings.join("; "))}.`); }
   L.push("");
   if (dg.score) { L.push("## Score"); L.push(""); L.push("```"); L.push(JSON.stringify(dg.score, null, 2)); L.push("```"); L.push(""); }
   // Prompt 32 step 4 (Faraz 10/11 decision 5): the over-soft-limit days, listed first - before the calendar and the tallies.
@@ -339,7 +379,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
     L.push("");
   }
 
-  for (const key of ["holidayUnits", "weekendUnits", "lockViolations", "eastConflicts", "eastForecast", "eastUnknownDays", "impliedTargets", "warnings"]) {
+  for (const key of ["holidayUnits", "weekendUnits", "lockViolations", "derivedUnitDays", "derivedVacationYields", "eastConflicts", "eastForecast", "eastUnknownDays", "impliedTargets", "warnings"]) {
     if (dg[key] == null) continue;
     L.push(`## diagnostics.${key}`); L.push(""); L.push("```"); L.push(JSON.stringify(dg[key], null, 1).slice(0, 12000)); L.push("```"); L.push("");
   }
@@ -398,6 +438,6 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
 
   fs.writeFileSync(OUT, L.join("\n"), "utf8");
   const jsonOut = OUT.replace(/\.md$/, ".json");
-  fs.writeFileSync(jsonOut, JSON.stringify({ start: START, end: END, seed: SEED, bestOf: BEST_OF, generatedAt: new Date().toISOString(), rulesToday: ctx.today || null, rulesOverride: overrideApplied.length ? { file: ARGS.rulesOverride, keys: overrideApplied } : null, weekendCaps: capRows, schedule: sched, diagnostics: dg, backfill }, null, 1), "utf8");
+  fs.writeFileSync(jsonOut, JSON.stringify({ start: START, end: END, seed: SEED, bestOf: BEST_OF, generatedAt: new Date().toISOString(), rulesToday: ctx.today || null, eastLists: { mode: ARGS.eastLists, note: eastListsNote }, rulesOverride: overrideApplied.length ? { file: ARGS.rulesOverride, keys: overrideApplied } : null, weekendCaps: capRows, schedule: sched, diagnostics: dg, backfill }, null, 1), "utf8");
   console.log(`report: ${OUT}\njson:   ${jsonOut}\nopen slots: ${unc.length} | soft penalties: ${soft.length} | generate ${t2 - t1} ms` + (backfill ? `\nbackfill ${backfill.range.start}..${backfill.range.end}: ${backfill.openSlots.length} open input slots, ${backfill.openSlots.filter(r => r.placed).length} filled, ${backfill.openSlots.filter(r => !r.placed).length} still open | generate ${backfill.generateMs} ms` : ""));
 })().catch(e => { console.error("FAIL:", e && e.stack || e); process.exit(1); });

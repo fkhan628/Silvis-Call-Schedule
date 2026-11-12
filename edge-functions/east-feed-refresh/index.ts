@@ -7,10 +7,25 @@
 // section 3 ("Deploy record - Prompt 31 Part A"), and its pg_cron job (section 4, 'silvis-east-feed-daily', 10:30 UTC)
 // after the dryRun proof there.
 //
-// TOKEN RACE RETRY (2026-10-26; v2 on base v1 - prepared, NOT deployed; edge-functions/README.md
+// TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz; edge-functions/README.md
 // section 3 "2026-10-26 - the PGRST303 retry"): rest() sends the same call again after 1 s, then 3 s, when
 // PostgREST answers 401 PGRST303 ("JWT issued at future" - the platform's token race) - the @restRetry block
 // above rest(); every other answer as before.
+//
+// THE EAST WEEK LISTS (Prompt 34, Faraz 2026-11-11; v3 on base v2 - prepared, NOT deployed; edge-functions/README.md
+// section 3 "2026-11-11 - the East week lists"): the roster blob step 3 already reads holds two lists of Mondays -
+// backupMondays (Fierce East PRIMARY -> Silvis backup all week) and fierceBackup (Fierce East BACKUP -> Silvis primary) -
+// the lists behind the published weeks' isBackup / isFierceBackup flags. They are Fierce's weeks for the weeks the other
+// project has NOT published. This run takes them from that same read (no request is added, GET only), keeps valid Mondays,
+// and writes them into the payload of every week it writes - the main-window weeks of step 5's ONE upsert and the extra
+// leg's weeks (data.eastLists, beside data.vacations; the 11/11 review: a week that slid out of the main window is
+// rewritten by the extra leg, and a run whose main read is empty must not strip the copy) - behind the lists guard
+// (eastListsGuard, the in-app refresh's): a missing key, a non-array, a list that lost an upcoming unpublished week
+// without still holding every week the other project published with that flag, or an empty list while a published week
+// carries its flag (a cache with no copy included), keeps BOTH cached lists as they are and records ok:false. Never "no
+// Fierce weeks". The published weeks that vouch for a list are the ones this run fetched or a refresh re-read within
+// 84 h. Nothing else of that blob is cached; a dropped entry is named in the audit row only. Until v3 runs, v2's upsert rewrites those payloads
+// WITHOUT the key (the client then derives from published + stated weeks and says the lists are missing).
 //
 // One run is the in-app Setup > East feed > "Refresh from Davenport" (index-source.html refreshEastFeed), unattended,
 // with the same windows, the same plan and the writes in the same order:
@@ -63,7 +78,8 @@
 // failed, today, from, to, weeks, coverage, forecastRowsDeleted, forecastDeleteError, vacations { codes, ranges, to,
 // rewrittenWeeks, unresolved, error, trusted, guard }, reviewResets [{ person_id, start, end, reason, decision }],
 // reviewResetError, reviewResetSkipped, extra { from, to, weeks, past, ahead, skipped, error }, newRanges
-// [{ person_id, start, end }], shortDays [day], heldDays [day], warningsError, fetchedAt }.
+// [{ person_id, start, end }], shortDays [day], heldDays [day], warningsError, fetchedAt, lists { trusted, eastPrimary,
+// eastBackup, readAt, written, dropped [{ list, value }], guard } } (lists: Prompt 34 - the counts are Mondays on file).
 //
 // Secrets (by NAME): CRON_SECRET (exists - the live pg_cron jobs use it); SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are
 // injected by Supabase. No new secret.
@@ -218,6 +234,8 @@ function efParse(s) { const p = String(s).split("-").map(Number); return new Dat
 function efAddD(d, n) { return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n)); }
 function efIsDateStr(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 function efMonday(s) { const d = efParse(s); return efFmt(efAddD(d, -((d.getUTCDay() + 6) % 7))); }
+// efIsMonday(s): a real 'YYYY-MM-DD' date that is a Monday - east-feed.js's, in UTC.
+function efIsMonday(s) { return efIsDateStr(s) && efFmt(efParse(s)) === s && efParse(s).getUTCDay() === 1; }
 
 // eastRefreshWindows(today) -> { main:{ from, to }, extra:{ from, to } } | null - east-feed.js's, in UTC.
 function eastRefreshWindows(today) {
@@ -396,8 +414,128 @@ function eastResolveFakId(roster, code) {
   return hit ? hit.id : null;
 }
 
+// ---- the East week lists (Prompt 34, Faraz 11/11) - east-feed.js's, function for function ----
+// The roster blob holds two lists of Mondays: backupMondays (-> isBackup: Fierce East PRIMARY -> Silvis backup; eastPrimary
+// here) and fierceBackup (-> isFierceBackup: Fierce East BACKUP -> Silvis primary; eastBackup here).
+
+// eastListsFromBlob(blob) -> { eastPrimary | null, eastBackup | null, problems: [{ list, why }], dropped: [{ list, value }] }
+// - valid Mondays only, each once, sorted; a key that is absent / null is 'missing', one that is no array 'not-array' (its
+// list null - unknown, never empty); a dropped entry is named with at most 24 characters of text.
+function eastListsFromBlob(blob) {
+  const b = blob && typeof blob === "object" ? blob : {};
+  const out = { eastPrimary: null, eastBackup: null, problems: [], dropped: [] };
+  [["eastPrimary", "backupMondays"], ["eastBackup", "fierceBackup"]].forEach(pair => {
+    const raw = b[pair[1]];
+    if (raw === undefined || raw === null) { out.problems.push({ list: pair[1], why: "missing" }); return; }
+    if (!Array.isArray(raw)) { out.problems.push({ list: pair[1], why: "not-array" }); return; }
+    const seen = {}, keep = [];
+    raw.forEach(v => {
+      if (efIsMonday(v)) { if (!seen[v]) { seen[v] = true; keep.push(v); } return; }
+      let text;
+      try { text = typeof v === "string" ? v : JSON.stringify(v); } catch (e) { text = undefined; }
+      out.dropped.push({ list: pair[1], value: String(text === undefined ? v : text).slice(0, 24) });
+    });
+    out[pair[0]] = keep.sort();
+  });
+  return out;
+}
+
+// eastCachedLists(rows) -> { eastPrimary, eastBackup, readAt, dropped } | null - the data.eastLists with the newest readAt
+// among the published rows (a forecast row's copy and a malformed one never count); null = the cache holds no lists.
+function eastCachedLists(rows) {
+  let best = null;
+  (rows || []).forEach(r => {
+    if (!r || !r.data || efIsForecastRow(r)) return;
+    const c = r.data.eastLists;
+    if (!c || typeof c !== "object" || !Array.isArray(c.eastPrimary) || !Array.isArray(c.eastBackup) || typeof c.readAt !== "string" || !c.readAt) return;
+    if (!best || c.readAt > best.readAt) best = c;
+  });
+  if (!best) return null;
+  return { eastPrimary: best.eastPrimary.filter(efIsMonday).sort(), eastBackup: best.eastBackup.filter(efIsMonday).sort(), readAt: best.readAt, dropped: typeof best.dropped === "number" ? best.dropped : 0 };
+}
+
+// eastListsGuard(read, cached, weeks, today, now) -> { ok, problems } - NOT trusted (both cached lists are kept): a key that
+// did not come back as an array ('missing' / 'not-array'); a list with no valid Monday ('empty-while-cached') or without a
+// cached Monday of this week or later that the other project has not published ('lost-week') - unless that list still holds
+// every week published with its flag, and there is at least one; a list with no valid Monday while a published week carries
+// its flag ('empty-while-published' - whatever the cache holds, a cache with no copy included: an empty list is taken only
+// when nothing speaks against it). A lost week that IS published is no loss; with no cache nothing can be lost, and a first
+// read that names weeks is taken. weeks: the weeks just fetched, then the cached rows (a Monday once, the first; forecast rows never).
+// VOUCHED (the 11/11 review): the published weeks that test counts are the ones this run can vouch for - a week just fetched
+// (no fetched_at) or a cached row some refresh re-read within EAST_LISTS_VOUCH_HOURS before `now` (the run's time; absent =
+// every row counts). A cached row nobody re-reads any more keeps whatever flag it had: it neither blocks nor vouches.
+const EAST_LISTS_VOUCH_HOURS = 84;   // this function re-reads both windows daily: two missed runs are tolerated (72 h sat exactly on the third run)
+function eastListsGuard(read, cached, weeks, today, now) {
+  const LISTS = [["eastPrimary", "backupMondays", "isBackup"], ["eastBackup", "fierceBackup", "isFierceBackup"]];
+  if (!read || typeof read !== "object") return { ok: false, problems: LISTS.map(L => ({ list: L[1], why: "missing" })) };
+  const problems = (Array.isArray(read.problems) ? read.problems : []).filter(p => p && p.list && p.why).map(p => ({ list: p.list, why: p.why }));
+  LISTS.forEach(L => { if (!Array.isArray(read[L[0]]) && !problems.some(p => p.list === L[1])) problems.push({ list: L[1], why: "missing" }); });
+  if (problems.length) return { ok: false, problems };
+  const thisMonday = efIsDateStr(today) && efFmt(efParse(today)) === today ? efMonday(today) : null;
+  const nowMs = typeof now === "string" ? Date.parse(now) : NaN;
+  const pub = {}, vouched = {};
+  (weeks || []).forEach(w => {
+    const m = w && (w.weekMonday || w.week_monday);
+    if (!efIsDateStr(m) || efIsForecastRow(w) || pub[m]) return;
+    pub[m] = w.data || {};
+    const f = w.fetched_at !== undefined ? w.fetched_at : w.fetchedAt;
+    vouched[m] = isNaN(nowMs) || f === undefined || (typeof f === "string" && nowMs - Date.parse(f) <= EAST_LISTS_VOUCH_HOURS * 3600000);
+  });
+  LISTS.forEach(L => {
+    const fresh = read[L[0]], had = cached && Array.isArray(cached[L[0]]) ? cached[L[0]] : [];
+    const lost = had.filter(m => efIsDateStr(m) && (!thisMonday || m >= thisMonday) && fresh.indexOf(m) < 0 && !pub[m]).sort();
+    const flagged = Object.keys(pub).filter(m => vouched[m] && pub[m][L[2]] === true).sort();
+    const unmatched = flagged.filter(m => fresh.indexOf(m) < 0);
+    if (!lost.length) {
+      // nothing cached is lost - but an EMPTY list is not taken while a vouched published week carries its flag
+      if (!fresh.length && flagged.length) problems.push({ list: L[1], why: "empty-while-published", weeks: [], unmatched: unmatched, published: flagged.length });
+      return;
+    }
+    if (flagged.length && !unmatched.length) return;   // clearly healthy: the list still holds every week published with its flag
+    problems.push({ list: L[1], why: fresh.length ? "lost-week" : "empty-while-cached", weeks: lost, unmatched: unmatched, published: flagged.length });
+  });
+  return { ok: problems.length === 0, problems };
+}
+function eastListsGuardText(p) {
+  const tail = " - the cached lists are kept";
+  if (!p) return "the East week lists were not trusted" + tail;
+  const some = (list) => (list || []).slice(0, 3).join(", ") + ((list || []).length > 3 ? " (+" + ((list || []).length - 3) + ")" : "");
+  if (p.why === "missing") return ("Davenport's " + p.list + " list did not come back" + tail + " (never read as no weeks)").slice(0, 200);
+  if (p.why === "not-array") return ("Davenport's " + p.list + " is not a list" + tail + " (never read as no weeks)").slice(0, 200);
+  if (p.why === "empty-while-published") return ("Davenport's " + p.list + " came back empty although " + p.published + " published week(s) carry its flag (" + some(p.unmatched) + ")" + tail).slice(0, 200);
+  const why = (p.unmatched || []).length ? "it also lacks the published " + some(p.unmatched) : "no published week to check it against";
+  return ("Davenport's " + p.list + (p.why === "empty-while-cached" ? " came back empty; the cache holds " : " lost ") + some(p.weeks) + "; " + why + tail).slice(0, 200);
+}
+
+// eastListsPlan(feed, cachedRows, today, from) -> { trusted, lists, guard, dropped } - trusted: the fresh lists from `from`
+// (the window's first Monday) on, readAt = this run's time, dropped = the count; else the newest cached copy as it is (its
+// own readAt), or null when the cache holds none (then no key is written). The guard's `now` is feed.fetchedAt.
+function eastListsPlan(feed, cachedRows, today, from) {
+  const f = feed || {};
+  const read = f.lists && typeof f.lists === "object" ? f.lists : null;
+  const cached = eastCachedLists(cachedRows);
+  const guard = eastListsGuard(read, cached, (f.weeks || []).concat(cachedRows || []), today, f.fetchedAt);
+  const dropped = read && Array.isArray(read.dropped) ? read.dropped.slice() : [];
+  if (!guard.ok) return { trusted: false, lists: cached, guard: guard.problems, dropped };
+  const keep = (list) => list.filter(m => !efIsDateStr(from) || m >= from);
+  return { trusted: true, lists: { eastPrimary: keep(read.eastPrimary), eastBackup: keep(read.eastBackup), readAt: f.fetchedAt || null, dropped: dropped.length }, guard: [], dropped };
+}
+
+// eastAttachLists(weeks, lists) -> new weeks array: every published week carries its own copy in data.eastLists; lists
+// null -> the rows as they are, no key. Forecast rows never carry one.
+function eastAttachLists(weeks, lists) {
+  const ws = weeks || [];
+  if (!lists || typeof lists !== "object" || !Array.isArray(lists.eastPrimary) || !Array.isArray(lists.eastBackup)) return ws.slice();
+  return ws.map(w => {
+    if (!w || !efIsDateStr(w.weekMonday) || efIsForecastRow(w)) return w;
+    const copy = { eastPrimary: lists.eastPrimary.slice(), eastBackup: lists.eastBackup.slice(), readAt: lists.readAt || null, dropped: typeof lists.dropped === "number" ? lists.dropped : 0 };
+    return Object.assign({}, w, { data: Object.assign({}, w.data || {}, { eastLists: copy }) });
+  });
+}
+
 // eastFetchWeeks(fromMonday, toMonday, opts, getJson) - east-feed.js fetchEastWeeks with the GET injected (the handler
-// passes davGetJson): the weeks, the roster blob, then the vacation rows of the codes - the same three requests.
+// passes davGetJson): the weeks, the roster blob, then the vacation rows of the codes - the same three requests. The
+// result's lists (Prompt 34) come from the roster blob it reads anyway.
 function eastFetchWeeks(fromMonday, toMonday, opts, getJson) {
   return (async () => {
     if (!efIsDateStr(fromMonday) || !efIsDateStr(toMonday)) throw new Error("east-feed: fetchEastWeeks needs YYYY-MM-DD Mondays");
@@ -434,7 +572,7 @@ function eastFetchWeeks(fromMonday, toMonday, opts, getJson) {
       try { vacations = vacationsFromTimeOff(await getJson(tq), vacationIdsByCode); }
       catch (e) { vacationsError = (e && e.message) ? e.message : String(e); }
     }
-    return { weeks, roster, fakId, idsByCode, codesUnresolved, fetchedAt: new Date().toISOString(), vacations, vacationsError, vacationsTo, vacationIdsByCode, vacationCodesUnresolved };
+    return { weeks, roster, fakId, idsByCode, codesUnresolved, fetchedAt: new Date().toISOString(), vacations, vacationsError, vacationsTo, vacationIdsByCode, vacationCodesUnresolved, lists: eastListsFromBlob(blob) };
   })();
 }
 
@@ -486,25 +624,31 @@ function eastGuardText(p) {
   return ("Davenport answered no vacation for " + p.code + " while the cache holds " + p.cached + " range(s) in the read's window" + tail + " (a blocked read answers the same way)").slice(0, 200);
 }
 
-// eastMainPlan(feed, cachedRows, codes, win) - the in-app refresh's main write plan, behind the guard: trusted ->
+// eastMainPlan(feed, cachedRows, codes, win, today) - the in-app refresh's main write plan, behind the guard: trusted ->
 // planVacationCache over the whole cache, else the failure path (keepCachedVacations). rows = the weeks fetched (the
-// run's fetchedAt) + the rewritten older rows (their own fetchedAt) - one merge-duplicates upsert.
-function eastMainPlan(feed, cachedRows, codes, win) {
+// run's fetchedAt) + the rewritten older rows (their own fetchedAt) - one merge-duplicates upsert. Prompt 34: the weeks
+// fetched also carry the East week lists (eastListsPlan behind its own guard over the same cache; today = the Central
+// date) - the trusted read, or the cached copy kept as it is.
+function eastMainPlan(feed, cachedRows, codes, win, today) {
   const guard = eastVacationReadGuard(feed, cachedRows, codes, win.main.from);
   const trusted = guard.ok && !!feed.vacations;
   const plan = trusted ? planVacationCache(cachedRows, feed.weeks, feed.vacations, { from: win.main.from })
     : { weeks: keepCachedVacations(feed.weeks, cachedRows), rewritten: [], carriers: 0 };
-  const weekRows = toEastFeedRows(plan.weeks).map(r => Object.assign({}, r, { fetched_at: feed.fetchedAt }));
+  const lists = eastListsPlan(feed, cachedRows, today, win.main.from);
+  const weekRows = toEastFeedRows(eastAttachLists(plan.weeks, lists.lists)).map(r => Object.assign({}, r, { fetched_at: feed.fetchedAt }));
   const rewrittenRows = plan.rewritten.map(w => ({ week_monday: w.weekMonday, data: w.data, fetched_at: w.fetchedAt || feed.fetchedAt }));
   const ranges = feed.vacations ? Object.keys(feed.vacations).reduce((acc, c) => acc + feed.vacations[c].length, 0) : null;
-  return { guard, trusted, carriers: plan.carriers, weekRows, rewrittenRows, rows: weekRows.concat(rewrittenRows), coverage: coverageOf(feed.weeks), ranges };
+  return { guard, trusted, carriers: plan.carriers, weekRows, rewrittenRows, rows: weekRows.concat(rewrittenRows), coverage: coverageOf(feed.weeks), ranges, lists };
 }
 
-// eastExtraPlan(feed, more, win, cacheRows) - the in-app extra leg: the weeks eastExtraWeeks keeps, each keeping the
-// list its cached row carries (cacheRows = the cache as re-read after the main upsert), the extra read's fetchedAt.
-function eastExtraPlan(feed, more, win, cacheRows) {
+// eastExtraPlan(feed, more, win, cacheRows, lists) - the in-app extra leg: the weeks eastExtraWeeks keeps, each keeping the
+// vacation list its cached row carries (cacheRows = the cache as re-read after the main upsert), the extra read's
+// fetchedAt. The 11/11 review: these weeks carry the main plan's East week lists too (lists - the trusted read or the
+// cached copy kept; null = none) - a week that has slid out of the main window is rewritten HERE, and a run whose main
+// read is empty would otherwise strip the copy from every week that held it.
+function eastExtraPlan(feed, more, win, cacheRows, lists) {
   const sel = eastExtraWeeks(feed.weeks, more.weeks, win);
-  const rows = toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => Object.assign({}, r, { fetched_at: more.fetchedAt }));
+  const rows = toEastFeedRows(eastAttachLists(keepCachedVacations(sel.weeks, cacheRows), lists)).map(r => Object.assign({}, r, { fetched_at: more.fetchedAt }));
   return { rows, past: sel.past, ahead: sel.ahead, skipped: sel.skipped };
 }
 
@@ -563,10 +707,12 @@ function eastShortDays(shortRows, newRanges) {
 }
 
 // eastTrailingRoles(groupRules): the roles whose day before a vacation is its trailing edge - rules.js buildContext's
-// reading (groupRules.dayBeforeRules.trailingEdgeRoles, default ["primary"]).
+// reading (groupRules.dayBeforeRules.trailingEdgeRoles, default ["primary"]; since 11/11 a value that is no list reads
+// as the default too - before, a string was searched as text; anything else without an indexOf already read as the
+// default through eastHeldDays' own guard).
 function eastTrailingRoles(groupRules) {
   const dayBefore = (groupRules && groupRules.dayBeforeRules) || {};
-  return dayBefore.trailingEdgeRoles || ["primary"];
+  return Array.isArray(dayBefore.trailingEdgeRoles) ? dayBefore.trailingEdgeRoles : ["primary"];
 }
 // eastHeldSpan(newRanges) -> { from, to } | null: the published days to read (the day before the first start .. the
 // last end).
@@ -613,6 +759,7 @@ function eastRefreshResult(today, win, dryRun) {
     reviewResets: [], reviewResetError: null, reviewResetSkipped: null,
     extra: { from: win ? win.extra.from : null, to: win ? win.extra.to : null, weeks: 0, past: 0, ahead: 0, skipped: 0, error: null },
     newRanges: [], shortDays: [], heldDays: [], warningsError: null, fetchedAt: null,
+    lists: { trusted: false, eastPrimary: null, eastBackup: null, readAt: null, written: false, dropped: [], guard: [] },
   };
 }
 // eastRefreshSummary(r) -> the audit row's one-line summary (the scheduler reads it in Setup).
@@ -632,6 +779,9 @@ function eastRefreshSummary(r) {
   const x = r.extra || {};
   bits.push(x.error ? "Davenport weeks outside the window NOT cached" : x.weeks + " more published week(s) cached (" + x.from + ".." + x.to + (x.skipped ? "; " + x.skipped + " after a gap skipped" : "") + ")");
   if (r.newRanges.length) bits.push(r.newRanges.length + " new or changed East vacation range(s): " + r.shortDays.length + " day(s) under the vacation minimum, " + r.heldDays.length + " published day(s) held");
+  const l = r.lists || {};
+  bits.push(l.trusted ? "East week lists read: " + l.eastPrimary + " East-primary + " + l.eastBackup + " East-backup week(s)" + (l.written ? "" : " - NOT cached (no published week row to hold them)") + ((l.dropped || []).length ? ", " + (l.dropped.length >= 20 ? "20 or more entries" : l.dropped.length + " entr" + (l.dropped.length === 1 ? "y" : "ies")) + " dropped" : "")
+    : "East week lists NOT trusted - cached lists kept" + (l.readAt ? "" : " (none cached)"));
   return (head + ": " + bits.join("; ") + (r.ok ? "" : "; NOT OK: " + (r.error || "see errors"))).slice(0, 600);
 }
 // @eastRefresh-mirror-end
@@ -723,7 +873,7 @@ async function refreshSteps(r: any, win: any, today: string, dryRun: boolean): P
   r.fetchedAt = feed.fetchedAt;
 
   // 4. the plan behind the A7 guard
-  const main = eastMainPlan(feed, cacheBefore, codes, win);
+  const main = eastMainPlan(feed, cacheBefore, codes, win, today);
   r.weeks = main.weekRows.length;
   r.coverage = main.coverage;
   r.vacations = {
@@ -733,6 +883,15 @@ async function refreshSteps(r: any, win: any, today: string, dryRun: boolean): P
   };
   main.guard.problems.forEach((p: any) => r.errors.push(eastGuardText(p)));
   if (!main.trusted) r.reviewResetSkipped = codes.length ? "the vacation leg is not trusted (see errors)" : "no East vacation codes";
+  // Prompt 34: the lists leg - what the weeks written carry (the trusted read, or the cached copy kept as it is), named
+  // either way; an untrusted read is an error of the run (after the vacation guard's, as in the in-app refresh). written:
+  // some week this run HAS written holds them - a main-window week (set after step 5a's upsert went through; a dry run
+  // says what would be) or (the 11/11 review) a week of the extra leg below
+  r.lists = {
+    trusted: main.lists.trusted, eastPrimary: main.lists.lists ? main.lists.lists.eastPrimary.length : null, eastBackup: main.lists.lists ? main.lists.lists.eastBackup.length : null,
+    readAt: main.lists.lists ? main.lists.lists.readAt : null, written: dryRun && main.weekRows.length > 0 && !!main.lists.lists, dropped: main.lists.dropped.slice(0, 20), guard: main.lists.guard,
+  };
+  main.lists.guard.forEach((p: any) => r.errors.push(eastListsGuardText(p)));
 
   if (dryRun) {
     // reads only: the extra leg's read and its plan over the cache as the main upsert would leave it
@@ -740,9 +899,10 @@ async function refreshSteps(r: any, win: any, today: string, dryRun: boolean): P
     let extraRows = 0;
     try {
       const more = await eastFetchWeeks(win.extra.from, win.extra.to, {}, davGetJson);
-      const x = eastExtraPlan(feed, more, win, planned);
+      const x = eastExtraPlan(feed, more, win, planned, main.lists.lists);
       extraRows = x.rows.length;
       r.extra.weeks = x.rows.length; r.extra.past = x.past; r.extra.ahead = x.ahead; r.extra.skipped = x.skipped;
+      if (x.rows.length && main.lists.lists) r.lists.written = true;
     } catch (e) {
       r.extra.error = cut(errText(e));
       r.errors.push(cut("the Davenport weeks outside the window could NOT be read: " + errText(e)));
@@ -756,6 +916,7 @@ async function refreshSteps(r: any, win: any, today: string, dryRun: boolean): P
   if (main.rows.length) {
     try { await upsertFeed(main.rows); }
     catch (e) { throw new StopRun(`fetched ${main.weekRows.length} week(s) but couldn't cache them - the cache is unchanged: ` + errText(e)); }
+    if (main.weekRows.length > 0 && main.lists.lists) r.lists.written = true;
   }
   // 5b. published rows win: the forecast rows inside the published coverage of the weeks fetched
   if (main.coverage) {
@@ -786,14 +947,16 @@ async function refreshSteps(r: any, win: any, today: string, dryRun: boolean): P
     }
   }
   if (!cacheRows) { r.extra.error = "the cache did not reload - skipped"; return; }
-  // 5e. the extra leg: the weeks outside the main window, each keeping its cached list
+  // 5e. the extra leg: the weeks outside the main window, each keeping its cached vacation list and carrying the lists
+  // leg's copy (the trusted read, or the cached copy kept - never stripped from a week that held it)
   try {
     const more = await eastFetchWeeks(win.extra.from, win.extra.to, {}, davGetJson);
-    const x = eastExtraPlan(feed, more, win, cacheRows);
+    const x = eastExtraPlan(feed, more, win, cacheRows, main.lists.lists);
     r.extra.skipped = x.skipped;
     if (x.rows.length) {
       await upsertFeed(x.rows);
       r.extra.weeks = x.rows.length; r.extra.past = x.past; r.extra.ahead = x.ahead;
+      if (main.lists.lists) r.lists.written = true;
     }
   } catch (e) {
     r.extra.error = cut(errText(e));

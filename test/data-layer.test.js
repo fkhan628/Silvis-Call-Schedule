@@ -4340,7 +4340,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(leg.includes("if (cacheRows) {") && leg.includes('} else extra.error = "the cache did not reload - skipped";'), "a failed cache reload skips the leg, named");
     assert.ok(leg.includes("const more = await fetchEastWeeks(eastWin.extra.from, eastWin.extra.to, {});"), "weeks only: the extra read asks no vacation code (no time off read)");
     assert.ok(leg.includes("const sel = eastExtraWeeks(feed.weeks, more.weeks, eastWin);"), "the selection is east-feed.js eastExtraWeeks (past weeks; ahead only while contiguous)");
-    assert.ok(leg.includes("toEastFeedRows(keepCachedVacations(sel.weeks, cacheRows)).map(r => ({ ...r, fetched_at: more.fetchedAt }))"), "a week keeps the vacation list its RELOADED cached row carries; the extra read's fetched_at");
+    // pin moved deliberately 11/11 (Prompt 34, review A): the extra leg's weeks carry the East week lists too (eastAttachLists
+    // over the same rows, the lists leg's copy) - a week that slid out of the main window is rewritten here, and a run whose
+    // main read is empty must not strip the copy from every week that held it
+    assert.ok(leg.includes("toEastFeedRows(eastAttachLists(keepCachedVacations(sel.weeks, cacheRows), listsPlan.lists)).map(r => ({ ...r, fetched_at: more.fetchedAt }))"), "a week keeps the vacation list its RELOADED cached row carries and carries the lists leg's copy; the extra read's fetched_at");
+    assert.ok(leg.indexOf("if (listsPlan.lists) listsWritten = true;") > leg.indexOf("extra.weeks = extraRows.length;") && leg.indexOf("if (listsPlan.lists) listsWritten = true;") < leg.indexOf("await loadEastTables();"), "listsWritten turns true only after the upsert went through");
     assert.ok(/fetch\(`\$\{SUPABASE_URL\}\/rest\/v1\/east_feed`, \{ method: "POST", headers: \{ \.\.\.dbAuthHeaders\(\), Prefer: "resolution=merge-duplicates,return=minimal" \}, body: JSON\.stringify\(extraRows\) \}\)/.test(leg), "one upsert of the extra rows, the user's bearer, merge-duplicates");
     assert.ok(leg.indexOf("await loadEastTables();") > leg.indexOf("JSON.stringify(extraRows)"), "the caches reload after the extra upsert");
     assert.ok(leg.includes("if (!res.ok) {") && leg.includes('throw new Error("couldn\'t cache them: " + describeDbError(t));'), "a failed upsert is an error, never success");
@@ -4359,7 +4363,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.strictEqual((toast.match(/\$\{extraWord\}/g) || []).length, 2, "both toast branches carry extraWord");
     // pin moved deliberately 10/14: Prompt 31 Part A (A3, critic A7 / decision 4) - an untrusted vacation read (!vacGuard.ok) and
     // a failed reset RPC (rr.error) turn the tone to error too; the extra leg's failure still does
-    assert.ok(toast.includes('feed.vacationsError || !vacGuard.ok || reviewResetFailures.length || rr.error || extra.error ? "error"'), "a failed extra leg turns the toast's tone to error");
+    // pin moved deliberately 11/11: Prompt 34 - an untrusted read of the East week lists (!listsPlan.trusted) turns the tone to error too
+    assert.ok(toast.includes('feed.vacationsError || !vacGuard.ok || !listsPlan.trusted || reviewResetFailures.length || rr.error || extra.error ? "error"'), "a failed extra leg turns the toast's tone to error");
     const ew = rb.slice(rb.indexOf("const extraWord = "), rb.indexOf("showToast(weekRows.length ? `East feed refreshed:"));
     assert.ok(ew.includes("could NOT be cached") && ew.includes("more published week(s) cached.") && ew.includes("extra.skipped"), "the toast names a failure, the weeks cached and the weeks skipped after a gap");
   });
@@ -4371,14 +4376,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const FETCHED_AT = "2026-10-13T12:00:00.000Z";
     const run = async (o) => {
       const posts = [], warns = [], reads = []; let reloads = 0;
-      const fn = new AsyncFunction("eastWin", "cacheRows", "feed", "fetchEastWeeks", "eastExtraWeeks", "keepCachedVacations", "toEastFeedRows", "fetch", "SUPABASE_URL", "dbAuthHeaders", "describeDbError", "errText", "loadEastTables", "console", leg + "\nreturn extra;");
-      const extra = await fn(win, o.cacheRows, { weeks: o.mainWeeks },
+      // 11/11 (Prompt 34, review A): the leg reads the lists leg's plan (listsPlan - o.lists here, null = no lists) and
+      // sets the refresh's listsWritten (a `let` of the function, false when the main leg wrote no week)
+      const fn = new AsyncFunction("eastWin", "cacheRows", "feed", "fetchEastWeeks", "eastExtraWeeks", "keepCachedVacations", "toEastFeedRows", "fetch", "SUPABASE_URL", "dbAuthHeaders", "describeDbError", "errText", "loadEastTables", "console", "eastAttachLists", "listsPlan", "listsWritten", leg + "\nreturn { extra, listsWritten };");
+      const out = await fn(win, o.cacheRows, { weeks: o.mainWeeks },
         async (from, to, opts) => { reads.push([from, to, opts]); if (o.readFails) throw new Error("east-feed: GET weeks failed: HTTP 503 down"); return { weeks: o.extraWeeks, fetchedAt: FETCHED_AT }; },
         EF.eastExtraWeeks, EF.keepCachedVacations, EF.toEastFeedRows,
         async (url, init) => { posts.push({ url, init }); if (o.postFails) return { ok: false, status: 403, text: async () => '{"message":"denied"}' }; return { ok: true, status: 201, text: async () => "" }; },
         "https://x.supabase.co", () => ({ apikey: "anon", Authorization: "Bearer user-jwt" }), (t) => "D(" + t + ")", (e) => String(e && e.message || e),
-        async () => { reloads++; return { ok: true, feedRows: [] }; }, { warn: (...a) => warns.push(a.map(String).join(" ")) });
-      return { extra, posts, warns, reads, reloads };
+        async () => { reloads++; return { ok: true, feedRows: [] }; }, { warn: (...a) => warns.push(a.map(String).join(" ")) },
+        EF.eastAttachLists, { lists: o.lists || null }, false);
+      return { extra: out.extra, listsWritten: out.listsWritten, posts, warns, reads, reloads };
     };
     const mondays = (from, to) => { const out = []; for (let d = H.parse(from); H.fmt(d) <= to; d = H.addD(d, 7)) out.push(H.fmt(d)); return out; };
     const wk = (m, data) => ({ weekMonday: m, data: Object.assign({ dayCall: "s6" }, data || {}) });
@@ -4403,6 +4411,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(r.reloads, 1, "the caches reload once after the upsert");
       assert.deepStrictEqual(r.extra, { from: win.extra.from, to: win.extra.to, weeks: 37, past: 37, ahead: 0, skipped: 1, error: null });
       assert.deepStrictEqual(r.warns, []);
+      assert.ok(rows.every(x => !Object.prototype.hasOwnProperty.call(x.data, "eastLists")) && r.listsWritten === false, "no lists in the plan (none read, none cached): no key on any week, listsWritten stays false");
+    });
+    await acheckI7("P34 review A (11/11) - the extra leg carries the East week lists: with the lists leg's copy every week it writes holds its own copy (beside the cached vacation list, the fetched payload kept) and listsWritten turns true; a refused upsert, a failed read and nothing to write leave it false", async () => {
+      const LISTS = { eastPrimary: ["2027-02-22", "2027-04-19"], eastBackup: ["2027-03-29"], readAt: "2026-10-13T11:59:58.000Z", dropped: 0 };
+      const r = await run({ cacheRows, mainWeeks, lists: LISTS, extraWeeks: mondays("2025-12-29", "2026-11-09").map(m => wk(m)).concat([wk("2027-06-07")]) });
+      const rows = JSON.parse(r.posts[0].init.body);
+      assert.strictEqual(rows.length, 37, "the same 37 weeks");
+      assert.ok(rows.every(x => JSON.stringify(x.data.eastLists) === JSON.stringify(LISTS)), "every week of the extra leg carries the copy: " + JSON.stringify(rows[0].data.eastLists));
+      const feb = rows.find(x => x.week_monday === "2026-02-02");
+      assert.deepStrictEqual([feb.data.dayCall, feb.data.vacations], ["s6", [{ code: "FAK", start: "2026-02-03", end: "2026-02-04" }]], "the fetched payload and the cached vacation list stay");
+      assert.strictEqual(r.listsWritten, true, "listsWritten: a week this refresh wrote holds the lists");
+      // a run whose MAIN read is empty: the extra leg alone writes - the copy is still in the cache afterwards
+      const r0 = await run({ cacheRows, mainWeeks: [], lists: LISTS, extraWeeks: mondays("2026-06-01", "2026-08-31").map(m => wk(m)) });
+      const rows0 = JSON.parse(r0.posts[0].init.body);
+      assert.ok(rows0.length === 14 && rows0.every(x => JSON.stringify(x.data.eastLists) === JSON.stringify(LISTS)) && r0.listsWritten === true, "main read empty: the 14 weeks the extra leg rewrites carry the copy");
+      assert.strictEqual((await run({ cacheRows, mainWeeks, lists: LISTS, postFails: true, extraWeeks: [wk("2026-01-05")] })).listsWritten, false, "a refused upsert: not written");
+      assert.strictEqual((await run({ cacheRows, mainWeeks, lists: LISTS, readFails: true })).listsWritten, false, "a failed read: not written");
+      assert.strictEqual((await run({ cacheRows, mainWeeks, lists: LISTS, extraWeeks: [wk("2026-10-05")] })).listsWritten, false, "nothing outside the main window: nothing written here");
     });
     await acheckI7("P31B item 7 behaviour: nothing outside the main window (the smoke's mock answers the main read's week to both reads) -> no second upsert, no reload, extra.weeks 0, no error", async () => {
       const r = await run({ cacheRows, mainWeeks, extraWeeks: [wk("2026-10-05")] });
@@ -15015,7 +15041,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(au.includes("ok: refreshErrors.length === 0, error: refreshErrors[0] || null, errors: refreshErrors, source: \"app\","), "ok / error / errors / source");
       assert.ok(au.includes("trusted: vacTrusted, guard: vacGuard.problems"), "the guard in the detail");
       assert.ok(au.includes("reviewResetVia: rr.via, reviewResetError: rr.error, reviewResetSkipped: rr.skipped,"), "how the reset ran");
-      assert.ok(rb.includes('feed.vacationsError || !vacGuard.ok || reviewResetFailures.length || rr.error || extra.error ? "error"'), "the toast's tone");
+      assert.ok(rb.includes('feed.vacationsError || !vacGuard.ok || !listsPlan.trusted || reviewResetFailures.length || rr.error || extra.error ? "error"'), "the toast's tone");
       assert.ok(rb.includes("auditDone.then(() => loadEastRefreshAudit());"), "the card's line follows");
       assert.ok(rb.includes(": !vacTrusted && feed.vacations ? ` ${vacGuard.problems.map(eastGuardText).join(\" \")}`"), "the toast says the read was not trusted");
     });
@@ -15112,18 +15138,24 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const EF = require(path.join(ROOT, "east-feed.js"));
       const WEEK = "2026-11-02", RANGE = { code: "FAK", start: "2026-11-03", end: "2026-11-06" };
       const cache = [{ week_monday: WEEK, data: { days: {}, vacations: [RANGE] }, fetched_at: "2026-10-15T10:30:00Z" }];
-      const run = async ({ cacheRead, davFAK }) => {
+      // Prompt 34 (11/11): the same refresh carries the two East week lists - davLists is the Davenport blob's two keys as the
+      // fake main read answers them (default: both there; the lists leg trusted), cacheRead the cache the first read returns.
+      const LISTS_OK = { backupMondays: ["2026-12-14", "2026-11-09"], fierceBackup: ["2027-02-01"] };
+      // 11/11 (review A): mainWeeks / extraWeeks override what the two Davenport reads answer, reload what the cache
+      // re-read after the main upsert returns (default: the vacation fixture's cache)
+      const run = async ({ cacheRead, davFAK, davLists, mainWeeks, extraWeeks, reload }) => {
         const log = { order: [], posts: [], resets: [], audits: [], toasts: [], warns: [], refreshAuditReads: 0 };
         let tableReads = 0;
         const fn = new Function("isScheduler", "setEastRefreshing", "eastRefreshWindows", "todayCentral", "surgeons", "surgeonRules", "eastVacationPerson", "fetchEastWeeks",
           "console", "showToast", "errText", "eastVacationReadGuard", "eastFeedRows", "planVacationCache", "keepCachedVacations", "toEastFeedRows", "fetch", "SUPABASE_URL",
           "dbAuthHeaders", "describeDbError", "coverageOf", "setEastIdByCode", "loadEastTables", "runEastReviewResets", "eastExtraWeeks", "fmtMD", "eastGuardText", "logAudit",
-          "loadEastRefreshAudit", body + "\nreturn refreshEastFeed;")(
+          "loadEastRefreshAudit", "eastListsPlan", "eastAttachLists", "eastListsGuardText", body + "\nreturn refreshEastFeed;")(
           true, () => {}, EF.eastRefreshWindows, () => "2026-10-16", [{ id: "s1", code: "FAK", active: true }], { s1: { eastFeed: { enabled: true } } }, (s, ef) => !!(ef && ef.enabled),
           async (from, to, opts) => {
             log.order.push(opts && opts.vacationCodes ? "davenport main" : "davenport extra");
-            if (opts && opts.vacationCodes) return { weeks: [{ weekMonday: WEEK, data: { days: {} } }], vacations: { FAK: davFAK.map(x => ({ start: x.start, end: x.end })) }, vacationsTo: "2027-10-16", vacationCodesUnresolved: [], fetchedAt: "2026-10-16T12:00:00Z", roster: [] };
-            return { weeks: [], fetchedAt: "2026-10-16T12:00:01Z" };
+            if (opts && opts.vacationCodes) return { weeks: mainWeeks || [{ weekMonday: WEEK, data: { days: {} } }], vacations: { FAK: davFAK.map(x => ({ start: x.start, end: x.end })) }, vacationsTo: "2027-10-16", vacationCodesUnresolved: [], fetchedAt: "2026-10-16T12:00:00Z", roster: [],
+              lists: EF.eastListsFromBlob(davLists === undefined ? LISTS_OK : davLists) };
+            return { weeks: extraWeeks || [], fetchedAt: "2026-10-16T12:00:01Z" };
           },
           { warn: (...x) => log.warns.push(x.map(String).join(" ")) }, (m, t) => log.toasts.push([String(m), t]), (e) => String(e && e.message || e), EF.eastVacationReadGuard,
           [] /* the state's copy: a failed east_feed load left it at [] */, EF.planVacationCache, EF.keepCachedVacations, EF.toEastFeedRows,
@@ -15137,7 +15169,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
           async (quiet) => {
             tableReads++;
             log.order.push("loadEastTables(" + (quiet === undefined ? "" : String(quiet)) + ")");
-            return tableReads === 1 ? cacheRead : { ok: true, feedRows: plainA(cache) };
+            return tableReads === 1 ? cacheRead : (reload || { ok: true, feedRows: plainA(cache) });
           },
           async (x) => {
             log.resets.push({ trusted: x.trusted, cacheRows: !!x.cacheRows });
@@ -15146,7 +15178,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
           },
           EF.eastExtraWeeks, (d) => d, EF.eastGuardText,
           (action, summary, detail) => { log.audits.push({ action, summary, detail: plainA(detail) }); return Promise.resolve(true); },
-          async () => { log.refreshAuditReads++; });
+          async () => { log.refreshAuditReads++; }, EF.eastListsPlan, EF.eastAttachLists, EF.eastListsGuardText);
         await fn();
         await new Promise(r => setTimeout(r, 0));
         return log;
@@ -15176,6 +15208,57 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(L.resets, [{ trusted: true, cacheRows: true }], "ONE reset over the reloaded cache");
       assert.ok(L.order.indexOf("rpc reset") > L.order.indexOf("loadEastTables()"), "the reset after the reload");
       assert.strictEqual(L.audits.find(x => x.action === "east.refresh").detail.ok, true, "ok");
+      // Prompt 34 (Faraz 11/11) - the lists leg of the same run. (3) again: a trusted read rides in the week's payload,
+      // from the refresh window's first Monday on (2026-09-14: the Monday 28 days before 2026-10-16), with the run's time.
+      const COPY = { eastPrimary: ["2026-11-09", "2026-12-14"], eastBackup: ["2027-02-01"], readAt: "2026-10-16T12:00:00Z", dropped: 0 };
+      assert.deepStrictEqual(wk3.data.eastLists, COPY, "P34: the week written carries the two lists (sorted, the run's time)");
+      const d3 = L.audits.find(x => x.action === "east.refresh").detail;
+      assert.deepStrictEqual(d3.lists, { trusted: true, eastPrimary: 2, eastBackup: 1, readAt: "2026-10-16T12:00:00Z", written: true, dropped: [], guard: [] }, "P34: the audit detail names the lists leg");
+      assert.ok(/East week lists read: 2 East-primary \+ 1 East-backup week\(s\)/.test(L.audits.find(x => x.action === "east.refresh").summary) && / East week lists read: 2 East-primary \+ 1 East-backup week\(s\)\./.test(L.toasts[L.toasts.length - 1][0]), "P34: the summary and the toast say what was read");
+      // (4) the cache holds the lists (an upcoming unpublished week on each); Davenport's blob comes back WITHOUT one key,
+      //     with a key that is no list, or with both lists empty: the week written keeps the cached copy - its own readAt -
+      //     and the run is not ok. Never "no Fierce weeks".
+      const cacheL = [{ week_monday: WEEK, data: { days: {}, vacations: [RANGE], eastLists: { eastPrimary: ["2026-12-14"], eastBackup: ["2027-02-01"], readAt: "2026-10-15T10:30:00Z", dropped: 0 } }, fetched_at: "2026-10-15T10:30:00Z" }];
+      for (const bad of [{ fierceBackup: ["2027-02-01"] }, { backupMondays: "2026-12-14", fierceBackup: ["2027-02-01"] }, { backupMondays: [], fierceBackup: [] }]) {
+        L = await run({ cacheRead: { ok: true, feedRows: plainA(cacheL) }, davFAK: [RANGE], davLists: bad });
+        const wk4 = L.posts[0].rows.find(x => x.week_monday === WEEK);
+        assert.deepStrictEqual(wk4.data.eastLists, cacheL[0].data.eastLists, "P34 keep: the week written keeps the CACHED lists, with the time of the last good read - " + JSON.stringify(bad));
+        const d4 = L.audits.find(x => x.action === "east.refresh").detail;
+        assert.ok(d4.ok === false && d4.lists.trusted === false && d4.lists.guard.length >= 1 && d4.lists.readAt === "2026-10-15T10:30:00Z" && d4.vacations.trusted === true, "P34 keep: ok false, the lists leg untrusted, the vacation leg untouched: " + JSON.stringify(d4.lists));
+        assert.ok(d4.errors.some(e => /kept/.test(e) && /backupMondays|fierceBackup/.test(e)), "P34 keep: the error names the list and says kept: " + JSON.stringify(d4.errors));
+        const t4 = L.toasts[L.toasts.length - 1];
+        assert.ok(t4[1] === "error" && /the cached lists are kept/.test(t4[0]), "P34 keep: an error toast says the cached lists are kept: " + JSON.stringify(t4));
+        assert.ok(/East week lists NOT trusted/.test(L.audits.find(x => x.action === "east.refresh").summary), "P34 keep: the summary says NOT trusted");
+      }
+      // (5) an entry that is no Monday is dropped and named - in the toast and the audit row only; the cache keeps a count
+      L = await run({ cacheRead: { ok: true, feedRows: plainA(cache) }, davFAK: [RANGE], davLists: { backupMondays: ["2026-12-14", "2026-12-15"], fierceBackup: [] } });
+      const wk5 = L.posts[0].rows.find(x => x.week_monday === WEEK), d5 = L.audits.find(x => x.action === "east.refresh").detail;
+      assert.deepStrictEqual(wk5.data.eastLists, { eastPrimary: ["2026-12-14"], eastBackup: [], readAt: "2026-10-16T12:00:00Z", dropped: 1 }, "P34 drop: the cache holds the valid Monday and the count of dropped entries, never their text");
+      assert.ok(d5.ok === true && d5.lists.trusted === true && JSON.stringify(d5.lists.dropped) === JSON.stringify([{ list: "backupMondays", value: "2026-12-15" }]), "P34 drop: a dropped entry does not fail the run; the audit names it: " + JSON.stringify(d5.lists));
+      assert.ok(/1 entry that is not a Monday dropped \(backupMondays 2026-12-15\)/.test(L.toasts[L.toasts.length - 1][0]), "P34 drop: the toast names it: " + L.toasts[L.toasts.length - 1][0]);
+      // review C (11/11): the audit row names at most 20 dropped entries and the toast five; the cache keeps the full count
+      L = await run({ cacheRead: { ok: true, feedRows: plainA(cache) }, davFAK: [RANGE], davLists: { backupMondays: ["2026-12-14"].concat(Array.from({ length: 25 }, (_, k) => "junk-" + k)), fierceBackup: [] } });
+      const d5b = L.audits.find(x => x.action === "east.refresh").detail, t5b = L.toasts[L.toasts.length - 1][0];
+      assert.deepStrictEqual([d5b.lists.dropped.length, d5b.lists.dropped[19], L.posts[0].rows.find(x => x.week_monday === WEEK).data.eastLists.dropped], [20, { list: "backupMondays", value: "junk-19" }, 25], "P34 drop: 25 dropped entries - 20 in the audit row, the count 25 in the cache");
+      assert.ok(/25 entries that are not Mondays dropped \(backupMondays junk-0, backupMondays junk-1, backupMondays junk-2, backupMondays junk-3, backupMondays junk-4, \.\.\.\)/.test(t5b), "P34 drop: the toast names the first five: " + t5b);
+      // (6) review A (11/11): Davenport's newest published week has slid out of the main window - the main read is EMPTY
+      //     and the extra leg re-reads the week that carries the lists. The copy must stay in the cache: the extra leg's
+      //     week carries it (this run's read when trusted, the cached copy when not), and the run says written / kept truly.
+      const OLD = "2026-08-31", OLD_COPY = { eastPrimary: ["2026-12-14"], eastBackup: ["2027-02-01"], readAt: "2026-10-15T10:30:00Z", dropped: 0 };
+      const cacheOld = [{ week_monday: OLD, data: { days: {}, eastLists: OLD_COPY }, fetched_at: "2026-10-15T10:30:01Z" }];
+      const slid = { cacheRead: { ok: true, feedRows: plainA(cacheOld) }, reload: { ok: true, feedRows: plainA(cacheOld) }, davFAK: [], mainWeeks: [], extraWeeks: [{ weekMonday: OLD, data: { days: {}, dayCall: "s6" } }] };
+      L = await run(slid);
+      assert.strictEqual(L.posts.length, 1, "P34 slid: no main upsert (no week fetched, nothing rewritten) - the extra leg's upsert alone: " + JSON.stringify(L.order));
+      assert.deepStrictEqual(L.posts[0].rows.map(x => [x.week_monday, x.data.dayCall, x.data.eastLists]), [[OLD, "s6", COPY]], "P34 slid: the week the extra leg rewrites carries this run's lists beside its fetched payload");
+      const d6 = L.audits.find(x => x.action === "east.refresh").detail, t6 = L.toasts[L.toasts.length - 1];
+      assert.ok(d6.ok === true && d6.lists.trusted === true && d6.lists.written === true, "P34 slid: written - a week this refresh wrote holds them: " + JSON.stringify(d6.lists));
+      assert.ok(/East week lists read: 2 East-primary \+ 1 East-backup week\(s\)\./.test(t6[0]) && !/NOT cached/.test(t6[0]) && !/NOT cached \(no published week row/.test(L.audits.find(x => x.action === "east.refresh").summary), "P34 slid: neither the toast nor the summary says NOT cached: " + t6[0]);
+      L = await run(Object.assign({}, slid, { davLists: { fierceBackup: ["2027-02-01"] } }));
+      assert.deepStrictEqual(L.posts[0].rows.map(x => [x.week_monday, x.data.eastLists]), [[OLD, OLD_COPY]], "P34 slid, an untrusted read: the week keeps the CACHED copy with its own readAt - 'the cached lists are kept' is true");
+      assert.ok(L.audits.find(x => x.action === "east.refresh").detail.ok === false && /the cached lists are kept/.test(L.toasts[L.toasts.length - 1][0]), "P34 slid, untrusted: ok false, the toast says kept");
+      L = await run(Object.assign({}, slid, { extraWeeks: [] }));
+      const d6c = L.audits.find(x => x.action === "east.refresh").detail;
+      assert.ok(L.posts.length === 0 && d6c.lists.trusted === true && d6c.lists.written === false && / - NOT cached \(no published week row to hold them\)\./.test(L.toasts[L.toasts.length - 1][0]) && /East week lists read: 2 East-primary \+ 1 East-backup week\(s\) - NOT cached/.test(L.audits.find(x => x.action === "east.refresh").summary), "P34 slid, neither leg writes a week: read but NOT cached, said in the toast and the audit row: " + L.toasts[L.toasts.length - 1][0]);
     });
     check("P31A3 review pins (10/16): the day editor's names read the lists' map (vacListMap = time_off + vacListExtra), declared after vacListExtra; the dots stay on vacShown; refreshEastFeed reads the cache first and never the state's eastFeedRows", () => {
       assert.ok(src.includes("const vacListMap = useMemo(() => vacationMapWithExtra(vacations, vacListExtra), [vacations, vacListExtra]);"), "the lists' map");
@@ -15203,6 +15286,166 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // audit read found its one east.refresh row from cron (10:30:08Z, ok true) and an anonymous read 60 east_feed rows (the 22
   // main-window weeks at 10:30:06.524Z, the 38 others at 10:30:07.546Z), so the observed words replace "NOT observed yet" - never a review reset or the errors list, which no read showed.
   // test/schema.test.js pins the database record (docs/SCHEMA-REVIEW.md "2026-10-14 - East vacations") and guide 4.3.
+
+  // ---- Prompt 34 (Faraz 11/11): Silvis reads Fierce's Davenport weeks from the DSG app's two lists, for the weeks Davenport
+  // has not published. The behaviour is run where it lives - test/east-feed.test.js (the parse, the guard, the plan,
+  // precedence), the lifted refreshEastFeed above ([P31A3] review: a trusted read written, every bad read kept),
+  // test/rules.test.js and the regression (Faraz's two calls), test/edge-functions.test.js (the server refresh). Here: the
+  // source pins of the app's wiring, the Setup issue, and the docs.
+  console.log("\n[P34] Prompt 34 (Faraz 11/11): the East week lists - the Refresh, the rules inputs, Setup > East feed, the Setup issue, the docs");
+  {
+    const EF34 = require(path.join(ROOT, "east-feed.js"));
+    const read34 = (...p) => fs.readFileSync(path.join(ROOT, ...p), "utf8").replace(/\r\n/g, "\n");
+    check("P34 pins (the in-app Refresh): the lists are planned over cacheBefore with the Central today and the window's first Monday, attached to the weeks before toEastFeedRows, their guard's words join the run's errors after the vacation guard's, the audit detail carries lists { trusted, eastPrimary, eastBackup, readAt, written, dropped, guard }; the extra leg attaches the same copy to its weeks (review A, 11/11) and written follows both legs; no Davenport request is added", () => {
+      const i = src.indexOf("  const refreshEastFeed = async () => {"), j = src.indexOf("\n  };\n", i), f = src.slice(i, j);
+      assert.ok(i > 0 && j > i, "refreshEastFeed");
+      const order = ["const cacheRead = await loadEastTables(true);", "try { feed = await fetchEastWeeks(fromMon, toMon, { vacationCodes }); }", "const listsPlan = eastListsPlan(feed, cacheBefore, todayCentral(), fromMon);",
+        "const weekRows = toEastFeedRows(eastAttachLists(plan.weeks, listsPlan.lists)).map(r => ({ ...r, fetched_at: feed.fetchedAt }));", "body: JSON.stringify(rows) });"];
+      let at = -1;
+      order.forEach(l => { const k = f.indexOf(l); assert.ok(k > at, "in order: " + l); at = k; });
+      assert.strictEqual(f.split("eastListsPlan(").length - 1, 1, "ONE lists plan per refresh");
+      // pins moved deliberately 11/11 (review A): the lists are attached TWICE - to the main-window weeks and to the extra
+      // leg's (they were attached once, and "the extra leg writes no lists": a run whose main read was empty then rewrote
+      // every week that carried the copy without it, while its toast said "read" or "kept"); written = listsWritten, true
+      // when a week of either leg holds the lists (it read weekRows.length > 0 && !!listsPlan.lists)
+      assert.strictEqual(f.replace(/\/\/[^\n]*/g, "").split("eastAttachLists(").length - 1, 2, "the lists are attached twice - to the main-window weeks and to the extra leg's");
+      assert.ok(/const refreshErrors = vacGuard\.problems\.map\(eastGuardText\)\n\s*\.concat\(listsPlan\.guard\.map\(eastListsGuardText\)\)/.test(f), "the guard's words join the errors, after the vacation guard's");
+      assert.ok(f.includes("let listsWritten = weekRows.length > 0 && !!listsPlan.lists;") && f.indexOf("let listsWritten = ") > f.indexOf("const weekRows = ") && f.indexOf("let listsWritten = ") < f.indexOf("const extra = { from: eastWin.extra.from"), "listsWritten starts with the main leg's weeks");
+      assert.ok(f.includes("lists: { trusted: listsPlan.trusted, eastPrimary: listsPlan.lists ? listsPlan.lists.eastPrimary.length : null, eastBackup: listsPlan.lists ? listsPlan.lists.eastBackup.length : null, readAt: listsPlan.lists ? listsPlan.lists.readAt : null, written: listsWritten, dropped: listsPlan.dropped.slice(0, 20), guard: listsPlan.guard },"), "the audit detail's lists block");
+      const leg = f.slice(f.indexOf("const extra = { from: eastWin.extra.from"), f.indexOf("const resetText = "));
+      assert.ok(leg.length > 200 && leg.includes("eastAttachLists(keepCachedVacations(sel.weeks, cacheRows), listsPlan.lists)") && !/eastListsPlan\(|eastListsGuard/.test(leg), "the extra leg attaches the lists leg's copy - it plans and guards nothing of its own");
+      assert.strictEqual(f.split('listsWritten ? "" : " - NOT cached (no published week row to hold them)"').length - 1, 2, "the audit summary and the toast both say NOT cached when no week of either leg holds the lists");
+      assert.ok(!/call_schedule_data/.test(f.replace(/\/\/[^\n]*/g, "")) && !/eastGetJson/.test(f), "the Refresh adds no Davenport request of its own (the lists come from fetchEastWeeks' own read of that row)");
+    });
+    check("P34 pins (the rules inputs and Setup > East feed): ctxInputs derives through deriveFierceWeeksDetail over the cache rows (no listedWeeks passed - the rows carry them) and keeps the warnings from deriveFrom on; the card shows the legend, the lists line (data-state), the warnings and the upcoming weeks with eastSourceLabel, the vacation / unit notes from the rules context; the raw source word is gone", () => {
+      assert.strictEqual(src.split("deriveFierceWeeksDetail(").length - 1, 1, "one derive call in the app");
+      assert.strictEqual(src.split("deriveFierceWeeks(").length - 1, 0, "...and it is the detail one");
+      assert.ok(src.includes("const dd = deriveFierceWeeksDetail(weeks, { statedWeeks: ef.statedWeeks || null });"), "the call - the lists come from the rows");
+      assert.ok(src.includes("dd.warnings.forEach(w => { if (!ef.deriveFrom || w.weekMonday >= ef.deriveFrom) eastDerivedWarnings.push({ surgeonId: s.id, ...w }); });"), "the warnings, from deriveFrom on");
+      assert.ok(src.includes("eastBusyDays, eastForecast, eastOverrides, eastDerived, eastFeedCoverage: coverage, eastMeta, eastDerivedWarnings,"), "ctxInputs carries them");
+      const c0 = src.indexOf("function EastFeedCard("), c1 = src.indexOf("\n}\n", c0), card = src.slice(c0, c1);
+      assert.ok(c0 > 0 && c1 > c0, "EastFeedCard");
+      ['data-testid="east-derived-legend"', 'data-testid="east-lists-status" data-state={listsStatus.state}', 'data-testid="east-derived-warnings"', 'data-testid="east-derived-past"', 'data-testid="east-derived"',
+        "eastListsStatus(feedRows || [])", "eastListsStatusText(listsStatus, suFmtTs)", "({eastSourceLabel(w.source)})", "eastSourceLabel(nextPrimary.source)", "(ctx && ctx.derivedVacationYields)", "(ctx && ctx.derivedUnitDays)", "eastDerivedWarningText(w)"]
+        .forEach(s => assert.ok(card.includes(s), "the card: " + s));
+      assert.ok(card.includes("const derivedUpcoming = derivedSorted.filter(w => suAddDays(w.weekMonday, 6) >= today), derivedPast = derivedSorted.filter(w => suAddDays(w.weekMonday, 6) < today);"), "upcoming = the week has not ended");
+      assert.ok(!/\(\{w\.source\}\)/.test(card), "the raw source word is no longer shown");
+    });
+    check("P34 suSetupIssues: a surgeon whose weeks derive from East + a cache that holds weeks but no lists -> one issue telling the scheduler to refresh; lists in the cache, no derive surgeon, the East feature off, an empty cache (its own issue) or a copy only on a forecast row decide it", () => {
+      const base = { roster: [{ id: "s5", name: "Fierce", code: "NF" }], surgeonRules: { s5: { eastFeed: { enabled: true, deriveFrom: "2026-11-02" } } }, groupRules: {}, holidays: { units: { "2026": ["x"] } }, schedule: { "2026-11-23": { primary: "s5" } }, nowMs: Date.parse("2026-11-23T12:00:00Z"), today: "2026-11-23" };
+      const row = (m, data) => ({ week_monday: m, data: data || {}, fetched_at: "2026-11-23T10:30:08+00:00" });
+      const L = { eastPrimary: ["2027-02-22"], eastBackup: ["2027-03-29"], readAt: "2026-11-23T10:30:08.000Z", dropped: 0 };
+      const issue = (over) => H.suSetupIssues(Object.assign({}, base, over)).filter(t => /East week lists/.test(t));
+      assert.deepStrictEqual(issue({ eastFeedRows: [row("2026-11-16"), row("2026-11-23")] }), ["The East week lists are not in the East feed cache - refresh it in Setup > East feed (until then only published and stated weeks derive)"], "weeks cached, no lists: said");
+      assert.deepStrictEqual(issue({ eastFeedRows: [row("2026-11-16"), row("2026-11-23", { eastLists: L })] }), [], "one row carries the lists: nothing to say");
+      assert.strictEqual(issue({ eastFeedRows: [row("2026-11-16"), row("2026-11-23", { isForecast: true, eastLists: L })] }).length, 1, "a forecast row's copy is no cache");
+      assert.strictEqual(issue({ eastFeedRows: [row("2026-11-23", { eastLists: { eastPrimary: [], eastBackup: [] } })] }).length, 1, "a copy without readAt is no cache");
+      assert.deepStrictEqual(issue({ eastFeedRows: [] }), [], "an empty cache has its own issue");
+      assert.ok(H.suSetupIssues(Object.assign({}, base, { eastFeedRows: [] })).some(t => /East feed cache is empty/.test(t)), "...which is still raised");
+      assert.deepStrictEqual(issue({ eastFeedRows: [row("2026-11-23")], surgeonRules: { s5: { eastFeed: { enabled: true, eastBlocksPrimary: true } } } }), [], "no surgeon derives weeks: not asked");
+      assert.deepStrictEqual(issue({ eastFeedRows: [row("2026-11-23")], surgeonRules: { s5: { eastFeed: { enabled: false, deriveFrom: "2026-11-02" } } } }), [], "the East feature off: not asked");
+      assert.strictEqual(issue({ eastFeedRows: [row("2026-11-23")], surgeonRules: { s5: { eastFeed: { enabled: true, statedWeeks: { eastPrimary: ["2026-11-09"] } } } } }).length, 1, "stated weeks alone make him a derive surgeon too");
+      assert.strictEqual(EF34.eastListsStatus([row("2026-11-23", { eastLists: L })]).state, "read", "east-feed.js reads the same row as holding lists");
+      assert.strictEqual(EF34.eastListsStatus([row("2026-11-23", { isForecast: true, eastLists: L })]).state, "none", "...and a forecast row's copy as none");
+    });
+    // Review A (11/11): a cache without the lists was silent where it is USED - Generate derived from published and stated
+    // weeks only and said nothing (the notice lived in Setup's issue list). The preview is stamped and the toast warns,
+    // from the same two readings as the Setup issue (helpers.js suDerivesFromEast / suEastListsCached).
+    check("P34 review A (11/11) - Generate says when the East week lists are not in the cache: suDerivesFromEast / suEastListsCached decide it (the Setup issue reads the same two); runGenerate stamps the preview (eastListsMissing), the preview header shows a red alert and the run toast warns with tone error; an empty cache counts as missing here", () => {
+      const roster = [{ id: "s5", name: "Fierce", code: "NF" }, { id: "s1", name: "Khan", code: "FAK" }];
+      const row = (m, data) => ({ week_monday: m, data: data || {}, fetched_at: "2026-11-23T10:30:08+00:00" });
+      const L = { eastPrimary: ["2027-02-22"], eastBackup: [], readAt: "2026-11-23T10:30:08.000Z", dropped: 0 };
+      assert.deepStrictEqual([typeof H.suDerivesFromEast, typeof H.suEastListsCached], ["function", "function"], "helpers.js exports the two readings");
+      assert.deepStrictEqual([H.suDerivesFromEast(roster, { s5: { eastFeed: { enabled: true, deriveFrom: "2026-11-02" } } }), H.suDerivesFromEast(roster, { s5: { eastFeed: { enabled: true, statedWeeks: { eastPrimary: [] } } } }),
+        H.suDerivesFromEast(roster, { s1: { eastFeed: { enabled: true, eastBlocksPrimary: true } } }), H.suDerivesFromEast(roster, { s5: { eastFeed: { enabled: false, deriveFrom: "2026-11-02" } } }), H.suDerivesFromEast(roster, null), H.suDerivesFromEast(null, {}),
+        H.suDerivesFromEast([{ id: "s9" }], { s5: { eastFeed: { enabled: true, deriveFrom: "2026-11-02" } } })], [true, true, false, false, false, false, false], "suDerivesFromEast: a rostered surgeon with the East feature on and a deriveFrom date or stated weeks");
+      assert.deepStrictEqual([H.suEastListsCached([row("2026-11-16"), row("2026-11-23", { eastLists: L })]), H.suEastListsCached([row("2026-11-16")]), H.suEastListsCached([]), H.suEastListsCached(null),
+        H.suEastListsCached([row("2026-11-23", { isForecast: true, eastLists: L })]), H.suEastListsCached([row("2026-11-23", { eastLists: { eastPrimary: [], eastBackup: [] } })]), H.suEastListsCached([row("2026-11-23", { eastLists: { eastPrimary: [], eastBackup: [], readAt: "2026-11-23T10:30:08.000Z" } })])],
+        [true, false, false, false, false, false, true], "suEastListsCached: a published row with a readAt and both lists (two EMPTY lists read from Davenport are cached lists too); no rows, a forecast row's copy and a copy without readAt are not");
+      const i = src.indexOf("  const runGenerate = async (o) => {"), j = src.indexOf("\n  };\n", i), rg = src.slice(i, j);
+      assert.ok(i > 0 && j > i, "runGenerate");
+      const at = rg.indexOf("const eastListsMissing = suDerivesFromEast(surgeons, surgeonRules) && !suEastListsCached(eastFeedRows);");
+      assert.ok(at > rg.indexOf("setGenBusy(true);") && at < rg.indexOf("const inputs = { ...ctxInputs,"), "read once per run, after the refusals, before the inputs are built");
+      assert.ok(rg.includes("diagnostics: dg, eastListsMissing, start, end, seed, bestOf,"), "the preview is stamped");
+      assert.ok(rg.includes('${eastListsMissing ? " WARNING: the East week lists are not in the East feed cache - only published and stated East weeks were derived. Refresh in Setup > East feed and re-run before accepting." : ""}`, offersStale || eastListsMissing ? "error" : open ? "info" : "success");'), "the run toast warns, tone error");
+      assert.ok(src.includes('{preview.eastListsMissing && <span data-testid="gen-preview-lists-warning" role="alert"') && src.indexOf('data-testid="gen-preview-lists-warning"') > src.indexOf('data-testid="gen-preview-offers-warning"') && src.indexOf('data-testid="gen-preview-lists-warning"') < src.indexOf('data-testid="gen-reroll"'), "the preview header shows it, beside the offers warning and before Accept");
+      const hs = read34("helpers.js");
+      assert.ok(hs.includes("if (suDerivesFromEast(roster, i.surgeonRules) && (i.eastFeedRows || []).length && !suEastListsCached(i.eastFeedRows)) out.push("), "Setup's issue reads the same two readings");
+    });
+    // Review B (11/11): the day editor's East line read two of the new days wrongly - a day whose derived lock yields to
+    // his vacation said "not derived - before the derive-from date", and a day a holiday unit adds said "East week" though
+    // it lies outside the East week. eastStatusLines is lifted and run on a real rules context (fixture dates).
+    check("P34 review B (11/11) - the day editor's East line on a real rules context (eastStatusLines lifted): a day of the East week reads 'East week -> Silvis primary (derived)'; the Monday a holiday unit adds reads the same words plus 'a day its holiday unit adds, outside the East week'; a day whose derived lock yields to his vacation says so - never 'before the derive-from date', which a week before his deriveFrom still reads; the E badge's title carries the unit suffix", () => {
+      const R34 = require(path.join(ROOT, "rules.js")), SA34 = require(path.join(ROOT, "test", "seed-adapter.js"));
+      const seedJ = JSON.parse(read34("docs", "silvis-seed.json"));
+      const a = src.indexOf("\nfunction eastStatusLines(ctx, ctxInputs, day, nameOf) {"), b = src.indexOf("\n}\n", a);
+      assert.ok(a > 0 && b > a, "eastStatusLines");
+      // (the app's global derivedUnitLost is rules.js's - handed in, as the page has it)
+      const lines = new Function("derivedUnitLost", src.slice(a, b + 3) + "\nreturn eastStatusLines;")(R34.derivedUnitLost);
+      const wk = (m, role) => ({ weekMonday: m, surgeonId: "s5", silvisRole: role });
+      const ctx = R34.buildContext(SA34.seedToContextInput(seedJ, { schedule: {}, eastBusyDays: {}, eastDerived: [wk("2027-05-24", "primary"), wk("2027-03-29", "primary")], timeOffRows: [{ person_id: "s5", start_date: "2027-04-01", end_date: "2027-04-07" }] }));
+      const say = (c, day) => lines(c, { eastMeta: { s5: { derivedWeeks: true } } }, day, () => "Fierce").map(l => l.tone + " " + l.text);
+      assert.deepStrictEqual(say(ctx, "2027-05-27"), ["busy Fierce: East week -> Silvis primary (derived)"], "a day of the East week");
+      assert.deepStrictEqual(say(ctx, "2027-05-31"), ["busy Fierce: East week -> Silvis primary (derived) - a day its holiday unit adds, outside the East week"], "Memorial Day Monday, the day the unit adds");
+      assert.deepStrictEqual(say(ctx, "2027-03-30"), ["busy Fierce: East week -> Silvis primary (derived)"], "Tue 3/30 stays derived");
+      ["2027-03-31", "2027-04-01", "2027-04-04"].forEach(d => assert.deepStrictEqual(say(ctx, d), ["warn Fierce: on East call this week (the derived Silvis primary yields to his vacation - the day is filled like any other)"], d + ": the lock yields to his vacation - said so"));
+      assert.deepStrictEqual(say(ctx, "2027-06-02"), ["ok Fierce: no East week"], "a day outside every East week");
+      const early = R34.buildContext(SA34.seedToContextInput(seedJ, { schedule: {}, eastBusyDays: {}, eastDerived: [wk("2026-10-26", "backup")] }));
+      assert.deepStrictEqual(say(early, "2026-10-28"), ["warn Fierce: on East call this week (not derived - before the derive-from date)"], "a week before his deriveFrom (11/2/2026) still reads so");
+      assert.ok(src.includes('title: "East week: Silvis " + P.derived[d] + " (derived from the Davenport feed)" + (P.eastDays.has(d) ? "" : " - a day its holiday unit adds, outside the East week")'), "the E badge's title carries the same suffix");
+      // the re-check (11/11): once the unit is someone else's (Acton holds Sat + Sun) the Monday it added is no derived day
+      // of his - the editor reads "no East week" there and the E badge is not drawn (rules.js derivedUnitLost, the engine's reading)
+      const held = (id) => ({ primary: id, backup: null, primaryLocked: true, backupLocked: false, source: "manual", externalCover: null, note: null });
+      const lost = R34.buildContext(SA34.seedToContextInput(seedJ, { schedule: { "2027-05-29": held("s3"), "2027-05-30": held("s3") }, eastBusyDays: {}, eastDerived: [wk("2027-05-24", "primary")] }));
+      assert.deepStrictEqual([say(lost, "2027-05-31"), say(lost, "2027-05-30"), say(lost, "2027-05-27")], [["ok Fierce: no East week"], ["busy Fierce: East week -> Silvis primary (derived)"], ["busy Fierce: East week -> Silvis primary (derived)"]], "the unit lost: Mon 5/31 reads no East week; the days of his East week read as before");
+      assert.ok(src.includes('if (P && P.derived[d] && !(typeof derivedUnitLost === "function" && derivedUnitLost(rulesCtx, rulesCtx.schedule, d, P.derived[d], who || pid))) out.push({ k: "E", text: "E",'), "the E badge is not drawn on a lost added day");
+    });
+    // The re-check (11/11): the generator reaches rules.js through genRulesApi - require() under Node, a hand-written list of
+    // globals in the browser and the worker. A rules function it calls that is missing from that list is a TypeError on every
+    // browser Generate, unseen by every Node suite (derivedUnitLost was added to both on 11/11).
+    check("P34 re-check (11/11) - generator.js's browser list of rules.js functions (genRulesApi) names every function the generator calls through R / G.R, each mapped to a top-level function of rules.js under its own name or the one the list gives", () => {
+      const gs = read34("generator.js"), rs = read34("rules.js");
+      const i0 = gs.indexOf("    genRulesCache = {\n"), i1 = gs.indexOf("\n    };\n", i0);
+      assert.ok(i0 > 0 && i1 > i0, "the browser list");
+      const list = {};
+      gs.slice(i0, i1).replace(/\/\/[^\n]*/g, "").replace(/(\w+)\s*:\s*(\w+)/g, (m, k, v) => { list[k] = v; return m; });
+      const used = new Set();
+      // (three spellings: R.x(, G.R.x( and genRulesApi().x( - the last one was not scanned before the reviewer of round 3)
+      gs.replace(/\/\/[^\n]*/g, "").replace(/(?:\bG\.R|\bR|\bgenRulesApi\(\))\.(\w+)\s*\(/g, (m, k) => { used.add(k); return m; });
+      assert.ok(used.size >= 10 && used.has("eligibility") && used.has("derivedUnitLost") && used.has("standingEastDays"), "the generator calls rules.js through R: " + Array.from(used).sort().join(", "));
+      Array.from(used).forEach(k => {
+        assert.ok(Object.prototype.hasOwnProperty.call(list, k), "generator.js calls R." + k + "() but the browser list does not carry it");
+        assert.ok(new RegExp("\\nfunction " + list[k] + "\\(").test(rs), "the browser list maps " + k + " to " + list[k] + ", which is no top-level function of rules.js");
+      });
+      const R34b = require(path.join(ROOT, "rules.js"));
+      Array.from(used).forEach(k => assert.strictEqual(typeof R34b[k], "function", "rules.js does not export " + k + " (the Node path)"));
+    });
+    check("P34 docs: the rules doc's Fierce section carries the three 11/11 entries (the DSG lists and their precedence, 'Give Fierce Memorial Day', 'Don't put him on if he has a vacation listed') and section 8 item 29 records the decision and the readings taken; the build guide's section 7 points at section 26 and section 26 has its seven parts in order; the seed carries the two switches, both on", () => {
+      const rules = read34("docs", "SILVIS-CALL-RULES.md"), guide = read34("docs", "SILVIS-BUILD-GUIDE.md"), seed34 = JSON.parse(read34("docs", "silvis-seed.json"));
+      const flat = (t) => t.replace(/\s+/g, " ");
+      const fi = rules.indexOf("### Fierce (s5)"), fj = rules.indexOf("### Sarkar (s6)");
+      assert.ok(fi > 0 && fj > fi, "the Fierce section");
+      const fierce = flat(rules.slice(fi, fj));
+      ["11/11 (Prompt 34, Faraz's decision): for the weeks Davenport has not published, his weeks come from the Davenport (DSG) app's two lists.", "`backupMondays` (Fierce East primary → Silvis **backup** all week)", "`fierceBackup` (Fierce East backup → Silvis **primary** all week)",
+        "Precedence: a published Davenport week (flagged or not) → the DSG lists → Setup's stated weeks", "`deriveFrom` (11/2/2026) still applies", "keeps **both** cached lists as they are", "(published / DSG list / stated)",
+        "\"Give Fierce Memorial Day.\"", "a holiday unit with a day in a derived week belongs to the derived surgeon in that role on all its days", "`groupRules.eastFeed.derivedWeeks.keepHolidayUnit`",
+        "\"Don't put him on if he has a vacation listed.\"", "a derived lock yields on a day the vacation rules refuse the derived surgeon for that role", "`groupRules.eastFeed.derivedWeeks.yieldToVacation`"].forEach(s => assert.ok(fierce.includes(s), "the Fierce section: " + s));
+      const s8 = flat(rules.slice(rules.indexOf("## 8. Answered")));
+      const i29 = s8.indexOf("29. **Fierce's weeks from the DSG lists; the Memorial Day unit; his vacation (Faraz 11/11, Prompt 34)");
+      assert.ok(i29 > s8.indexOf("28. **Sarkar's November and December weeks") && s8.indexOf("28. **Sarkar's November and December weeks") > 0, "item 29 follows item 28");
+      const item = s8.slice(i29);
+      ["no schema change", "`data.eastLists = { eastPrimary, eastBackup, readAt, dropped }`", "The read guard - the rule chosen", "all 60 of its published weeks matched", "Reading taken - a Monday in both lists", "confirm the general reading", "Wed 3/31 yields too",
+        "Open slots 4 → 4", "Khan 35 / 35 → 35 / 35; Burchett 34 / 34 → 33 / 32; Acton 36 / 37 → 34 / 36; Philip 35 / 35 → 37 / 33; Fierce 34 / 37 → 35 / 42", "the published schedule ends 1/3/2027", "`east-feed-refresh` v3 is prepared and waits for Faraz's deploy"]
+        .forEach(s => assert.ok(item.includes(s), "item 29: " + s));
+      const s7 = guide.slice(guide.indexOf("\n## 7. East feed"), guide.indexOf("\n## 8. UI"));
+      assert.ok(flat(s7).includes("11/11 (Prompt 34, §26): between the two sits the Davenport app's own pair of week lists"), "section 7 points at section 26");
+      const s26 = guide.slice(guide.indexOf("\n## 26. Fierce's weeks from the DSG lists (Faraz 11/11; Prompt 34)"));
+      assert.ok(guide.indexOf("\n## 26. Fierce's weeks from the DSG lists (Faraz 11/11; Prompt 34)") > 0 && s26.length > 2000, "section 26");
+      ["### 26.1 The source - two lists, one fact", "### 26.2 The cache - no schema change", "### 26.3 The read guard (`eastListsGuard`) - the rule chosen", "### 26.4 Precedence, warnings and Setup", "### 26.5 Faraz's two calls on the preview (11/11) - `rules.js` `rdDerivedUnitsAndVacations`", "### 26.6 The server function - `east-feed-refresh` v3 (prepared; the deploy is Faraz's step)", "### 26.7 Tests, the preview and the ship"]
+        .reduce((at, h) => { const k = s26.indexOf("\n" + h); assert.ok(k > at, "sub-heading in order: " + h); return k; }, -1);
+      assert.deepStrictEqual([seed34.groupRules.eastFeed.derivedWeeks.keepHolidayUnit, seed34.groupRules.eastFeed.derivedWeeks.yieldToVacation], [true, true], "the seed carries both switches, on");
+    });
+  }
   console.log("\n[P31A5] Prompt 31 Part A (A5): the docs - guide section 25 and its pointers, the rules doc, ONBOARDING, the edge-functions README, HISTORY");
   {
     const readDoc5 = (...p) => { const f = path.join(ROOT, ...p); return fs.existsSync(f) ? fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n") : ""; };
@@ -15222,8 +15465,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("P31A5 guide: '" + H25 + "' directly after section 24 and the last numbered section; the sub-headings 25.1 .. 25.6 in order; every '25.<k>' pointer in the guide names one of them", () => {
       assert.ok(s25.length > 0, "the section 25 heading");
       const nums = [...guide.matchAll(/^## (\d+)\. /gm)].map(m => Number(m[1]));
-      assert.strictEqual(nums[nums.length - 1], 25, "section 25 is the last numbered section");
-      assert.strictEqual(nums[nums.length - 2], 24, "section 24 (Part B) comes right before it");
+      // pin moved deliberately 11/11: Prompt 34 added section 26 (Fierce's weeks from the DSG lists) after it - section 25 is the
+      // second to last now, still right after section 24
+      assert.deepStrictEqual(nums.slice(-3), [24, 25, 26], "section 25 follows section 24 (Part B); section 26 (Prompt 34) is the last numbered section");
       let last = -1;
       SUBS.forEach(h => { const i = s25.indexOf("\n" + h); assert.ok(i > last, "sub-heading '" + h + "' missing or out of order"); last = i; });
       assert.strictEqual((guide.match(/\n### 25\.\d/g) || []).length, SUBS.length, "exactly six 25.x sub-headings");

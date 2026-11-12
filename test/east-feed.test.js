@@ -582,6 +582,275 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
   eq(g(held(["2026-09-07", "2026-09-14"], "2026-09-01", "2028-05-01")), KEPT, "P31A review guard edge: a range spanning the whole window -> NOT trusted");
   eq(g(held(["2026-09-07", "2026-09-14"], "2026-09-10", "2026-09-16"), { vacationsTo: null }), KEPT, "P31A review guard edge: no vacationsTo (no upper bound) - the range straddling from still counts");
 }
+// ---- Prompt 34 (Faraz 11/11): the East week lists - Fierce's weeks for the weeks Davenport has not published ----
+// The Davenport blob holds two lists of Mondays, unsorted, past weeks mixed in: backupMondays (the list behind isBackup:
+// Fierce East PRIMARY -> Silvis BACKUP all week) and fierceBackup (behind isFierceBackup: Fierce East BACKUP -> Silvis
+// PRIMARY all week). Both refreshes read them from the roster blob they already read, cache them in the payload of the
+// main-window east_feed rows (data.eastLists, beside data.vacations) and deriveFierceWeeks reads published > list > stated.
+{
+  ["eastListsFromBlob", "eastCachedLists", "eastListsGuard", "eastListsGuardText", "eastListsPlan", "eastAttachLists", "deriveFierceWeeksDetail", "efIsMonday"]
+    .forEach(k => ok(typeof ef[k] === "function", "P34: east-feed.js exports " + k));
+
+  // -- parsing: valid Mondays only, the rest dropped and named; order and duplicates do not matter
+  const blob = {
+    surgeons: [{ id: "s6", name: "FAK" }],
+    backupMondays: ["2027-04-19", "2026-11-09", "2027-01-04", "2027-02-22", "2027-01-04", "2027-02-23", "2027-02-30", 42, null, "next Monday"],
+    fierceBackup: ["2027-05-24", "2026-12-07", "2027-03-29", "2027-02-01"],
+  };
+  const read = ef.eastListsFromBlob(blob);
+  eq(read.eastPrimary, ["2026-11-09", "2027-01-04", "2027-02-22", "2027-04-19"], "P34 parse: backupMondays -> eastPrimary (Fierce East PRIMARY), sorted, the duplicate once, only real Mondays");
+  eq(read.eastBackup, ["2026-12-07", "2027-02-01", "2027-03-29", "2027-05-24"], "P34 parse: fierceBackup -> eastBackup (Fierce East BACKUP), sorted from an unsorted list");
+  eq(read.problems, [], "P34 parse: both keys are arrays - no key problem");
+  eq(read.dropped.map(d => d.list), ["backupMondays", "backupMondays", "backupMondays", "backupMondays", "backupMondays"], "P34 parse: five entries dropped, each naming its list");
+  eq(read.dropped.map(d => d.value), ["2027-02-23", "2027-02-30", "42", "null", "next Monday"], "P34 parse: a Tuesday, a day that does not exist, a number, null and text are dropped (values as short text)");
+  ok(read.dropped.every(d => typeof d.value === "string" && d.value.length <= 24), "P34 parse: a dropped value is short text, never the raw entry");
+  eq(ef.eastListsFromBlob({ backupMondays: ["x".repeat(500)], fierceBackup: [] }).dropped[0].value.length, 24, "P34 parse: a long junk entry is cut to 24 characters");
+  eq(ef.eastListsFromBlob({ fierceBackup: ["2027-02-01"] }), { eastPrimary: null, eastBackup: ["2027-02-01"], problems: [{ list: "backupMondays", why: "missing" }], dropped: [] }, "P34 parse: a missing key is unknown (null), never an empty list");
+  eq(ef.eastListsFromBlob({ backupMondays: null, fierceBackup: { "2027-02-01": true } }).problems, [{ list: "backupMondays", why: "missing" }, { list: "fierceBackup", why: "not-array" }], "P34 parse: null is missing, an object is not an array");
+  eq(ef.eastListsFromBlob({ backupMondays: "2027-01-04", fierceBackup: [] }), { eastPrimary: null, eastBackup: [], problems: [{ list: "backupMondays", why: "not-array" }], dropped: [] }, "P34 parse: a string is not an array; an empty array is a real empty list");
+  eq(ef.eastListsFromBlob(null).problems, [{ list: "backupMondays", why: "missing" }, { list: "fierceBackup", why: "missing" }], "P34 parse: no blob - both missing");
+  ok(ef.efIsMonday("2027-01-04") && !ef.efIsMonday("2027-01-05") && !ef.efIsMonday("2027-02-30") && !ef.efIsMonday("2027-1-4") && !ef.efIsMonday(null), "P34: efIsMonday - a real date that is a Monday");
+
+  // -- the cached copy: the newest readAt among the rows; forecast rows and malformed copies never count
+  const L0 = { eastPrimary: ["2027-02-22", "2027-04-19"], eastBackup: ["2027-03-29", "2027-05-24"], readAt: "2026-11-12T10:30:08.000Z", dropped: 0 };
+  const L1 = { eastPrimary: ["2027-02-22"], eastBackup: ["2027-03-29"], readAt: "2026-11-11T10:30:08.000Z", dropped: 0 };
+  const row = (m, data) => ({ week_monday: m, data: data || {} });
+  const cacheRows = [row("2027-01-04", { isBackup: true, eastLists: L1 }), row("2027-01-11", { eastLists: L0 }), row("2027-01-18", { eastLists: L0 }), row("2027-02-01", { isFierceBackup: true }),
+    row("2027-03-01", { isForecast: true, eastLists: { eastPrimary: ["2027-12-06"], eastBackup: [], readAt: "2027-01-01T00:00:00.000Z" } }),
+    row("2026-12-28", { eastLists: { eastPrimary: "2027-02-22", eastBackup: [], readAt: "2026-12-31T00:00:00.000Z" } }), row("2026-12-21", { eastLists: { eastPrimary: [], eastBackup: [] } })];
+  eq(ef.eastCachedLists(cacheRows), L0, "P34 cache: the copy with the newest readAt wins; a forecast row's copy, a copy with a non-array list and one without readAt are skipped");
+  eq(ef.eastCachedLists(cacheRows.map(r => ({ weekMonday: r.week_monday, data: r.data }))), L0, "P34 cache: the app's { weekMonday, data } rows read the same");
+  eq(ef.eastCachedLists([row("2027-01-04", { isBackup: true })]), null, "P34 cache: no copy in the cache -> null (unknown), never empty lists");
+  eq(ef.eastCachedLists(null), null);
+  // review C (11/11): two copies carrying ONE readAt (two writers in the same millisecond) - the first row's stands
+  const sameAt = [row("2027-01-04", { eastLists: { eastPrimary: ["2027-02-22"], eastBackup: [], readAt: "2026-11-12T10:30:08.000Z" } }), row("2027-01-11", { eastLists: { eastPrimary: ["2027-04-19"], eastBackup: [], readAt: "2026-11-12T10:30:08.000Z" } })];
+  eq(ef.eastCachedLists(sameAt).eastPrimary, ["2027-02-22"], "P34 cache: two copies with one readAt - the first row's stands");
+  ok(ef.eastCachedLists(cacheRows) !== L0 && ef.eastCachedLists(cacheRows).eastPrimary !== L0.eastPrimary, "P34 cache: a copy is returned, never the row's own object");
+
+  // -- the read guard. Published weeks: 11/9 + 1/4 carry isBackup, 12/7 + 2/1 isFierceBackup (through 2/15); the cache
+  //    holds the upcoming weeks 2/22 + 4/19 (eastPrimary) and 3/29 + 5/24 (eastBackup); today 2026-11-23.
+  const pub = [row("2026-11-09", { isBackup: true }), row("2026-11-16"), row("2026-12-07", { isFierceBackup: true }), row("2027-01-04", { isBackup: true }), row("2027-02-01", { isFierceBackup: true }), row("2027-02-15")];
+  const TODAY = "2026-11-23";
+  const full = { eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22", "2027-04-19"], eastBackup: ["2026-12-07", "2027-02-01", "2027-03-29", "2027-05-24"], problems: [], dropped: [] };
+  const rd = (over) => Object.assign({}, full, over);
+  const g = (r, c, w, t) => ef.eastListsGuard(r, c === undefined ? L0 : c, w || pub, t || TODAY);
+  eq(g(full), { ok: true, problems: [] }, "P34 guard: a read that holds everything cached is trusted");
+  eq(g(rd({ eastPrimary: full.eastPrimary.concat(["2027-06-21"]) })), { ok: true, problems: [] }, "P34 guard: a new week is trusted");
+  eq(g(rd({ eastPrimary: null, problems: [{ list: "backupMondays", why: "missing" }] })), { ok: false, problems: [{ list: "backupMondays", why: "missing" }] }, "P34 guard: a missing key keeps the cache");
+  eq(g(rd({ eastBackup: null, problems: [{ list: "fierceBackup", why: "not-array" }] })).problems, [{ list: "fierceBackup", why: "not-array" }], "P34 guard: a non-array keeps the cache");
+  eq(g(null).problems, [{ list: "backupMondays", why: "missing" }, { list: "fierceBackup", why: "missing" }], "P34 guard: no read at all - nothing came back, never trusted");
+  // a legitimate edit: 4/19 leaves the list, every published isBackup week is still on it -> clearly healthy
+  eq(g(rd({ eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] })), { ok: true, problems: [] }, "P34 guard: a lost upcoming week is accepted when the list still holds every week Davenport published with that flag");
+  // the same loss, but the list also lost the published 1/4 -> not healthy
+  eq(g(rd({ eastPrimary: ["2026-11-09", "2027-02-22"] })), { ok: false, problems: [{ list: "backupMondays", why: "lost-week", weeks: ["2027-04-19"], unmatched: ["2027-01-04"], published: 2 }] }, "P34 guard: a lost upcoming week is NOT accepted when the list lacks a week Davenport published with that flag (names both)");
+  eq(g(rd({ eastPrimary: [] })), { ok: false, problems: [{ list: "backupMondays", why: "empty-while-cached", weeks: ["2027-02-22", "2027-04-19"], unmatched: ["2026-11-09", "2027-01-04"], published: 2 }] }, "P34 guard: an empty list while the cache holds upcoming weeks keeps the cache - it can never be clearly healthy");
+  eq(g(rd({ eastPrimary: [], eastBackup: [] })).problems.map(p => p.list + ":" + p.why), ["backupMondays:empty-while-cached", "fierceBackup:empty-while-cached"], "P34 guard: both lists wiped - both named");
+  // no published week carries the flag at all: nothing to check the list against -> not clearly healthy
+  const noWitness = pub.map(r => row(r.week_monday, Object.assign({}, r.data, { isBackup: false })));
+  eq(g(rd({ eastPrimary: ["2027-02-22"] }), L0, noWitness), { ok: false, problems: [{ list: "backupMondays", why: "lost-week", weeks: ["2027-04-19"], unmatched: [], published: 0 }] }, "P34 guard: a loss with no published week to check the list against is not clearly healthy");
+  // each list is judged by its own flag: eastBackup loses 5/24 and still holds 12/7 + 2/1 -> healthy, whatever isBackup says
+  eq(g(rd({ eastBackup: ["2026-12-07", "2027-02-01", "2027-03-29"] }), L0, noWitness), { ok: true, problems: [] }, "P34 guard: fierceBackup is judged by the isFierceBackup weeks alone");
+  eq(g(rd({ eastBackup: ["2027-02-01", "2027-03-29"] })).problems, [{ list: "fierceBackup", why: "lost-week", weeks: ["2027-05-24"], unmatched: ["2026-12-07"], published: 2 }], "P34 guard: ...and kept when it lacks the published 12/7");
+  // a week Davenport has published is never a loss (the published row decides)
+  const pub222 = pub.concat([row("2027-02-22", { isBackup: false })]);
+  eq(g(rd({ eastPrimary: ["2027-04-19"] }), L0, pub222), { ok: true, problems: [] }, "P34 guard: 2/22 left the list but Davenport published that week - not a loss (and nothing else is lost)");
+  eq(g(rd({ eastPrimary: [] }), L0, pub222).problems[0].weeks, ["2027-04-19"], "P34 guard: ...while 4/19, still unpublished, is");
+  // a forecast row is not a published week: it neither settles a loss nor witnesses a list
+  eq(g(rd({ eastPrimary: ["2026-11-09", "2027-01-04", "2027-04-19"] }), L0, pub.concat([row("2027-02-22", { isForecast: true, isBackup: true })])), { ok: true, problems: [] }, "P34 guard: (healthy) 2/22 lost, a forecast row for it changes nothing");
+  eq(g(rd({ eastPrimary: ["2027-04-19"] }), L0, noWitness.concat([row("2027-02-22", { isForecast: true, isBackup: true }), row("2026-10-05", { isForecast: true, isBackup: true })])).problems[0], { list: "backupMondays", why: "lost-week", weeks: ["2027-02-22"], unmatched: [], published: 0 }, "P34 guard: a forecast row is neither a published week nor a witness");
+  // only this week and later can be lost: a past cached Monday is not counted, the current week's Monday is
+  const Lpast = { eastPrimary: ["2026-11-16", "2026-11-23", "2027-02-22"], eastBackup: [], readAt: "2026-11-22T10:30:00.000Z", dropped: 0 };
+  eq(g(rd({ eastPrimary: [], eastBackup: [] }), Lpast, [row("2026-11-09", { isBackup: true })]).problems, [{ list: "backupMondays", why: "empty-while-cached", weeks: ["2026-11-23", "2027-02-22"], unmatched: ["2026-11-09"], published: 1 }], "P34 guard: 11/16 is past (today 11/23, a Monday); 11/23 - this week - and 2/22 count");
+  eq(g(rd({ eastPrimary: [], eastBackup: [] }), Lpast, [row("2026-11-09", { isBackup: true })], "2026-11-29").problems[0].weeks, ["2026-11-23", "2027-02-22"], "P34 guard: on Sunday 11/29 the week of 11/23 is still this week");
+  eq(g(rd({ eastPrimary: [], eastBackup: [] }), Lpast, [row("2026-11-09", { isBackup: true })], "2026-11-30").problems[0].weeks, ["2027-02-22"], "P34 guard: on Monday 11/30 it is past");
+  // review C (11/11): with no valid today nothing is "past" - every cached Monday counts (the careful side)
+  [null, undefined, "", "2026-11-31", "today"].forEach(t => eq(ef.eastListsGuard(rd({ eastPrimary: [], eastBackup: [] }), Lpast, [row("2026-11-09", { isBackup: true })], t).problems[0].weeks, ["2026-11-16", "2026-11-23", "2027-02-22"], "P34 guard: today " + JSON.stringify(t) + " - no week is read as past"));
+  // first read: nothing cached, nothing can be lost - lists that name weeks are taken as they are...
+  eq(g(full, null), { ok: true, problems: [] }, "P34 guard: no cache - the first read is taken");
+  eq(g(rd({ eastPrimary: ["2027-02-22"] }), null), { ok: true, problems: [] }, "P34 guard: no cache - a list that lacks a published week is still taken (nothing is known to be lost; the published row decides that week)");
+  // ...but an EMPTY list is never taken while a published week carries its flag (review C, 11/11): Davenport writes a list
+  // and its week flags together and keeps past weeks on the list, so an empty list beside a flagged published week is a
+  // wiped or reset blob - on a cache with no copy too (before the fix a wiped list was accepted there as "0 weeks", ok true)
+  eq(g(rd({ eastPrimary: [], eastBackup: [] }), null), { ok: false, problems: [{ list: "backupMondays", why: "empty-while-published", weeks: [], unmatched: ["2026-11-09", "2027-01-04"], published: 2 }, { list: "fierceBackup", why: "empty-while-published", weeks: [], unmatched: ["2026-12-07", "2027-02-01"], published: 2 }] }, "P34 guard: no cache and two EMPTY lists while published weeks carry both flags - not trusted (never 'no Fierce weeks')");
+  eq(g(rd({ eastPrimary: [] }), { eastPrimary: ["2026-11-09"], eastBackup: [], readAt: "x", dropped: 0 }).problems, [{ list: "backupMondays", why: "empty-while-published", weeks: [], unmatched: ["2026-11-09", "2027-01-04"], published: 2 }], "P34 guard: an empty list while the cache holds only past weeks of it - still not taken beside flagged published weeks");
+  eq(g(rd({ eastBackup: [] }), { eastPrimary: full.eastPrimary, eastBackup: [], readAt: "x", dropped: 0 }).problems.map(p => p.list + ":" + p.why), ["fierceBackup:empty-while-published"], "P34 guard: each list is judged on its own flag");
+  // an empty list with nothing against it is a real empty list: no cached upcoming week of it, no published week with its flag
+  eq(g(rd({ eastPrimary: [] }), { eastPrimary: ["2026-11-09"], eastBackup: full.eastBackup, readAt: "x", dropped: 0 }, noWitness), { ok: true, problems: [] }, "P34 guard: an empty list when no published week carries its flag and the cache holds no upcoming week of it is taken");
+  eq(g(rd({ eastPrimary: [], eastBackup: [] }), null, [row("2026-11-16"), row("2026-11-23")]), { ok: true, problems: [] }, "P34 guard: no cache, two empty lists and no flagged published week - a group that marks no weeks reads as two empty lists");
+  eq(ef.eastListsGuard(rd({ eastPrimary: [], eastBackup: [] }), null, pub.map(r => Object.assign({}, r, { fetched_at: "2026-10-01T10:30:00.000Z" })), TODAY, "2026-11-23T10:30:05.000Z"), { ok: true, problems: [] }, "P34 guard: ...and a flagged row nobody re-read lately speaks for nothing here either (the refresh's time given)");
+  eq(ef.eastListsGuard(rd({ eastPrimary: [], eastBackup: [] }), null, pub.map(r => Object.assign({}, r, { fetched_at: "2026-11-22T10:30:00.000Z" })), TODAY, "2026-11-23T10:30:05.000Z").problems.map(p => p.why), ["empty-while-published", "empty-while-published"], "P34 guard: ...while one re-read yesterday does");
+  // -- review A (11/11): the clearly-healthy test counts only the published weeks this run can VOUCH for - the weeks it
+  //    just fetched (they carry no fetched_at) and the cached rows a refresh re-read within 84 h before `now` (the fifth
+  //    argument: the refresh's own time). A cached row nobody re-reads any more - older than the 12-month window, or a
+  //    week Davenport no longer returns - keeps whatever flag it had: it must not refuse a legitimate edit for months,
+  //    and it vouches for nothing. Without `now` every row counts (the readings above).
+  const NOW = "2026-11-23T10:30:05.000Z";
+  const at = (r, iso) => Object.assign({}, r, { fetched_at: iso });
+  const g5 = (r, w, now) => ef.eastListsGuard(r, L0, w, TODAY, now);
+  const legit = rd({ eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] });   // 4/19 unmarked; 11/9 and 1/4 (published with isBackup) still listed
+  const staleFlag = at(row("2025-10-06", { isBackup: true }), "2025-11-20T10:30:00.000Z");   // last re-read a year ago; its Monday has left the list
+  eq(g5(legit, pub.concat([staleFlag]), NOW), { ok: true, problems: [] }, "P34 guard (vouched rows): a cached row last re-read a year ago does not refuse a legitimate edit");
+  eq(g5(legit, pub.concat([staleFlag])).problems, [{ list: "backupMondays", why: "lost-week", weeks: ["2027-04-19"], unmatched: ["2025-10-06"], published: 3 }], "P34 guard (vouched rows): ...without `now` every row counts, as before");
+  eq(g5(legit, pub.concat([at(row("2026-10-05", { isBackup: true }), "2026-11-22T10:30:07+00:00")]), NOW).problems, [{ list: "backupMondays", why: "lost-week", weeks: ["2027-04-19"], unmatched: ["2026-10-05"], published: 3 }], "P34 guard (vouched rows): a cached row re-read yesterday counts - the list lacks its week, so the loss is kept");
+  eq(g5(legit, pub.map(r => at(r, "2026-11-01T10:30:00.000Z")), NOW).problems, [{ list: "backupMondays", why: "lost-week", weeks: ["2027-04-19"], unmatched: [], published: 0 }], "P34 guard (vouched rows): when every flagged row is stale nothing vouches for the list - not clearly healthy");
+  // the window is 84 h (the re-check, 11/11: 72 h sat exactly ON the third daily run - a read landing one second later in
+  // its minute than the rows it follows found them stale, so "two missed runs" were not tolerated)
+  eq(g5(legit, pub.map(r => at(r, "2026-11-20T10:29:58.000Z")), NOW), { ok: true, problems: [] }, "P34 guard (vouched rows): rows of the run three days ago (72 h and seven seconds - two daily runs missed) still count");
+  eq(g5(legit, pub.map(r => at(r, "2026-11-19T22:30:05.000Z")), NOW), { ok: true, problems: [] }, "P34 guard (vouched rows): a row re-read exactly 84 h before still counts");
+  eq(g5(legit, pub.map(r => at(r, "2026-11-19T22:30:04.999Z")), NOW).ok, false, "P34 guard (vouched rows): ...one millisecond older does not");
+  eq(g5(legit, pub.map(r => at(r, "2026-11-19T10:30:00.000Z")), NOW).ok, false, "P34 guard (vouched rows): rows of the run four days ago (three missed) do not");
+  eq(g5(legit, pub.map(r => at(r, "2026-11-25T00:00:00.000Z")), NOW), { ok: true, problems: [] }, "P34 guard (vouched rows): a row stamped after `now` (another device's clock) counts");
+  eq([g5(legit, pub.map(r => at(r, "soon")), NOW).ok, g5(legit, pub.map(r => at(r, null)), NOW).ok, g5(legit, pub.map(r => at(r, 20261122)), NOW).ok], [false, false, false], "P34 guard (vouched rows): a fetched_at that is no time vouches for nothing");
+  eq(g5(legit, pub.map(r => Object.assign({ fetchedAt: "2026-11-01T10:30:00.000Z" }, r)), NOW).ok, false, "P34 guard (vouched rows): the app's fetchedAt spelling reads the same");
+  eq(g5(legit, pub.concat([staleFlag]), "not a time").ok, false, "P34 guard (vouched rows): a `now` that is no time reads as none given - every row counts");
+  eq(g5(legit, [row("2025-10-06", { isBackup: false })].concat(pub, [staleFlag])), { ok: true, problems: [] }, "P34 guard (vouched rows): the first row of a week decides (the fetched weeks come first) - a later cached copy of it never counts");
+  // (the re-check, 11/11: bound with a read that is NOT clearly healthy - it lacks the published 1/4 - so it is taken only
+  // because 2/22 is no loss; with the list also holding 1/4 the read was healthy either way and proved nothing)
+  const lacks14 = rd({ eastPrimary: ["2026-11-09", "2027-04-19"] });
+  eq(g5(lacks14, pub.concat([at(row("2027-02-22", {}), "2025-01-01T00:00:00.000Z")]), NOW), { ok: true, problems: [] }, "P34 guard (vouched rows): a week ANY cached row publishes is no loss, however old the row (the published row decides the derived week either way)");
+  eq(g5(lacks14, pub, NOW).problems, [{ list: "backupMondays", why: "lost-week", weeks: ["2027-02-22"], unmatched: ["2027-01-04"], published: 2 }], "P34 guard (vouched rows): ...without that row 2/22 IS lost, and the list, lacking the published 1/4, is kept");
+  const texts =[{ list: "backupMondays", why: "missing" }, { list: "fierceBackup", why: "not-array" }, { list: "backupMondays", why: "empty-while-cached", weeks: ["2027-02-22", "2027-04-19"], unmatched: ["2026-11-09"], published: 2 },
+    { list: "fierceBackup", why: "lost-week", weeks: ["2027-05-24"], unmatched: ["2026-12-07"], published: 2 }, { list: "backupMondays", why: "lost-week", weeks: ["2027-04-19"], unmatched: [], published: 0 },
+    { list: "backupMondays", why: "empty-while-published", weeks: [], unmatched: ["2026-11-09", "2027-01-04"], published: 2 }].map(ef.eastListsGuardText);
+  texts.forEach(t => ok(typeof t === "string" && t.length > 20 && t.length <= 200 && /kept/.test(t), "P34 guard text: says the cached lists are kept (<= 200 characters): " + t));
+  ok(/backupMondays came back empty although 2 published week\(s\) carry its flag \(2026-11-09, 2027-01-04\)/.test(texts[5]), "P34 guard text: an empty list beside flagged published weeks names them: " + texts[5]);
+  ok(/backupMondays/.test(texts[0]) && /fierceBackup/.test(texts[1]) && /2027-02-22/.test(texts[2]) && /2027-05-24/.test(texts[3]) && /2026-12-07/.test(texts[3]), "P34 guard text: names the list, the lost week and the published week the list lacks");
+  ok(typeof ef.eastListsGuardText(null) === "string" && /kept/.test(ef.eastListsGuardText(null)), "P34 guard text: no problem object still says kept");
+
+  // -- the write plan: trusted -> the fresh lists from the window's first Monday on; untrusted -> the cached copy, as it is
+  const feedOf = (lists) => ({ weeks: pub.map(r => ({ weekMonday: r.week_monday, data: r.data })), fetchedAt: "2026-11-23T10:30:08.000Z", lists });
+  const cacheL0 = pub.map(r => row(r.week_monday, Object.assign({}, r.data, { eastLists: L0 })));
+  const p1 = ef.eastListsPlan(feedOf(rd({ dropped: [{ list: "backupMondays", value: "junk" }] })), cacheL0, TODAY, "2026-10-26");
+  eq(p1.trusted, true);
+  eq(p1.lists, { eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22", "2027-04-19"], eastBackup: ["2026-12-07", "2027-02-01", "2027-03-29", "2027-05-24"], readAt: "2026-11-23T10:30:08.000Z", dropped: 1 }, "P34 plan: a trusted read is cached with the refresh's time and the dropped count");
+  eq(ef.eastListsPlan(feedOf(full), cacheL0, TODAY, "2026-12-07").lists.eastPrimary, ["2027-01-04", "2027-02-22", "2027-04-19"], "P34 plan: Mondays before the refresh window's first Monday are not cached");
+  eq(ef.eastListsPlan(feedOf(full), cacheL0, TODAY, "2026-12-07").lists.eastBackup, ["2026-12-07", "2027-02-01", "2027-03-29", "2027-05-24"], "P34 plan: the window's own first Monday is");
+  eq([p1.guard, p1.dropped], [[], [{ list: "backupMondays", value: "junk" }]], "P34 plan: the dropped entries ride along for the warning");
+  const p2 = ef.eastListsPlan(feedOf(rd({ eastPrimary: [] })), cacheL0, TODAY, "2026-10-26");
+  eq([p2.trusted, p2.lists, p2.guard.map(x => x.why)], [false, L0, ["empty-while-cached"]], "P34 plan: an untrusted read keeps BOTH cached lists as they are (their own readAt) - nothing new is taken");
+  const p3 = ef.eastListsPlan(feedOf(null), cacheL0, TODAY, "2026-10-26");
+  eq([p3.trusted, p3.lists, p3.guard.length], [false, L0, 2], "P34 plan: no lists in the feed (an older fetch) keeps the cache");
+  const p4 = ef.eastListsPlan(feedOf(rd({ eastPrimary: null, problems: [{ list: "backupMondays", why: "missing" }] })), pub, TODAY, "2026-10-26");
+  eq([p4.trusted, p4.lists], [false, null], "P34 plan: untrusted and nothing cached -> nothing to write (no key), never empty lists");
+  const p5 = ef.eastListsPlan(feedOf(rd({ eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] })), cacheL0, TODAY, "2026-10-26");
+  eq([p5.trusted, p5.lists.eastPrimary], [true, ["2026-11-09", "2027-01-04", "2027-02-22"]], "P34 plan: a clearly healthy loss is taken - the published weeks come from the fetched weeks and the cache rows");
+  // review A (11/11): the plan hands the guard the refresh's own time - the fetched weeks vouch, a cached row no refresh
+  // re-reads any more does not, one re-read yesterday does
+  const cacheAged = cacheL0.map(r => Object.assign({}, r, { fetched_at: "2026-11-22T10:30:09+00:00" })).concat([Object.assign(row("2025-10-06", { isBackup: true }), { fetched_at: "2025-11-20T10:30:00+00:00" })]);
+  const p6 = ef.eastListsPlan(feedOf(rd({ eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] })), cacheAged, TODAY, "2026-10-26");
+  eq([p6.trusted, p6.guard, p6.lists.eastPrimary], [true, [], ["2026-11-09", "2027-01-04", "2027-02-22"]], "P34 plan (vouched rows): a flagged row last re-read a year ago does not refuse the edit");
+  const p7 = ef.eastListsPlan(feedOf(rd({ eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] })), cacheAged.concat([Object.assign(row("2026-10-05", { isBackup: true }), { fetched_at: "2026-11-22T10:30:09+00:00" })]), TODAY, "2026-10-26");
+  eq([p7.trusted, p7.guard.map(x => x.unmatched), p7.lists], [false, [["2026-10-05"]], L0], "P34 plan (vouched rows): ...a flagged row re-read yesterday that the list lacks still does (the cached lists are kept)");
+  // review C (11/11): WHERE the published weeks come from, bound on each side - the fetched weeks and the cache rows, the
+  // fetched copy of a week first. 4/19 leaves the list; the read is clearly healthy only if a witness (11/9, 1/4) is seen.
+  const lossy = rd({ eastPrimary: ["2026-11-09", "2027-01-04", "2027-02-22"] }), FAT = "2026-11-23T10:30:08.000Z";
+  const noFlagWeeks = [{ weekMonday: "2026-11-16", data: {} }, { weekMonday: "2027-02-15", data: {} }];
+  const cacheNoFlag = [row("2026-11-16", { eastLists: L0 }), row("2027-02-15", { eastLists: L0 })];
+  const appWeeks = (rows) => rows.map(r => ({ weekMonday: r.week_monday, data: r.data }));
+  eq(ef.eastListsPlan({ weeks: noFlagWeeks, fetchedAt: FAT, lists: lossy }, cacheL0, TODAY, "2026-10-26").trusted, true, "P34 plan (witnesses): only the CACHE rows carry the flag - they vouch (the fetch returned other weeks)");
+  eq(ef.eastListsPlan({ weeks: appWeeks(pub), fetchedAt: FAT, lists: lossy }, cacheNoFlag, TODAY, "2026-10-26").trusted, true, "P34 plan (witnesses): only the FETCHED weeks carry the flag - they vouch (a week published since the last refresh)");
+  eq(ef.eastListsPlan({ weeks: noFlagWeeks, fetchedAt: FAT, lists: lossy }, cacheNoFlag, TODAY, "2026-10-26").guard.map(x => x.why + ":" + x.published), ["lost-week:0"], "P34 plan (witnesses): neither side carries the flag - the loss is kept");
+  // the two sides disagree about one week: the FETCHED copy decides (a Monday counts once, the first)
+  const unflagged14 = appWeeks(pub).map(w => (w.weekMonday === "2027-01-04" ? { weekMonday: w.weekMonday, data: { isBackup: false } } : w));
+  eq(ef.eastListsPlan({ weeks: unflagged14, fetchedAt: FAT, lists: rd({ eastPrimary: ["2026-11-09", "2027-02-22"] }) }, cacheL0, TODAY, "2026-10-26").trusted, true, "P34 plan (witnesses): Davenport unflagged 1/4 and dropped it from the list - the fetched row decides, the cache's older copy of that week does not refuse the read");
+  const flagged1116 = appWeeks(pub).map(w => (w.weekMonday === "2026-11-16" ? { weekMonday: w.weekMonday, data: { isBackup: true } } : w));
+  eq(ef.eastListsPlan({ weeks: flagged1116, fetchedAt: FAT, lists: lossy }, cacheL0, TODAY, "2026-10-26").guard.map(x => x.unmatched), [["2026-11-16"]], "P34 plan (witnesses): ...and a week the fetch NOW shows flagged, which the list lacks, refuses it whatever the cache's copy says");
+
+  // -- attach: every published week the refresh writes carries the copy; a forecast row never; null writes no key
+  const fetched = [{ weekMonday: "2027-01-04", data: { isBackup: true, dayCall: "s1" } }, { weekMonday: "2027-01-11", data: { dayCall: "s2", vacations: [] } }, { weekMonday: "2027-03-01", data: { isForecast: true } }];
+  const att = ef.eastAttachLists(fetched, L0);
+  eq(att.map(w => w.data.eastLists), [L0, L0, undefined], "P34 attach: both published weeks carry the lists, the forecast row does not");
+  eq([att[0].data.dayCall, att[1].data.vacations], ["s1", []], "P34 attach: the week's own payload stays");
+  ok(att[0].data.eastLists !== L0 && att[0].data.eastLists !== att[1].data.eastLists && fetched[0].data.eastLists === undefined, "P34 attach: each row gets its own copy; the input is never changed");
+  eq(ef.eastAttachLists(fetched, null).map(w => w.data.eastLists), [undefined, undefined, undefined], "P34 attach: nothing to attach -> no key written");
+  eq(ef.eastAttachLists(null, L0), []);
+
+  // -- precedence: a published week first, then the lists, then Setup's stated weeks
+  const feed34 = [{ weekMonday: "2027-01-04", data: { isBackup: true } }, { weekMonday: "2027-01-11", data: {} }, { weekMonday: "2027-02-01", data: { isFierceBackup: true } }, { weekMonday: "2027-02-08", data: {} }];
+  const lists34 = { eastPrimary: ["2027-04-19", "2027-02-22", "2027-01-11", "2027-06-21"], eastBackup: ["2027-05-24", "2027-03-29", "2027-02-08", "2027-06-21"] };
+  const stated34 = { eastPrimary: ["2027-03-29", "2027-07-19", "2027-02-22"], eastBackup: ["2027-01-11", "2027-08-02", "2027-04-19"] };
+  const d34 = ef.deriveFierceWeeksDetail(feed34, { listedWeeks: lists34, statedWeeks: stated34 });
+  eq(d34.weeks.map(w => w.weekMonday + ":" + w.silvisRole + ":" + w.source), [
+    "2027-01-04:backup:feed",    // published isBackup
+    "2027-02-01:primary:feed",   // published isFierceBackup
+    "2027-02-22:backup:list",    // listed (East primary) and stated the same way: the list is the source
+    "2027-03-29:primary:list",   // listed East backup; stated East primary -> the list stands
+    "2027-04-19:backup:list",    // listed East primary; stated East backup -> the list stands
+    "2027-05-24:primary:list",
+    "2027-06-21:backup:list",    // in BOTH lists -> read as East primary (Silvis backup), as a published row with both flags reads
+    "2027-07-19:backup:stated",  // only stated: the manual override for a week the lists do not name
+    "2027-08-02:primary:stated",
+  ], "P34 precedence: published > list > stated, sorted, from unsorted lists; 1/11 and 2/8 are published unflagged, so neither the list nor the stated week derives them");
+  eq(d34.warnings, [
+    { weekMonday: "2027-03-29", why: "list-vs-stated", stands: "primary", stated: "backup" },
+    { weekMonday: "2027-04-19", why: "list-vs-stated", stands: "backup", stated: "primary" },
+    { weekMonday: "2027-06-21", why: "both-lists", stands: "backup" },
+  ], "P34 precedence: a list week whose stated role differs and a Monday in both lists are warnings, sorted by week; an agreeing stated week (2/22) and a published week are not");
+  eq(ef.deriveFierceWeeks(feed34, { listedWeeks: lists34, statedWeeks: stated34 }), d34.weeks, "P34: deriveFierceWeeks is the detail's weeks");
+  const d34from = ef.deriveFierceWeeksDetail(feed34, { listedWeeks: lists34, statedWeeks: stated34, deriveFrom: "2027-04-19" });
+  eq([d34from.weeks.map(w => w.weekMonday), d34from.warnings.map(w => w.weekMonday)], [["2027-04-19", "2027-05-24", "2027-06-21", "2027-07-19", "2027-08-02"], ["2027-04-19", "2027-06-21"]], "P34: deriveFrom still applies - weeks and warnings before it are dropped");
+  eq(d34.weeks.map(w => w.weekMonday).join(), d34.weeks.map(w => w.weekMonday).slice().sort().join(), "P34: sorted whatever the order of the lists");
+  // by default the lists are the copy the cache rows carry - no caller passes them, none can forget them
+  const carried = ef.eastAttachLists(feed34, { eastPrimary: ["2027-02-22"], eastBackup: ["2027-03-29"], readAt: "2026-11-23T10:30:08.000Z", dropped: 0 });
+  eq(ef.deriveFierceWeeks(carried, { deriveFrom: "2026-11-02" }).map(w => w.weekMonday + ":" + w.silvisRole + ":" + w.source), ["2027-01-04:backup:feed", "2027-02-01:primary:feed", "2027-02-22:backup:list", "2027-03-29:primary:list"], "P34: the lists are read from the rows themselves (data.eastLists)");
+  eq(ef.deriveFierceWeeks(carried, { listedWeeks: null }).map(w => w.source), ["feed", "feed"], "P34: listedWeeks null = no lists (the rows' copy is not read)");
+  eq(ef.deriveFierceWeeksDetail(carried).lists.readAt, "2026-11-23T10:30:08.000Z", "P34: the detail says which copy it read (Setup shows when the lists were last read)");
+  eq(ef.deriveFierceWeeksDetail(feed34).lists, null, "P34: no copy -> lists null");
+  eq(ef.deriveFierceWeeks(feed34, { listedWeeks: { eastPrimary: ["2027-02-23", "junk", null], eastBackup: "2027-03-29" } }).map(w => w.weekMonday), ["2027-01-04", "2027-02-01"], "P34: a list entry that is no Monday, or a list that is no array, derives nothing");
+  // a forecast row is not a published week: it never suppresses a listed week
+  eq(ef.deriveFierceWeeks(feed34.concat([{ weekMonday: "2027-02-22", data: { isForecast: true } }]), { listedWeeks: lists34 }).filter(w => w.weekMonday === "2027-02-22"), [{ weekMonday: "2027-02-22", silvisRole: "backup", source: "list" }], "P34: a cached forecast week never suppresses a listed week");
+  // two stated lists naming one Monday read as before Prompt 34 (the East backup entry wins), no warning
+  eq(ef.deriveFierceWeeksDetail([], { statedWeeks: { eastPrimary: ["2027-07-19"], eastBackup: ["2027-07-19"] } }), { weeks: [{ weekMonday: "2027-07-19", silvisRole: "primary", source: "stated" }], warnings: [], lists: null }, "P34: stated weeks alone read exactly as before");
+  // review A (11/11): rows in the cache's own spelling (week_monday) are published weeks too - a published week missed for
+  // its spelling would let a list (whose copy IS read from such rows) replace it
+  const feedDb = feed34.map(w => ({ week_monday: w.weekMonday, data: w.data }));
+  eq(ef.deriveFierceWeeksDetail(feedDb, { listedWeeks: { eastPrimary: ["2027-02-01", "2027-02-22"], eastBackup: ["2027-01-04"] } }).weeks.map(w => w.weekMonday + ":" + w.silvisRole + ":" + w.source), ["2027-01-04:backup:feed", "2027-02-01:primary:feed", "2027-02-22:backup:list"], "P34: east_feed-shaped rows (week_monday) read as published weeks - a list never replaces one");
+  eq(ef.deriveFierceWeeks(ef.toEastFeedRows(carried), { deriveFrom: "2026-11-02" }), ef.deriveFierceWeeks(carried, { deriveFrom: "2026-11-02" }), "P34: ...and the rows' own copy of the lists derives the same in both spellings");
+
+  // -- the failed-read keep, end to end: refresh 1 caches the lists; refresh 2's blob lacks a key -> the rows it writes
+  //    carry the old copy, and the derived weeks do not change. Never "no Fierce weeks".
+  const blobOk = { backupMondays: ["2027-02-22", "2026-11-09", "2027-01-04", "2027-04-19"], fierceBackup: ["2027-03-29", "2026-12-07", "2027-02-01", "2027-05-24"] };
+  const fetchedWeeks = pub.map(r => ({ weekMonday: r.week_monday, data: r.data }));
+  const r1 = ef.eastListsPlan({ weeks: fetchedWeeks, fetchedAt: "2026-11-23T10:30:08.000Z", lists: ef.eastListsFromBlob(blobOk) }, [], TODAY, "2026-10-26");
+  const cache1 = ef.toEastFeedRows(ef.eastAttachLists(fetchedWeeks, r1.lists));
+  const derived1 = ef.deriveFierceWeeks(cache1.map(r => ({ weekMonday: r.week_monday, data: r.data })), { deriveFrom: "2026-11-02" }).map(w => w.weekMonday + ":" + w.silvisRole + ":" + w.source);
+  eq(derived1, ["2026-11-09:backup:feed", "2026-12-07:primary:feed", "2027-01-04:backup:feed", "2027-02-01:primary:feed", "2027-02-22:backup:list", "2027-03-29:primary:list", "2027-04-19:backup:list", "2027-05-24:primary:list"], "P34 keep: refresh 1 - the four published weeks and the four listed ones");
+  [{ fierceBackup: blobOk.fierceBackup }, { backupMondays: "oops", fierceBackup: blobOk.fierceBackup }, { backupMondays: [], fierceBackup: [] }, { backupMondays: ["2026-11-09", "2027-02-22"], fierceBackup: blobOk.fierceBackup }].forEach((bad, i) => {
+    const r2 = ef.eastListsPlan({ weeks: fetchedWeeks, fetchedAt: "2026-11-24T10:30:08.000Z", lists: ef.eastListsFromBlob(bad) }, cache1, "2026-11-24", "2026-10-26");
+    const cache2 = ef.toEastFeedRows(ef.eastAttachLists(fetchedWeeks, r2.lists));
+    eq([r2.trusted, r2.lists.readAt], [false, "2026-11-23T10:30:08.000Z"], "P34 keep (" + i + "): the bad read is not trusted and the copy keeps the time of the last good read");
+    eq(ef.deriveFierceWeeks(cache2.map(r => ({ weekMonday: r.week_monday, data: r.data })), { deriveFrom: "2026-11-02" }).map(w => w.weekMonday + ":" + w.silvisRole + ":" + w.source), derived1, "P34 keep (" + i + "): the derived weeks are unchanged after a missing key / a non-array / two empty lists / a list that lost 4/19 and the published 1/4");
+  });
+  // ...and with no week to write there is nothing to attach to (review A, 11/11: both refreshes attach the copy to the weeks
+  // of their extra leg too, so a run whose main read is empty still leaves it in the cache - the handler tests run that)
+  eq(ef.eastAttachLists([], r1.lists), [], "P34 keep: 0 weeks - nothing to attach to");
+
+  // -- Setup > East feed: the source words, the warnings' words, and what the cache holds of the lists
+  eq(["feed", "list", "stated", "x", undefined].map(ef.eastSourceLabel), ["published", "DSG list", "stated", "x", ""], "P34 words: published / DSG list / stated");
+  const wt = d34.warnings.map(ef.eastDerivedWarningText);
+  ok(/2027-03-29/.test(wt[0]) && /the DSG list says East backup \(Silvis primary\)/.test(wt[0]) && /stated week says East primary \(Silvis backup\)/.test(wt[0]) && /the DSG list stands/.test(wt[0]), "P34 words: list-vs-stated names both readings and which stands: " + wt[0]);
+  ok(/2027-06-21/.test(wt[2]) && /BOTH DSG lists/.test(wt[2]) && /East primary \(Silvis backup\)/.test(wt[2]), "P34 words: both-lists says how it is read: " + wt[2]);
+  eq(ef.eastDerivedWarningText(null), "");
+  const stamp = (rows, at) => rows.map(r => Object.assign({}, r, { fetched_at: at }));
+  eq(ef.eastListsStatus(stamp(cache1, "2026-11-23T10:30:08+00:00")), { state: "read", readAt: "2026-11-23T10:30:08.000Z", writtenAt: "2026-11-23T10:30:08+00:00", eastPrimary: 4, eastBackup: 4, dropped: 0 }, "P34 status: read - the rows were written by the refresh that read the lists (the database's own spelling of the same instant)");
+  eq(ef.eastListsStatus(stamp(cache1, "2026-11-24T10:30:09+00:00")).state, "kept", "P34 status: kept - a later refresh wrote the older copy back");
+  // review A (11/11): the weeks of a refresh's extra leg carry the copy too and are stamped a little after the read (the
+  // main leg runs in between) - the same refresh, never 'kept'; five minutes is the line
+  eq(ef.eastListsStatus(stamp(cache1, "2026-11-23T10:32:38+00:00")).state, "read", "P34 status: rows written two and a half minutes after the read are the same refresh - read");
+  eq(ef.eastListsStatus(cache1.map((r, i) => Object.assign({}, r, { fetched_at: i ? "2026-11-23T10:30:21+00:00" : "2026-11-23T10:30:08+00:00" }))).state, "read", "P34 status: main-leg and extra-leg rows of one refresh - read");
+  eq(ef.eastListsStatus(stamp(cache1, "2026-11-23T10:35:09+00:00")).state, "kept", "P34 status: more than five minutes after the read - a later refresh wrote the older copy back");
+  eq(ef.eastListsStatus(stamp(pub, "2026-11-24T10:30:09+00:00")), { state: "none", readAt: null, writtenAt: null, eastPrimary: 0, eastBackup: 0, dropped: 0 }, "P34 status: none - the cache holds weeks but no lists (an older writer's refresh): unknown, said so");
+  eq(ef.eastListsStatus(null).state, "none");
+  // a mixed cache after an untrusted refresh: the fetched rows carry the kept copy, a week new to the window none
+  const mixedCache = stamp(cache1, "2026-11-24T10:30:09+00:00").concat([{ week_monday: "2027-02-22", data: { isBackup: true }, fetched_at: "2026-11-24T10:30:09+00:00" }]);
+  eq([ef.eastListsStatus(mixedCache).state, ef.eastCachedLists(mixedCache).readAt], ["kept", "2026-11-23T10:30:08.000Z"], "P34 status: a row without a copy changes nothing");
+  const ts = (x) => "<" + String(x).slice(0, 10) + ">";
+  eq(ef.eastListsStatusText(ef.eastListsStatus(stamp(cache1, "2026-11-23T10:30:08+00:00")), ts), "DSG lists last read <2026-11-23>: 4 East-primary + 4 East-backup week(s) on file.", "P34 status words: when the lists were last read and what they hold");
+  eq(ef.eastListsStatusText(ef.eastListsStatus(stamp(cache1, "2026-11-24T10:30:09+00:00")), ts), "DSG lists last read <2026-11-23>: 4 East-primary + 4 East-backup week(s) on file - KEPT: the refresh of <2026-11-24> did not trust its read (see the refresh line above).", "P34 status words: a kept copy says which refresh kept it");
+  ok(/^DSG lists: none in the cache/.test(ef.eastListsStatusText(ef.eastListsStatus([]), ts)) && /only published and stated weeks derive/.test(ef.eastListsStatusText(null)), "P34 status words: no lists - said, with what still derives");
+  ok(/1 entry that is not a Monday was dropped\.$/.test(ef.eastListsStatusText({ state: "read", readAt: "a", writtenAt: "a", eastPrimary: 1, eastBackup: 0, dropped: 1 })) && /3 entries that are not Mondays were dropped\.$/.test(ef.eastListsStatusText({ state: "read", readAt: "a", writtenAt: "a", eastPrimary: 1, eastBackup: 0, dropped: 3 })), "P34 status words: dropped entries are counted");
+  ok(typeof ef.EAST_DERIVED_LEGEND === "string" && ef.EAST_DERIVED_LEGEND.indexOf("published Davenport week decides first") >= 0 && ef.EAST_DERIVED_LEGEND.indexOf("stated weeks") > ef.EAST_DERIVED_LEGEND.indexOf("two week lists"), "P34: the legend names the three sources in the order they decide");
+}
 // fetchEastWeeks with a stubbed fetch: the time_off read is scoped to the
 // resolved ids, kind vacation, the window; its failure is NOT the weeks' failure.
 {
@@ -605,6 +874,18 @@ ok(typeof ef.EAST_PROJECT.url === "string" && ef.EAST_PROJECT.url.startsWith("ht
       eq(a.vacationsError, null);
       eq(a.vacationIdsByCode, { FAK: "s6" }, "P15: ids resolved through the Davenport blob by CODE");
       eq(a.vacationCodesUnresolved, ["NF"], "P15: a code the Davenport roster lacks is reported, not an error");
+      // Prompt 34: the two week lists come from the SAME roster blob read - no request is added
+      eq(a.lists, { eastPrimary: null, eastBackup: null, problems: [{ list: "backupMondays", why: "missing" }, { list: "fierceBackup", why: "missing" }], dropped: [] }, "P34: a blob without the two lists reports both missing (unknown), never empty lists");
+      eq(calls.length, 3, "P34: still three GETs - the weeks, the roster blob, the time_off rows");
+      rows.call_schedule_data = [{ data: { surgeons: [{ id: "s1", name: "DJA" }, { id: "s6", name: "FAK" }], backupMondays: ["2027-02-22", "2027-01-04", "2027-01-05"], fierceBackup: ["2027-03-29"], startMondayOverride: "2027-02-22", vacations: [{ id: 1 }] } }];
+      calls.length = 0;
+      const aL = await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK"] });
+      eq(aL.lists, { eastPrimary: ["2027-01-04", "2027-02-22"], eastBackup: ["2027-03-29"], problems: [], dropped: [{ list: "backupMondays", value: "2027-01-05" }] }, "P34: fetchEastWeeks returns the two validated lists of the blob it reads for the roster");
+      eq([calls.length, calls.filter(u => u.indexOf("/rest/v1/call_schedule_data") >= 0)], [3, ["https://xqongyahdnkozqunpwmu.supabase.co/rest/v1/call_schedule_data?id=eq.main&select=data"]], "P34: the same three GETs, the blob read unchanged");
+      eq(Object.keys(aL).sort().indexOf("blob"), -1, "P34: nothing else of that blob is returned");
+      rows.call_schedule_data = [{ data: { surgeons: [{ id: "s1", name: "DJA" }, { id: "s6", name: "FAK" }] } }];
+      calls.length = 0;
+      await ef.fetchEastWeeks("2026-11-02", "2026-11-09", { vacationCodes: ["FAK", "NF"] });
       const q = calls.filter(u => u.indexOf("/rest/v1/time_off") >= 0);
       eq(q.length, 1, "P15: exactly one time_off GET");
       ok(/kind=eq\.vacation/.test(q[0]) && /person_id=in\.\(s6\)/.test(q[0]) && /end_date=gte\.2026-11-02/.test(q[0]) && /start_date=lte\.2027-11-15/.test(q[0]), "P15 fix 2: scoped to kind vacation, the resolved ids, from the window's Monday to a year past the window's Sunday (vacations reach further than Davenport publishes; Generate will offer 12-month presets): " + q[0]);

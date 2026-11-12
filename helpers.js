@@ -2514,6 +2514,19 @@ function suLockedSlotChanges(current, next) {
 // EAST_FEED_STALE_DAYS (Prompt 31 Part A, Faraz 10/14 decision 5): the East feed cache is called stale once its newest
 // fetched_at is more than 2 days old - the server refresh runs daily (it was 14 while only the scheduler's button wrote it).
 const EAST_FEED_STALE_DAYS = 2;
+// Prompt 34 (the 11/11 review) - the two readings behind "the East week lists are not in the cache": Setup's issue list
+// and the Generate preview's warning read the same two. (On an EMPTY cache Setup says "East feed cache is empty" instead
+// of the lists line; Generate warns there too.)
+//   suDerivesFromEast(roster, surgeonRules): some surgeon's weeks derive from East (eastFeed enabled with a deriveFrom
+//     date or stated weeks) - the lists matter to this group.
+//   suEastListsCached(eastFeedRows): some cached published week carries the two lists (data.eastLists with a readAt and
+//     both arrays). A refresh by an older writer rewrites the payloads without them; no rows at all is "not cached" too.
+function suDerivesFromEast(roster, surgeonRules) {
+  return (Array.isArray(roster) ? roster : []).some(r => { const ef = r && r.id && surgeonRules && surgeonRules[r.id] && surgeonRules[r.id].eastFeed; return !!(ef && ef.enabled && (ef.deriveFrom || ef.statedWeeks)); });
+}
+function suEastListsCached(eastFeedRows) {
+  return (Array.isArray(eastFeedRows) ? eastFeedRows : []).some(r => !!(r && r.data && r.data.isForecast !== true && r.data.eastLists && typeof r.data.eastLists.readAt === "string" && Array.isArray(r.data.eastLists.eastPrimary) && Array.isArray(r.data.eastLists.eastBackup)));
+}
 function suSetupIssues(input) {
   const i = input || {};
   const out = [];
@@ -2545,6 +2558,11 @@ function suSetupIssues(input) {
   const feedAges = (i.eastFeedRows || []).map(r => suAgeDays(r.fetched_at, i.nowMs)).filter(a => a !== null);
   if (!(i.eastFeedRows || []).length) out.push("East feed cache is empty - refresh it in Setup > East feed");
   else if (feedAges.length && Math.min.apply(null, feedAges) > EAST_FEED_STALE_DAYS) out.push("East feed coverage is " + Math.min.apply(null, feedAges) + " days old - refresh it");
+  // Prompt 34 (Faraz 11/11): a surgeon whose weeks derive from East needs the two East week lists for the weeks Davenport
+  // has not published. They ride in the payload of the cached week rows (data.eastLists); a refresh by an older writer
+  // rewrites those payloads without them. A cache that holds weeks but no lists says so - never silently "no weeks".
+  // (the 11/11 review: the two readings are suDerivesFromEast / suEastListsCached - Generate stamps its preview with them)
+  if (suDerivesFromEast(roster, i.surgeonRules) && (i.eastFeedRows || []).length && !suEastListsCached(i.eastFeedRows)) out.push("The East week lists are not in the East feed cache - refresh it in Setup > East feed (until then only published and stated weeks derive)");
   const fcAges = (i.eastForecastRows || []).map(r => suAgeDays(r.generated_at || (r.data && r.data.generatedAt), i.nowMs)).filter(a => a !== null);
   if ((i.eastForecastRows || []).length && fcAges.length && Math.min.apply(null, fcAges) > 7) out.push("East forecast is " + Math.min.apply(null, fcAges) + " days old - rerun scripts/east-forecast.js");
   const openP = suOpenPrimaryDays(sched, today, 60);
@@ -3000,7 +3018,10 @@ function defaultHolidayUnits(year, opts) {
      published coverage, at or over the threshold, never on an override-false day) for the roles the surgeon's East
      feature blocks, max-major-holidays:<n> (fewer than 12 calendar months between unit START months, symmetric, history
      included - rules.js), and the derived East week: a unit on any day of a derived week takes the surgeon in that role
-     (derived-lock:<role> for his other role, derived-lock-held:<id> for everyone else, as rules.js).
+     (derived-lock:<role> for his other role, derived-lock-held:<id> for everyone else, as rules.js - since 11/11 the
+     generator reads it the same way: rules.js rdDerivedUnitsAndVacations makes every day of such a unit a derived day).
+     Faraz 11/11: unless his own vacation refuses him on the unit (time-off:<day>, or day-before-vacation for a
+     trailing-edge role) - then the derived week yields the whole unit and it is planned like any other.
    Decisions, in order (lexicographic over complete plans; each later item only breaks ties of the earlier ones):
      hard  - rule 1's limits; primary != backup on a unit; the tier shape (rule 2): per tier, n = the surgeons who can
              hold at least one of its slots, each serves between floor(S/n) and ceil(S/n) of the tier's S = 2 x units
@@ -3318,6 +3339,21 @@ function hplPrepare(Y, o) {
       if (!roles.length) return;
       if (roles.length > 1) { warnings.push(nameOf(id) + "'s derived East weeks give him both roles on " + u.name + " " + Y + " - planned for primary only; check by hand"); roles = ["primary"]; }
       var role = roles[0];
+      // Faraz 11/11 (rules.js rdDerivedUnitsAndVacations): a derived week yields to the surgeon's own vacation, and a
+      // holiday unit yields whole - refused on any of its days (time off; for a trailing-edge role the day before it),
+      // the week does not take the unit and it is planned like any other. He stays refused by the vacation itself.
+      // (data: groupRules.eastFeed.derivedWeeks.yieldToVacation, on unless exactly false - rules.js reads the same key)
+      // The OTHER switch, keepHolidayUnit, is not read here (the 11/11 review): the plan has given a unit on any day of a
+      // derived week to its surgeon since Prompt 25, whatever that key says. With keepHolidayUnit false the engine goes
+      // back to its reading before 11/11 (the unit's day outside the week is left to the one-holder rule and his run
+      // limit - it can come out open) while this plan still names him for the whole unit.
+      // Two derived weeks giving him BOTH roles on one unit: planned "primary only" just above; the engine keeps each
+      // week's days and warns (rules doc section 8 item 29 (j) - open).
+      var dwRules = (groupRules.eastFeed && groupRules.eastFeed.derivedWeeks) || {};
+      if (dwRules.yieldToVacation !== false && block[ui][id][role].some(function (why) { return why.indexOf("time-off:") === 0 || why === "day-before-vacation"; })) {
+        warnings.push(nameOf(id) + "'s derived East week does not take " + u.name + " " + Y + " (" + role + "): he has a vacation on it - the unit is planned like any other");
+        return;
+      }
       if (forced[ui][role] && forced[ui][role] !== id) { warnings.push(u.name + " " + Y + " " + role + ": derived East weeks name both " + nameOf(forced[ui][role]) + " and " + nameOf(id) + " - the first is kept"); return; }
       forced[ui][role] = id;
       var otherRole = role === "primary" ? "backup" : "primary";
@@ -7233,7 +7269,7 @@ if (typeof module !== "undefined" && module.exports) {
     payStipendOn, payStipendDelta, paySettingsHidden, payStipendKnown, payStipendPending, payStipendOffRows,
     payRateNum, paySettingsFromRow, paySettingsToRow, payRatesChanged, payHolidaySet, payDayKind, payPrimaryDays, payForDay, payForMonth, payTotalsRows, payCsv, payMoney, payLogValidate, payReadFailureState, payViewState, payStateBeforeRead, payStateAfterRead, payRatesView, payErrorText, payLogAuditText,
     suIsIso, suAddDays, suDaysBetween, suMakeDate, suParseDateList, suCollapseDates, suNextMatchingDates,
-    suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suSetupIssues,
+    suHolidayCoverage, suHolidayCounts, suOpenPrimaryDays, suCoverageGlance, suAgeDays, suLastAssignedDay, suLastContiguousDay, suFirstOpenSlotDay, suLaterAssignedRanges, suLockedSlotChanges, suDerivesFromEast, suEastListsCached, suSetupIssues,
     suMergePreview, suSeedDayMerge, suAvailKey, suMissingAvailability, suTimeOffKey, suMissingTimeOff, suFmtTs,
     fmt, parse, addD, monOf, getMondays, onVac, fmtMD, todayCentral, todayOrCentral, slotIsOpen,
     SHIFT_HANDOFF_HOUR, shiftClockCentral, shiftDayCentral, onCallNow, onCallNowMsg, myNextCallLine,
