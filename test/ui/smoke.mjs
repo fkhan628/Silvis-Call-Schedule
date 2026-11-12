@@ -4306,7 +4306,7 @@ try {
               await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
               if (!cell.held.includes(hf.letter) || !pill || pill.name !== hf.name) fail(`${T}, held initials (11/12): ${hf.day} ${hf.role} should read '${hf.name}' in a held pill (data-held '${cell.held}', pills ${JSON.stringify(cell.pills)})`);
               else if (pill.title !== "Held for " + hf.name + " - set when the next schedule is made") fail(`${T}, held initials (11/12): the pill's title reads '${pill.title}'`);
-              else if (/East|Davenport|derived|feed/i.test(pill.title + " " + cell.title + " " + (legendH || ""))) fail(`${T}, held initials (11/12): an East word reached a non-scheduler - pill '${pill.title}', cell '${cell.title}', legend '${legendH}'`);
+              else if (/East|Davenport|derived|feed/i.test(pill.title + " " + cell.title.split(" | ").filter(x => /^[PB] /.test(x)).join(" ") + " " + (legendH || ""))) fail(`${T}, held initials (11/12): an East word reached a non-scheduler - pill '${pill.title}', cell '${cell.title}', legend '${legendH}'`);
               else if (!cell.title.includes(hf.letter + " held for " + hf.name)) fail(`${T}, held initials (11/12): the cell's hover should say '${hf.letter} held for ${hf.name}': ${cell.title}`);
               else if (!cell.open.includes(hf.letter)) fail(`${T}, held initials (11/12): data-open '${cell.open}' lost the slot - OPEN must stay the schedule's truth`);
               else if (!/ = held for the next schedule \(not published yet\)$/.test(legendH || "")) fail(`${T}, held initials (11/12): the legend line is missing: ${JSON.stringify(legendH)}`);
@@ -10507,7 +10507,8 @@ try {
                   if (!p) calBad.push(d + " " + letter + ": no held pill on that line");
                   else if (p.id !== id || p.name !== me.name || p.code !== me.code) calBad.push(d + " " + letter + ": the pill names " + JSON.stringify([p.id, p.name, p.code]) + ", wanted " + JSON.stringify([id, me.name, me.code]));
                   else if (p.border !== "dotted" || !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(p.bg)) calBad.push(d + " " + letter + ": the pill should be hollow and dotted, saw border " + p.border + " / background " + p.bg);
-                  else if (p.title !== "Held for " + me.name + " - set when the next schedule is made" || /East|Davenport|derived|feed/i.test(p.title + " " + c.title)) calBad.push(d + " " + letter + ": the pill's title is one sentence for everyone and the grid names no feed (Item E2), the scheduler's included - pill '" + p.title + "', cell '" + c.title + "'");
+                  // (the re-check, 11/12: only the pill's title and the hover's own P / B bits - the scheduler's hover may rightly carry "East vacation: ..." or a note)
+                  else if (p.title !== "Held for " + me.name + " - set when the next schedule is made" || /East|Davenport|derived|feed/i.test(p.title + " " + c.title.split(" | ").filter(x => /^[PB] /.test(x)).join(" "))) calBad.push(d + " " + letter + ": the pill's title is one sentence for everyone and neither it nor the hover's P / B bits name a feed - pill '" + p.title + "', cell '" + c.title + "'");
                   else if (!c.open.includes(letter)) calBad.push(d + " " + letter + ": data-open '" + c.open + "' lost the slot - OPEN must stay the schedule's truth");
                   else if (!c.title.includes(letter + " held for " + me.name)) calBad.push(d + " " + letter + ": the cell's hover title should say '" + letter + " held for " + me.name + "': " + c.title);
                 });

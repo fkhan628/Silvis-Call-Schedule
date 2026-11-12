@@ -3604,10 +3604,12 @@ the two ways offered he chose: show the name, write nothing.*
   that yields to his vacation has left it, a day a holiday unit added is in it, the day before a vacation stays - 26.5),
   nobody holds that role in the schedule (he himself included - the row shows him then; an outside cover holds a primary),
   he does not hold the other role that day, and a day a unit added is still his (`derivedUnitLost`). **Every slot it names
-  is one a Generate over that day seeds as his lock** (`test/generator-regression.js` checks "pending implies seeded");
+  is one a default Generate over that day seeds as his lock** (`test/generator-regression.js` checks "pending implies
+  seeded") - but for one narrow corner: a day a holiday unit added, while rows the run keeps without a lock flag (a claimed
+  or traded day; any held row under fill-open-only) hold him in the other role on the unit's days of his week; and
   **the reverse does not hold**: where an unlocked row holds the role, or holds him in the other role, nothing is pending -
-  the row shows what the schedule says - while a default-mode Generate over that range still clears the row and seeds his
-  lock (Accept names the change). A missing held name never means "Generate will not put him there". Pure, and display
+  the row shows what the schedule says - while a default-mode Generate over that range still clears such a row and seeds
+  his lock (Accept names the change), unless it is a claimed or traded day, which every run keeps. A missing held name never means "Generate will not put him there". Pure, and display
   only: no rule, no export and no feed reads it, and `eligibility` answers exactly as before.
 - **One gate** (App scope: `heldReady`, `heldFor(day, rows)`) for the three places that draw a held name: a signed-in
   session - never `?public=1` - the schedule AND the vacations read (before the `time_off` read his vacation days would
@@ -3618,7 +3620,8 @@ the two ways offered he chose: show the name, write nothing.*
   board, the week rows, the share page, the print view, the exports, the calendar feeds, My schedule and the next-call line
   keep reading the schedule alone: the slot IS open until Generate writes it. The cell's hover says "held for <name>" and
   the pill's title "Held for <name> - set when the next schedule is made" - one sentence for everyone, with no East word
-  (Item E2 keeps those off the grid, the scheduler included; his day editor has the East lines). A surgeon chip filters
+  (Item E2 took the East-derived marks off the grid for everyone, the scheduler included, and this puts none back; his day
+  editor has the East lines). A surgeon chip filters
   his held days in, and the legend gains "= held for the next schedule (not published yet)" only while the month's grid
   draws one.
 - **The day summary** (everyone but the scheduler, one tap from the pill): the role reads "<name> (held - set when the next

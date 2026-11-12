@@ -418,7 +418,8 @@ decides the Trauma Director role.
   by itself - every derived day comes out as a locked row with his name - and locks written months ahead would stop
   following the Davenport lists and leave the other role of those days OPEN and claimable. Chosen instead: the app
   **shows** his name on those days and writes nothing - a hollow, dotted pill on the calendar where the slot read OPEN,
-  "<name> (held)" on the offer painter's P / B line and in the day summary a tap away - for everyone signed in (not on
+  his name with "held" in the day summary a tap away (the scheduler's own day editor keeps OPEN - it edits the row) and
+  "<name> (held)" on the offer painter's P / B line - for everyone signed in (not on
   the public page, the share page, the calendar feeds, My schedule or the next-call line, which show the published
   schedule only). Until Generate writes the row the slot is still open in the schedule, nobody else can take it (as
   before), and the display follows the lists as they change - which, until the server function v3 is deployed, means the

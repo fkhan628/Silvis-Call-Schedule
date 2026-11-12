@@ -15483,6 +15483,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       });
       // (2) exactly two call sites in the page - the gate and the painter's own row reading; nothing else reads it
       assert.strictEqual(src.split("derivedPending(").length - 1, 2, "derivedPending( is called in two places only (App's heldFor, the offer painter's days)");
+      // ...nor through the gate (the re-check, 11/12: with the gate in App scope a surface could read heldFor / heldReady instead)
+      assert.strictEqual(src.split("heldFor(").length - 1, 4, "heldFor( appears four times: its two callers (the calendar's heldOf, the day editor's prop) and two comments - no other surface reads the gate");
+      assert.strictEqual(src.split("heldReady").length - 1, 8, "heldReady appears eight times: its definition, heldFor, the painter's prop (name and value), signature, comment, row reading and memo dependency - nothing else");
       ["helpers.js", "generator.js", "east-feed.js", "importer.js"].forEach(f => assert.ok(!read34(f).includes("derivedPending"), f + " does not read derivedPending"));
       assert.ok(src.includes("const openP = daysReadOk && slotIsOpen(d, pH, todayStr), openB = daysReadOk && slotIsOpen(d, bH, todayStr);"), "OPEN is still the schedule's own reading");
       assert.ok(src.includes('const dim = !inFilter || (calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup"))));'), "the only-OPEN filter keeps reading the openSlots Set - a held slot is still open there");

@@ -6429,10 +6429,10 @@ function CallSchedule() {
     }));
     return map;
   }, [vacShown, gridDays]);
+  // (11/12, held initials: an open slot a derived week will fill reads that surgeon's NAME in a dotted pill - a name, like
+  // any holder's, with no East word in the pill, its title or the legend. Item E2's marks, below, stay gone.)
   // Item E2 (Faraz 9/25: "remove the east specific markings on the calendar because it makes it busy ...
   // just want to improve readability"): the month grid carries NO East-derived / forecast marking for anyone, the
-  // (11/12, held initials: an open slot a derived week will fill now reads that surgeon's NAME in a dotted pill - a name,
-  // like any holder's, with no East word in the cell, its title or the legend; the badges below stay gone.)
   // scheduler included - the E (East-derived week) and F / f (East forecast at / above the threshold, 20% or more)
   // cell badges, their two legend lines and the "East-derived: ..." hover-title bit are gone, together with the
   // grid-only forecastByDay map and the eastBadgesVisible flag Item E (9/24) had gated them with. The scheduler reads
@@ -8079,8 +8079,9 @@ function CallSchedule() {
           // Faraz 11/12 (held initials - the gate and the reading are App's heldFor above): a slot the schedule does not hold
           // yet that a derived week fills at the next Generate reads that surgeon's name in a HOLLOW, dotted pill - held, not
           // published - where it read OPEN. Read over the rows the cells read (a Generate preview overlays its days; its rows
-          // carry the seeded locks themselves). The title is one sentence for everyone and names no feed: Item E2 (9/25) keeps
-          // every East word off the grid, the scheduler included - his day editor has the East lines.
+          // carry the seeded locks themselves). The title is one sentence for everyone and names no feed: Item E2 (9/25) took
+          // the East-derived marks off the grid for everyone, the scheduler included, and this puts none back - his day
+          // editor has the East lines.
           const heldSched = previewGen && previewGen.schedule ? Object.assign({}, schedule, previewGen.schedule) : schedule;
           const heldOf = (d) => heldFor(d, heldSched);
           const heldTitle = (id) => "Held for " + nameOf(id) + " - set when the next schedule is made";

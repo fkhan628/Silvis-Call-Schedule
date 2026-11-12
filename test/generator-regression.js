@@ -1436,8 +1436,9 @@ const DW_RUNS = { n: 0 };
   const GR_NOKEY = Object.assign({}, seed.groupRules, { eastFeed: Object.assign({}, seed.groupRules.eastFeed) }); delete GR_NOKEY.eastFeed.derivedWeeks;
   const heldRow = (primary, locked) => ({ primary, backup: null, primaryLocked: !!locked, backupLocked: false, source: "manual", externalCover: null, note: null });
   // Faraz 11/12 (held initials - display only): what rules.derivedPending names on the run's INPUT rows is what the run
-  // seeds - every pending slot of a day in the range comes out as his locked slot. The display's claim, one way only (a
-  // slot an unlocked row holds is not pending, and a default run still clears and seeds it); the count is returned.
+  // seeds - every pending slot of a day in the range comes out as his locked slot. The display's claim, in the default mode
+  // and one way only (a slot an unlocked row holds is not pending, and a default run still clears and seeds it; the narrow
+  // corner rules.js names - a unit's added day behind fixed rows without a lock flag - is not claimed); the count is returned.
   const pendingSeeded = (name, c, run, from, to) => {
     let n = 0;
     daysList(from, to).forEach((d) => { const p = R.derivedPending(c, c.schedule, d); [P, B].forEach((role) => { const id = p[role]; if (!id) return; n++; const e = run.schedule[d]; ok(!!e && e[role] === id && e[role + "Locked"] === true, name + ": " + d + " " + role + " is pending for " + id + " on the input rows but the run did not seed it as his lock - " + JSON.stringify(e && [e[role], e[role + "Locked"]])); }); });

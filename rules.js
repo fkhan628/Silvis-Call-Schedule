@@ -1630,10 +1630,13 @@ function derivedUnitLost(ctx, schedule, date, role, id) {
 }
 // derivedPending(ctx, schedule, date) -> { primary: id | null, backup: id | null }. Faraz 11/12 ("the app shows the areas
 // shaded that are his primary shifts but not his initials" - chosen: show them, write nothing). DISPLAY ONLY: the derived
-// surgeon of each role on a day the schedule does not hold yet. Every slot it names is one a Generate over that day seeds
-// as his derived lock (the regression checks "pending implies seeded"); the reverse does NOT hold - where an UNLOCKED row
-// holds the role, or holds him in the other role, nothing is pending here (the row shows what the schedule says) while a
-// default-mode Generate over that range clears the row and seeds his lock (genSeedLocks; Accept names the change). So
+// surgeon of each role on a day the schedule does not hold yet. Every slot it names is one a default Generate over that day
+// seeds as his derived lock (the regression checks "pending implies seeded") - but for one narrow corner: a day a holiday
+// unit ADDED, while rows the run keeps without a lock flag (a claimed or traded day; any held row under fill-open-only)
+// hold him in the other role on the unit's days of his week (derivedUnitLost reads the row's own lock flag, the run's
+// working copy flags every fixed slot). The reverse does NOT hold - where an UNLOCKED row holds the role, or holds him in
+// the other role, nothing is pending here (the row shows what the schedule says) while a default-mode Generate over that
+// range clears such a row and seeds his lock (genSeedLocks; Accept names the change) unless it is a claimed or traded day. So
 // "no held name" never means "Generate will not put him there". A role is pending for him when the day is a
 // derived day of his in that role (ctx.derivedByDay: a day that yields to his vacation has left it, a day a holiday unit
 // added is in it), nobody holds that role in `schedule` (he himself included - the row shows him then; an outside cover
