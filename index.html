@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-8QhFSBoApU3Wr2roFWFpkwd25AG7FPZbaa8jEu7iqLo=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-NxWo7vye9Tn9db3BMb5G+Ht429nCnKwgAWgchAUDg8Y=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-iQ63BbouZU1CPV03VeVXnbRTTBgDDmtsDipKQNHk5sU=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-O9sOMLKkeVU+zitzZiiFhuEIAh47xQ+bbaxH1H/q+zk=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -257,7 +257,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.11.12b";
+    var APP_VERSION = "2026.11.12c";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -7761,6 +7761,12 @@ function CallSchedule() {
     color: T.text
   } : {};
   const todayStr = todayCentral();
+  const HELD_NONE = {
+    primary: null,
+    backup: null
+  };
+  const heldReady = !isPublicMode && !!authUser && !!rulesCtx && loaded && daysReadOk && timeOffReadSeqRef.current.adopted > 0 && typeof derivedPending === "function";
+  const heldFor = (d, rows) => heldReady && d >= todayStr ? derivedPending(rulesCtx, rows || schedule, d) : HELD_NONE;
   const clockNow = Date.now();
   const onCall = onCallNow(schedule, clockNow);
   const groupCall = groupCallNow(schedule, clockNow, {
@@ -9880,6 +9886,7 @@ function CallSchedule() {
     availabilityRead: availabilityReadOk,
     ctx: rulesCtx,
     ctxError: rulesCtxState.error,
+    heldReady: heldReady,
     surgeonRules: surgeonRules,
     groupRules: groupRules,
     today: todayStr,
@@ -11802,11 +11809,24 @@ function CallSchedule() {
       borderColor: T.mineRim,
       boxShadow: "0 0 0 " + (dk ? 1.5 : 1) + "px " + T.mineRing
     };
+    const heldSched = previewGen && previewGen.schedule ? Object.assign({}, schedule, previewGen.schedule) : schedule;
+    const heldOf = d => heldFor(d, heldSched);
+    const heldTitle = id => "Held for " + nameOf(id) + " - set when the next schedule is made";
+    const heldPillStyle = id => {
+      const hc = textColorOf(id);
+      return {
+        background: "transparent",
+        color: hc,
+        borderColor: hc,
+        borderStyle: "dotted"
+      };
+    };
     const SlotLine = ({
       role,
       day,
       holder,
-      locked
+      locked,
+      held
     }) => {
       const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
       let body;
@@ -11829,7 +11849,17 @@ function CallSchedule() {
         className: "cal-name"
       }, "not loaded"), React.createElement("span", {
         className: "cal-code"
-      }, "?"));else if (!holder && !slotIsOpen(day, holder, todayStr)) body = React.createElement("span", {
+      }, "?"));else if (!holder && held) body = React.createElement("span", {
+        className: "cal-pill cal-held",
+        "data-testid": "held-slot",
+        "data-held": held,
+        title: heldTitle(held),
+        style: heldPillStyle(held)
+      }, React.createElement("span", {
+        className: "cal-name"
+      }, nameOf(held)), React.createElement("span", {
+        className: "cal-code"
+      }, codeOf(held)));else if (!holder && !slotIsOpen(day, holder, todayStr)) body = React.createElement("span", {
         className: "cal-pill cal-blank",
         "aria-hidden": "true"
       }, "\xA0");else if (!holder) body = React.createElement("span", {
@@ -11944,6 +11974,10 @@ function CallSchedule() {
       const g = gridRow(gd);
       return isMine(dayHolder(g, "primary")) || isMine(dayHolder(g, "backup"));
     });
+    const legendHeld = gridDays.map(gd => {
+      const h = heldOf(gd);
+      return h.primary || h.backup || null;
+    }).find(Boolean) || null;
     const myNext = !isPublicMode && mySurgeon && daysShown ? myNextCallLine(onCall, mySurgeon, upcomingDaysOf(mySurgeon, null), lastPublishedDay) : null;
     return React.createElement(React.Fragment, null, React.createElement("div", {
       className: "cal-card",
@@ -12419,7 +12453,10 @@ function CallSchedule() {
       const bH = a ? a.backup : null;
       const openP = daysReadOk && slotIsOpen(d, pH, todayStr),
         openB = daysReadOk && slotIsOpen(d, bH, todayStr);
-      const inFilter = calSurgeonFilters.length === 0 || a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup));
+      const heldD = heldOf(d),
+        heldP = !pH ? heldD.primary : null,
+        heldB = !bH ? heldD.backup : null;
+      const inFilter = calSurgeonFilters.length === 0 || a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)) || !!heldP && calSurgeonFilters.includes(heldP) || !!heldB && calSurgeonFilters.includes(heldB);
       const dim = !inFilter || calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")));
       const isToday = d === todayStr;
       const bg = hol ? T.holiday : isWk ? T.weekend : T.surface;
@@ -12428,7 +12465,7 @@ function CallSchedule() {
         borderTopLeftRadius: dow === 5 ? 8 : 6,
         borderTopRightRadius: dow === 0 ? 8 : 6
       } : {};
-      const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
+      const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (heldP ? "held for " + nameOf(heldP) : pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (heldB ? "held for " + nameOf(heldB) : bH || openB ? holderLabel(bH, nameOf) : "-")];
       if (hol) titleBits.push(hol.name + " (holiday unit)");
       const noteT = a && a.note ? isScheduler ? a.note : dayNoteShown(a.note) : "";
       if (noteT) titleBits.push("note: " + noteT);
@@ -12459,6 +12496,7 @@ function CallSchedule() {
         "data-backup": bH || "",
         "data-ext": a && a.externalCover || "",
         "data-open": (openP ? "P" : "") + (openB ? "B" : ""),
+        "data-held": (heldP ? "P" : "") + (heldB ? "B" : ""),
         onClick: () => openCellDay(d),
         onKeyDown: e => {
           if (e.key === "Enter" || e.key === " ") {
@@ -12523,12 +12561,14 @@ function CallSchedule() {
         role: "P",
         day: d,
         holder: pH,
-        locked: !!(a && a.primaryLocked)
+        locked: !!(a && a.primaryLocked),
+        held: heldP
       }), React.createElement(SlotLine, {
         role: "B",
         day: d,
         holder: bH,
-        locked: !!(a && a.backupLocked)
+        locked: !!(a && a.backupLocked),
+        held: heldB
       }), appE && React.createElement("div", {
         className: "cal-line cal-app",
         "data-testid": "cal-app",
@@ -12642,7 +12682,21 @@ function CallSchedule() {
       style: {
         fontStyle: "italic"
       }
-    }, legendExt), " = external cover"), !isPublicMode && (isScheduler || gridDays.some(gd => {
+    }, legendExt), " = external cover"), legendHeld && React.createElement("span", {
+      "data-testid": "legend-held",
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4
+      }
+    }, React.createElement("span", {
+      className: "cal-pill cal-held",
+      style: heldPillStyle(legendHeld)
+    }, React.createElement("span", {
+      className: "cal-name"
+    }, nameOf(legendHeld)), React.createElement("span", {
+      className: "cal-code"
+    }, codeOf(legendHeld))), " = held for the next schedule (not published yet)"), !isPublicMode && (isScheduler || gridDays.some(gd => {
       const g = schedule[gd];
       return !!g && slotIsOpen(gd, null, todayStr) && (g.primaryLocked && !dayHolder(g, "primary") || g.backupLocked && !g.backup);
     })) && React.createElement("span", {
@@ -13047,6 +13101,7 @@ function CallSchedule() {
     mySurgeon: mySurgeon,
     vacationNames: vacNamesOn(editorDay),
     focusExternal: editorFocus === "external",
+    held: heldFor(editorDay),
     eastVacWarn: eastDetailsVisible ? eastVacWarnByDay[editorDay] || [] : [],
     appEntry: !isPublicMode ? appByDay[editorDay] || null : null,
     appChoices: appPickList(appNameRows),
@@ -16835,6 +16890,7 @@ function OfferPainterSheet({
   preferPeriodId,
   onCommit,
   onClose,
+  heldReady,
   eastDetails
 }) {
   const T = THEME[dk ? "dark" : "light"];
@@ -16977,12 +17033,16 @@ function OfferPainterSheet({
         primary: a ? dayHolder(a, "primary") : null,
         backup: a ? dayHolder(a, "backup") : null
       };
+      row.held = heldReady && ctx && ds >= today && typeof derivedPending === "function" ? derivedPending(ctx, schedule || {}, ds) : {
+        primary: null,
+        backup: null
+      };
       row.holdsPrimary = !!pid && row.holders.primary === pid;
       row.others = othersByDay[ds] || 0;
       out.push(row);
     }
     return out;
-  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np, eastDetails]);
+  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np, eastDetails, heldReady]);
   const rowByDay = React.useMemo(() => {
     const m = {};
     days.forEach(r => {
@@ -17684,6 +17744,19 @@ function OfferPainterSheet({
     const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;
     const holderP = holderText(r.holders.primary, ds),
       holderB = holderText(r.holders.backup, ds);
+    const heldP = !r.holders.primary ? r.held.primary : null,
+      heldB = !r.holders.backup ? r.held.backup : null;
+    const heldSpan = (id, role) => React.createElement("span", {
+      "data-testid": "ofp-held",
+      "data-held-role": role,
+      "data-held": id,
+      title: "Held for " + nameOf(id) + " - set when the next schedule is made",
+      style: {
+        color: text,
+        fontWeight: 600,
+        fontStyle: "italic"
+      }
+    }, nameOf(id), " (held)");
     const npPill = OFFER_BRUSH.noprimary;
     const clearWhat = clearable(r) ? savedByDay[ds] && np.own[ds] ? " - saved offer and No primary: Clear can take them back" : savedByDay[ds] ? " - saved offer: Clear can take it back" : " - saved No primary: Clear can take it back" : "";
     return React.createElement("button", {
@@ -17697,6 +17770,7 @@ function OfferPainterSheet({
       "data-noprimary": effN ? "own" : r.npRange ? "range" : "",
       "data-np-draft": npDrafted ? npDraft[ds] ? "add" : "clear" : "",
       "data-np-why": npWhy,
+      "data-held": (heldP ? "P" : "") + (heldB ? "B" : ""),
       "data-surface": "1",
       disabled: !tappable,
       onClick: () => tapDay(ds),
@@ -17822,12 +17896,12 @@ function OfferPainterSheet({
         color: muted,
         marginTop: 2
       }
-    }, React.createElement("span", null, "P ", React.createElement("span", {
+    }, React.createElement("span", null, "P ", heldP ? heldSpan(heldP, "primary") : React.createElement("span", {
       style: {
         color: holderP === "OPEN" ? openRed : text,
         fontWeight: holderP === "OPEN" ? 800 : 600
       }
-    }, holderP)), React.createElement("span", null, "B ", React.createElement("span", {
+    }, holderP)), React.createElement("span", null, "B ", heldB ? heldSpan(heldB, "backup") : React.createElement("span", {
       style: {
         color: holderB === "OPEN" ? openRed : text,
         fontWeight: holderB === "OPEN" ? 800 : 600
@@ -19430,6 +19504,7 @@ function DayEditor(props) {
     myProfileId,
     onSetApp
   } = props;
+  const held = props.held || null;
   const T = THEME[dk ? "dark" : "light"];
   const externalRef = React.useRef(null);
   React.useEffect(() => {
@@ -19791,6 +19866,21 @@ function DayEditor(props) {
         fontSize: 12
       }
     }, " (outside surgeon)");
+    if (!v && held && held[role]) return React.createElement("span", {
+      "data-testid": "editor-" + role + "-held",
+      "data-held": held[role]
+    }, React.createElement("span", {
+      style: {
+        color: T.text,
+        fontWeight: 700
+      }
+    }, nameOf(held[role])), React.createElement("span", {
+      style: {
+        color: T.muted,
+        fontWeight: 400,
+        fontSize: 12
+      }
+    }, " (held - set when the next schedule is made)"));
     if (!v) return openRoles.includes(role) ? React.createElement("span", {
       "data-testid": "editor-" + role + "-open",
       style: {
