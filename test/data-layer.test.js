@@ -15456,46 +15456,76 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         .reduce((at, h) => { const k = s26.indexOf("\n" + h); assert.ok(k > at, "sub-heading in order: " + h); return k; }, -1);
       assert.deepStrictEqual([seed34.groupRules.eastFeed.derivedWeeks.keepHolidayUnit, seed34.groupRules.eastFeed.derivedWeeks.yieldToVacation, seed34.groupRules.eastFeed.derivedWeeks.yieldDayBefore], [true, true, false], "the seed carries the three switches: the two 11/11 readings on, the day-before yield off (Faraz 11/12)");
     });
-    check("Held initials (Faraz 11/12, display only): rules.js derivedPending is exported and the page reads it - the calendar's SlotLine draws a hollow dotted 'held' pill for a slot nobody holds (signed in, the schedule read, from today, never ?public=1; data-open untouched), its title names the East week for the scheduler only, the cell carries data-held and the chips filter it in, the legend line shows only while a pill is drawn; the offer painter's P / B line reads '<name> (held)'; no export reads it; the docs say so", () => {
+    check("Held initials (Faraz 11/12, display only): rules.js derivedPending is exported; ONE gate in App scope (signed in, never ?public=1, the schedule and the vacations read, a rules context, from today) feeds the three places that draw a held name - the calendar's hollow dotted pill, the day summary's line, the offer painter's P / B line; one plain title for everyone; data-open, the only-OPEN filter and every other surface keep reading the schedule (derivedPending is called in two places only); the docs say so", () => {
       const R34h = require(path.join(ROOT, "rules.js"));
       assert.strictEqual(typeof R34h.derivedPending, "function", "rules.js exports derivedPending");
-      // the reading's guards on the page: a rules context, a loaded and read schedule, signed in - and from today on
-      assert.ok(src.includes('const heldOn = !isPublicMode && !!rulesCtx && loaded && daysReadOk && typeof derivedPending === "function";'), "heldOn: never on ?public=1, never before the schedule is read");
-      assert.ok(src.includes("const heldOf = (d) => (heldOn && d >= todayStr ? derivedPending(rulesCtx, heldSched, d) : HELD_NONE);"), "heldOf: from today on, over the rows the cells read");
-      assert.ok(src.includes("const heldSched = previewGen && previewGen.schedule ? Object.assign({}, schedule, previewGen.schedule) : schedule;"), "a Generate preview's rows overlay the schedule");
-      // the title, lifted and run: the East words are the scheduler's only (decision 11, 10/14)
-      const tl = /\n\s*(const heldTitle = \(id, role\) => [^\n]+;)\n/.exec(src);
+      // (1) the gate, lifted and run
+      const g = /\n  const HELD_NONE = \{ primary: null, backup: null \};\n  (const heldReady = [^\n]+;)\n  (const heldFor = \(d, rows\) => [^\n]+;)\n/.exec(src);
+      assert.ok(g, "the gate's three lines, in App scope");
+      assert.strictEqual(g[1], 'const heldReady = !isPublicMode && !!authUser && !!rulesCtx && loaded && daysReadOk && timeOffReadSeqRef.current.adopted > 0 && typeof derivedPending === "function";', "heldReady: signed in, never ?public=1, the schedule and the vacations read");
+      const gate = (o) => {
+        const calls = [];
+        const base = { isPublicMode: false, authUser: { id: "u" }, rulesCtx: { per: {} }, loaded: true, daysReadOk: true, adopted: 1, derivedPending: (ctx, rows, d) => { calls.push([rows, d]); return { primary: "s5", backup: null }; }, todayStr: "2026-11-12", schedule: { tag: "schedule" } };
+        const v = Object.assign({}, base, o);
+        const f = new Function("isPublicMode", "authUser", "rulesCtx", "loaded", "daysReadOk", "timeOffReadSeqRef", "derivedPending", "todayStr", "schedule", "const HELD_NONE = { primary: null, backup: null };\n" + g[1] + "\n" + g[2] + "\nreturn { heldReady, heldFor };");
+        return { r: f(v.isPublicMode, v.authUser, v.rulesCtx, v.loaded, v.daysReadOk, { current: { adopted: v.adopted } }, v.derivedPending, v.todayStr, v.schedule), calls };
+      };
+      const none = { primary: null, backup: null };
+      const on = gate({});
+      assert.deepStrictEqual([on.r.heldReady, on.r.heldFor("2026-11-12"), on.r.heldFor("2027-03-31")], [true, { primary: "s5", backup: null }, { primary: "s5", backup: null }], "signed in, everything read: today and later days are asked");
+      assert.deepStrictEqual(on.r.heldFor("2026-11-11"), none, "a past day is never held");
+      assert.deepStrictEqual(on.calls.map(c => c[0].tag + " " + c[1]), ["schedule 2026-11-12", "schedule 2027-03-31"], "...and never even asked; without rows the schedule is read");
+      const ov = gate({}); ov.r.heldFor("2027-03-31", { tag: "overlay" });
+      assert.deepStrictEqual(ov.calls.map(c => c[0].tag), ["overlay"], "the rows given (the calendar's Generate-preview overlay) are the ones read");
+      [["?public=1", { isPublicMode: true }], ["signed out", { authUser: null }], ["no rules context", { rulesCtx: null }], ["not loaded", { loaded: false }], ["the schedule not read", { daysReadOk: false }], ["the vacations not read", { adopted: 0 }], ["rules.js without the function", { derivedPending: undefined }]].forEach(([what, o]) => {
+        const x = gate(o);
+        assert.deepStrictEqual([x.r.heldReady, x.r.heldFor("2027-03-31"), x.calls.length], [false, none, 0], what + ": nothing is held and the rules are not asked");
+      });
+      // (2) exactly two call sites in the page - the gate and the painter's own row reading; nothing else reads it
+      assert.strictEqual(src.split("derivedPending(").length - 1, 2, "derivedPending( is called in two places only (App's heldFor, the offer painter's days)");
+      ["helpers.js", "generator.js", "east-feed.js", "importer.js"].forEach(f => assert.ok(!read34(f).includes("derivedPending"), f + " does not read derivedPending"));
+      assert.ok(src.includes("const openP = daysReadOk && slotIsOpen(d, pH, todayStr), openB = daysReadOk && slotIsOpen(d, bH, todayStr);"), "OPEN is still the schedule's own reading");
+      assert.ok(src.includes('const dim = !inFilter || (calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup"))));'), "the only-OPEN filter keeps reading the openSlots Set - a held slot is still open there");
+      assert.ok(src.includes('data-open={(openP ? "P" : "") + (openB ? "B" : "")} data-held={(heldP ? "P" : "") + (heldB ? "B" : "")}'), "data-held beside an unchanged data-open");
+      // (3) the calendar
+      assert.ok(src.includes("const heldSched = previewGen && previewGen.schedule ? Object.assign({}, schedule, previewGen.schedule) : schedule;") && src.includes("const heldOf = (d) => heldFor(d, heldSched);"), "the calendar reads the gate over its Generate-preview overlay");
+      const tl = /\n\s*(const heldTitle = \(id\) => [^\n]+;)\n/.exec(src);
       assert.ok(tl, "heldTitle");
-      const titleOf = (east) => new Function("nameOf", "eastDetailsVisible", tl[1] + "\nreturn heldTitle;")((id) => ({ s5: "Fierce" })[id] || id, east);
-      assert.strictEqual(titleOf(true)("s5", "primary"), "Held for Fierce: East week - Silvis primary (derived from the Davenport feed), written as a lock at the next Generate");
-      assert.strictEqual(titleOf(false)("s5", "backup"), "Held for Fierce - set when the next schedule is made");
-      assert.ok(!/East|Davenport|feed|derived/i.test(titleOf(false)("s5", "primary")), "a non-scheduler's title names no feed");
-      // the pill: only where nobody holds the slot, after the not-loaded branches and before blank / OPEN
+      const title = new Function("nameOf", tl[1] + "\nreturn heldTitle;")((id) => ({ s5: "Fierce" })[id] || id)("s5");
+      assert.strictEqual(title, "Held for Fierce - set when the next schedule is made", "one title for everyone");
+      assert.ok(!/East|Davenport|feed|derived/i.test(title) && !tl[1].includes("eastDetailsVisible"), "no East word on the grid for anyone (Item E2), the scheduler included");
       const sl = src.slice(src.indexOf("const SlotLine = ({ role, day, holder, locked, held }) => {"), src.indexOf("const badge = (solid, color) =>"));
       assert.ok(sl.length > 500 && sl.length < 6000, "SlotLine");
       const at = (t) => sl.indexOf(t);
-      assert.ok(at('data-testid="unread-slot"') > 0 && at('else if (!holder && held) body = <span className="cal-pill cal-held" data-testid="held-slot" data-held={held}') > at('data-testid="unread-slot"') && at('className="cal-pill cal-blank"') > at('data-testid="held-slot"') && at('className="cal-pill cal-open"') > at('className="cal-pill cal-blank"'), "the held branch sits after not-loaded and before blank / OPEN, and only for a slot nobody holds");
+      assert.ok(at('data-testid="unread-slot"') > 0 && at('else if (!holder && held) body = <span className="cal-pill cal-held" data-testid="held-slot" data-held={held} title={heldTitle(held)} style={heldPillStyle(held)}>') > at('data-testid="unread-slot"') && at('className="cal-pill cal-blank"') > at('data-testid="held-slot"') && at('className="cal-pill cal-open"') > at('className="cal-pill cal-blank"'), "the held branch sits after not-loaded and before blank / OPEN, and only for a slot nobody holds");
+      assert.ok(sl.includes('<span className="cal-name">{nameOf(held)}</span><span className="cal-code">{codeOf(held)}</span></span>;'), "the pill prints the name (the code on a phone), like any holder's");
       assert.ok(src.includes('const heldPillStyle = (id) => { const hc = textColorOf(id); return { background: "transparent", color: hc, borderColor: hc, borderStyle: "dotted" }; };'), "hollow, dotted, in the roster's name colour");
-      // the cell: data-held beside data-open (which keeps reading the schedule), the hover words, the chip filter
       assert.ok(src.includes("const heldD = heldOf(d), heldP = !pH ? heldD.primary : null, heldB = !bH ? heldD.backup : null;"), "never over a held slot");
-      assert.ok(src.includes('data-open={(openP ? "P" : "") + (openB ? "B" : "")} data-held={(heldP ? "P" : "") + (heldB ? "B" : "")}'), "data-held beside an unchanged data-open");
-      assert.ok(src.includes("const openP = daysReadOk && slotIsOpen(d, pH, todayStr), openB = daysReadOk && slotIsOpen(d, bH, todayStr);"), "OPEN is still the schedule's own reading");
       assert.ok(src.includes('"P " + (heldP ? "held for " + nameOf(heldP) : pH || openP ? holderLabel(pH, nameOf) : "-")') && src.includes('"B " + (heldB ? "held for " + nameOf(heldB) : bH || openB ? holderLabel(bH, nameOf) : "-")'), "the hover title says held for <name>");
       assert.ok(src.includes("|| (!!heldP && calSurgeonFilters.includes(heldP)) || (!!heldB && calSurgeonFilters.includes(heldB));"), "a surgeon chip filters his held days in");
       assert.ok(src.includes('<SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)} held={heldP}/>') && src.includes('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)} held={heldB}/>'), "both lines get their held holder");
-      assert.ok(src.includes('{legendHeld && <span data-testid="legend-held"') && src.includes("= held for the next schedule (not published yet)</span>}"), "the legend line, only while the month draws one");
-      // the offer painter
-      assert.ok(src.includes('row.held = ctx && ds >= today && typeof derivedPending === "function" ? derivedPending(ctx, schedule || {}, ds) : { primary: null, backup: null };'), "the painter reads the same function, from today on");
+      assert.ok(src.includes("const legendHeld = gridDays.map(gd => { const h = heldOf(gd); return h.primary || h.backup || null; }).find(Boolean) || null;") && src.includes('{legendHeld && <span data-testid="legend-held"') && src.includes("= held for the next schedule (not published yet)</span>}"), "the legend line, only while the month's grid draws one");
+      // (4) the day summary (everyone but the scheduler): held instead of OPEN, one tap from the pill
+      assert.ok(src.includes("            held={heldFor(editorDay)}\n"), "the day editor gets App's reading of its day");
+      const sh = src.slice(src.indexOf("  const summaryHolder = (role) => {"), src.indexOf("  // Item C: the \"Propose a trade for this day\" link"));
+      assert.ok(sh.length > 300 && sh.indexOf('if (!v && held && held[role]) return <span data-testid={"editor-" + role + "-held"} data-held={held[role]}>') > 0 && sh.indexOf("if (!v && held && held[role])") < sh.indexOf('data-testid={"editor-" + role + "-open"}'), "the summary words a held slot before it would say OPEN");
+      assert.ok(sh.includes("{nameOf(held[role])}</span>") && sh.includes(" (held - set when the next schedule is made)</span></span>;"), "the summary's words");
+      const hv = src.slice(src.indexOf("  const holderView = (role) => {"), src.indexOf("  const myRole = mySurgeon && entry"));
+      assert.ok(hv.length > 100 && !hv.includes("held"), "the scheduler's editor keeps OPEN (it edits the row; its East lines say whose week it is)");
+      // (5) the offer painter: the same gate
+      assert.ok(src.includes("          ctx={rulesCtx} ctxError={rulesCtxState.error} heldReady={heldReady}\n") && src.includes("onCommit, onClose, heldReady, eastDetails }) {\n"), "the painter gets the gate");
+      assert.ok(src.includes('row.held = heldReady && ctx && ds >= today && typeof derivedPending === "function" ? derivedPending(ctx, schedule || {}, ds) : { primary: null, backup: null };') && src.includes("  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np, eastDetails, heldReady]);"), "the painter waits for the gate, from today on, and recomputes when it opens");
       assert.ok(src.includes("const heldP = !r.holders.primary ? r.held.primary : null, heldB = !r.holders.backup ? r.held.backup : null;"), "never over a holder");
-      assert.ok(src.includes("{nameOf(id)} (held)</span>;") && src.includes('title={"Held for " + nameOf(id) + " - set when the next schedule is made"}'), "'<name> (held)', with a title that names no feed");
-      assert.ok(src.includes('<span>P {heldP ? heldSpan(heldP, "primary") : <span') && src.includes('<span>B {heldB ? heldSpan(heldB, "backup") : <span'), "on the P / B line, in place of OPEN");
-      // display only: the exports, the week rows, the feeds, the importer and the generator are built without it
-      ["helpers.js", "generator.js", "east-feed.js", "importer.js"].forEach(f => assert.ok(!read34(f).includes("derivedPending"), f + " does not read derivedPending"));
-      // the docs
-      const rulesH = read34("docs", "SILVIS-CALL-RULES.md").replace(/\s+/g, " "), guideH = read34("docs", "SILVIS-BUILD-GUIDE.md");
+      assert.ok(src.includes("{nameOf(id)} (held)</span>;") && src.includes('title={"Held for " + nameOf(id) + " - set when the next schedule is made"}') && src.includes('data-testid="ofp-held" data-held-role={role} data-held={id}'), "'<name> (held)', its role and the same title");
+      assert.ok(src.includes('<span>P {heldP ? heldSpan(heldP, "primary") : <span') && src.includes('<span>B {heldB ? heldSpan(heldB, "backup") : <span'), "on the P / B line, in place of OPEN, each with its own role");
+      // (6) the docs
+      const rulesH = read34("docs", "SILVIS-CALL-RULES.md").replace(/\s+/g, " "), guideH = read34("docs", "SILVIS-BUILD-GUIDE.md"), guideF = guideH.replace(/\s+/g, " ");
       assert.ok(rulesH.includes("11/12 (Faraz): his initials show on his East weeks before the schedule is made."), "rules doc section 3");
+      assert.ok(rulesH.includes("A missing name never means Generate will not put him there") && rulesH.includes("until the server function v3 is deployed"), "...with what a missing name does not mean and the undeployed function's effect");
       assert.ok(guideH.includes("\n### 26.8 Held initials - his name on a derived week before any row exists (Faraz 11/12; display only)"), "build guide 26.8");
       assert.ok(guideH.includes("`derivedPending(ctx, schedule, day)`") && read34("CLAUDE.md").includes("`derivedPending`"), "the function is named in the guide and in CLAUDE.md");
+      assert.ok(guideF.includes("the reverse does not hold") && guideF.includes("until `east-feed-refresh` v3 is deployed"), "the guide says what a missing held name does NOT mean, and what the undeployed function does to the listed weeks each morning");
+      assert.ok(read34("docs", "ONBOARDING.md").replace(/\s+/g, " ").includes('a name in italics with "(held)"'), "the surgeons' guide names the painter's held line");
     });
   }
   console.log("\n[P31A5] Prompt 31 Part A (A5): the docs - guide section 25 and its pointers, the rules doc, ONBOARDING, the edge-functions README, HISTORY");

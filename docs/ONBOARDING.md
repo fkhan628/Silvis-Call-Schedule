@@ -117,7 +117,8 @@ first), or frozen because that period already closed (ask Faraz). A day your usu
 OR day, a Clinton or outreach day — is NOT greyed: the app asks once ("... is normally not one of your primary call days
 - offer it anyway?") and your offer counts for that date. If a vacation you entered later covers a day you had
 offered, that row greys but **Clear** can still take the offer back. Each row also shows who is already published that
-day (OPEN in red if nobody) and how many colleagues offered it. Nothing is written while you tap: the footer counts
+day (OPEN in red if nobody; a name in italics with "(held)" when that slot will be a colleague's fixed week at the next
+schedule - not published yet, and not yours to offer) and how many colleagues offered it. Nothing is written while you tap: the footer counts
 your unsaved changes; **Save** writes them all at once — your days, your No primary days and, if you changed it, your
 mode, in one request;
 if it fails nothing at all was saved, the list of what is still pending stays on screen, and you just Save again —

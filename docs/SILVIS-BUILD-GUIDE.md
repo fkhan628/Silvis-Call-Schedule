@@ -3551,7 +3551,7 @@ the finished schedule: the unit kept with him ("stays with", only when every add
 someone else's); or not kept whole, with what became of each added day (his; held by a named surgeon or an outside cover;
 left open; or his while named days of the unit in his week are not - a split to settle by hand); a held slot that keeps him
 on a vacation day is said so, and so is the day before a vacation his derived week keeps him on (11/12) - and
-`test/generator-regression.js` restates them from the seed (110 runs: the week of 3/29/2027 over a vacation - the day
+`test/generator-regression.js` restates them from the seed (114 runs: the week of 3/29/2027 over a vacation - the day
 before it kept, as his one lock violation - the same week with a vacation starting the Monday after, the 11/11 reading
 switched on as data, the kept-day line's own conditions (`yieldToVacation` false, a blob without the key, a unit's added
 day as the day before, two such days in one week, another surgeon's lock, another rule and his own lock in the other
@@ -3600,22 +3600,38 @@ change of the Davenport lists would no longer follow - and leave the other role 
 the two ways offered he chose: show the name, write nothing.*
 
 - **The reading - `rules.js` `derivedPending(ctx, schedule, day)`** → `{ primary, backup }`: the derived surgeon of each role
-  the schedule does not hold yet - the slot the next Generate seeds (`genSeedLocks` asks the same questions of its working
-  copy). A role is pending for him when it is derived for him that day (`ctx.derivedByDay`: a day that yields to his
-  vacation has left it, a day a holiday unit added is in it, the day before a vacation stays - 26.5), nobody holds that
-  role in the schedule (he himself included - the row shows him then; an outside cover holds a primary), he does not hold
-  the other role that day, and a day a unit added is still his (`derivedUnitLost`). Pure, and display only: no rule, no
-  export and no feed reads it, and `eligibility` answers exactly as before.
+  the schedule does not hold yet. A role is pending for him when it is derived for him that day (`ctx.derivedByDay`: a day
+  that yields to his vacation has left it, a day a holiday unit added is in it, the day before a vacation stays - 26.5),
+  nobody holds that role in the schedule (he himself included - the row shows him then; an outside cover holds a primary),
+  he does not hold the other role that day, and a day a unit added is still his (`derivedUnitLost`). **Every slot it names
+  is one a Generate over that day seeds as his lock** (`test/generator-regression.js` checks "pending implies seeded");
+  **the reverse does not hold**: where an unlocked row holds the role, or holds him in the other role, nothing is pending -
+  the row shows what the schedule says - while a default-mode Generate over that range still clears the row and seeds his
+  lock (Accept names the change). A missing held name never means "Generate will not put him there". Pure, and display
+  only: no rule, no export and no feed reads it, and `eligibility` answers exactly as before.
+- **One gate** (App scope: `heldReady`, `heldFor(day, rows)`) for the three places that draw a held name: a signed-in
+  session - never `?public=1` - the schedule AND the vacations read (before the `time_off` read his vacation days would
+  read held too), a rules context, and from today on.
 - **The calendar** (`SlotLine`'s `held`): such a slot reads his name in a hollow, dotted pill in the roster's name colour
-  (`cal-held`, `data-testid="held-slot"`; the cell carries `data-held` = `P`, `B` or `PB`) where it read OPEN. Signed-in
-  sessions only - never `?public=1` - from today on and once the schedule is read; a Generate preview's days show their own
-  rows. The cell's `data-open`, the only-OPEN filter, the Open-shifts board, the week rows, the share page, the print view,
-  the exports and the calendar feeds keep reading the schedule alone: the slot IS open until Generate writes it. The cell's
-  hover says "held for <name>"; the pill's own title names the East week for the scheduler only (decision 11, 10/14) -
-  everyone else reads "Held for <name> - set when the next schedule is made". A surgeon chip filters his held days in, and
-  the legend gains "= held for the next schedule (not published yet)" only while the month draws one.
+  (`cal-held`, `data-testid="held-slot"`; the cell carries `data-held` = `P`, `B` or `PB`) where it read OPEN; a Generate
+  preview's days show their own rows. The cell's `data-open`, the only-OPEN filter, the coverage strip, the Open-shifts
+  board, the week rows, the share page, the print view, the exports, the calendar feeds, My schedule and the next-call line
+  keep reading the schedule alone: the slot IS open until Generate writes it. The cell's hover says "held for <name>" and
+  the pill's title "Held for <name> - set when the next schedule is made" - one sentence for everyone, with no East word
+  (Item E2 keeps those off the grid, the scheduler included; his day editor has the East lines). A surgeon chip filters
+  his held days in, and the legend gains "= held for the next schedule (not published yet)" only while the month's grid
+  draws one.
+- **The day summary** (everyone but the scheduler, one tap from the pill): the role reads "<name> (held - set when the next
+  schedule is made)" where it read OPEN (`editor-<role>-held`). The scheduler's editor keeps OPEN - it edits the row.
 - **The offer painter:** the P / B line of such a day reads "<name> (held)" in place of OPEN (`ofp-held`; the row's
-  `data-held`), for every painter - the words name no feed.
+  `data-held`), for every painter.
+- **Where the names come from, day to day:** a week Davenport has published derives from the cached feed and stays. A week
+  that is only on the two lists (26.2) shows while the lists are in the cache - and until `east-feed-refresh` v3 is deployed
+  (26.6) the daily 10:30 UTC run rewrites the cache without them: those names disappear each morning and come back with the
+  next in-app Refresh from Davenport (Setup's issues say when the lists are missing; the calendar itself does not).
 - **Tests:** `test/rules.test.js` (the reading case by case, and `eligibility` unchanged on a pending day);
-  `test/data-layer.test.js` (the page's guards and pins; the title's two wordings, lifted); `test/ui/smoke.mjs` (the calendar
-  and the painter on listed weeks the harness serves ten months ahead, restated from the page's own rules context).
+  `test/generator-regression.js` (pending implies seeded, with and without rows in the way); `test/data-layer.test.js` (the
+  gate lifted and run - public, signed out, each read missing, a past day, the preview overlay - the two call sites, the
+  pins); `test/ui/contrast.mjs` (the name on the weekend and holiday tints); `test/ui/smoke.mjs` (the calendar and the
+  painter on listed weeks the harness serves ten months ahead, restated from the page's own rules context; a non-scheduler's
+  pill and day summary, and `?public=1` drawing none, on the first pending slot the served data holds).

@@ -6263,6 +6263,17 @@ function CallSchedule() {
   // todayCentral) drives the today ring, the coverage strip and the OPEN
   // logic (an unassigned slot is OPEN only from today forward, Faraz 9/22).
   const todayStr = todayCentral();
+  // Faraz 11/12 ("the app shows the areas shaded that are his primary shifts but not his initials" - chosen: show them, write
+  // nothing; rules.js derivedPending decides). ONE gate for the three places that draw a held name - the calendar's pill, the
+  // day summary's line and the offer painter's P / B line: a signed-in session (never ?public=1), the schedule AND the
+  // vacations read (a derived day yields to his vacation - before the time_off read every one of them would read held; the
+  // ref is read at render: its read lands with a state change), a rules context, and from today on. heldFor(day, rows)
+  // reads the rows given (the calendar passes its Generate-preview overlay), else the schedule. Display only: nothing here
+  // is written, and OPEN stays what the schedule says everywhere else (data-open, the only-OPEN filter, the Open-shifts
+  // board, the coverage strip, the week rows, the exports, the feeds).
+  const HELD_NONE = { primary: null, backup: null };
+  const heldReady = !isPublicMode && !!authUser && !!rulesCtx && loaded && daysReadOk && timeOffReadSeqRef.current.adopted > 0 && typeof derivedPending === "function";
+  const heldFor = (d, rows) => (heldReady && d >= todayStr ? derivedPending(rulesCtx, rows || schedule, d) : HELD_NONE);
   // "On call now" follows the 07:00 -> 07:00 shift (review 9/27, Do first 3):
   // from 00:00 to 06:59 Central the pair on call is the previous calendar
   // day's (helpers.js shiftClockCentral / onCallNow). ONLY the today banner,
@@ -6420,6 +6431,8 @@ function CallSchedule() {
   }, [vacShown, gridDays]);
   // Item E2 (Faraz 9/25: "remove the east specific markings on the calendar because it makes it busy ...
   // just want to improve readability"): the month grid carries NO East-derived / forecast marking for anyone, the
+  // (11/12, held initials: an open slot a derived week will fill now reads that surgeon's NAME in a dotted pill - a name,
+  // like any holder's, with no East word in the cell, its title or the legend; the badges below stay gone.)
   // scheduler included - the E (East-derived week) and F / f (East forecast at / above the threshold, 20% or more)
   // cell badges, their two legend lines and the "East-derived: ..." hover-title bit are gone, together with the
   // grid-only forecastByDay map and the eastBadgesVisible flag Item E (9/24) had gated them with. The scheduler reads
@@ -7496,7 +7509,7 @@ function CallSchedule() {
           isScheduler={isScheduler}
           offers={offerRows} periods={periodRows}
           schedule={schedule} availability={availabilityRows} availabilityRead={availabilityReadOk}
-          ctx={rulesCtx} ctxError={rulesCtxState.error}
+          ctx={rulesCtx} ctxError={rulesCtxState.error} heldReady={heldReady}
           surgeonRules={surgeonRules} groupRules={groupRules}
           today={todayStr} nameOf={nameOf}
           preferPeriodId={offerSheet.periodId || null}
@@ -8063,18 +8076,14 @@ function CallSchedule() {
           // schedule alone - they never see who is looking.
           const isMine = (h) => !isPublicMode && !!mySurgeon && h === mySurgeon;
           const mineRing = { borderColor: T.mineRim, boxShadow: "0 0 0 " + (dk ? 1.5 : 1) + "px " + T.mineRing };
-          // Faraz 11/12 ("the app shows the areas shaded that are his primary shifts but not his initials" - chosen: show them,
-          // write nothing): a slot the schedule does not hold yet that a derived week fills at the next Generate reads that
-          // surgeon's name in a HOLLOW, dotted pill - held, not published. rules.js derivedPending decides (the generator's own
-          // seeding questions), read over the rows the cells read (a Generate preview overlays its days - its rows carry the
-          // seeded locks themselves). Signed-in sessions only (never ?public=1), from today on, and only once the schedule is
-          // read. Display only: data-open, the only-OPEN filter, the week rows, the exports and the feeds keep reading the
-          // schedule alone. The words name no feed for anyone but the scheduler (decision 11, 10/14).
-          const HELD_NONE = { primary: null, backup: null };
+          // Faraz 11/12 (held initials - the gate and the reading are App's heldFor above): a slot the schedule does not hold
+          // yet that a derived week fills at the next Generate reads that surgeon's name in a HOLLOW, dotted pill - held, not
+          // published - where it read OPEN. Read over the rows the cells read (a Generate preview overlays its days; its rows
+          // carry the seeded locks themselves). The title is one sentence for everyone and names no feed: Item E2 (9/25) keeps
+          // every East word off the grid, the scheduler included - his day editor has the East lines.
           const heldSched = previewGen && previewGen.schedule ? Object.assign({}, schedule, previewGen.schedule) : schedule;
-          const heldOn = !isPublicMode && !!rulesCtx && loaded && daysReadOk && typeof derivedPending === "function";
-          const heldOf = (d) => (heldOn && d >= todayStr ? derivedPending(rulesCtx, heldSched, d) : HELD_NONE);
-          const heldTitle = (id, role) => "Held for " + nameOf(id) + (eastDetailsVisible ? ": East week - Silvis " + role + " (derived from the Davenport feed), written as a lock at the next Generate" : " - set when the next schedule is made");
+          const heldOf = (d) => heldFor(d, heldSched);
+          const heldTitle = (id) => "Held for " + nameOf(id) + " - set when the next schedule is made";
           const heldPillStyle = (id) => { const hc = textColorOf(id); return { background: "transparent", color: hc, borderColor: hc, borderStyle: "dotted" }; };
           const SlotLine = ({ role, day, holder, locked, held }) => {
             const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
@@ -8083,7 +8092,7 @@ function CallSchedule() {
             // Review 9/27 Do first 1: loaded, but no schedule_days read has landed - "not loaded", never OPEN (own testid).
             else if (!holder && !daysReadOk) body = <span className="cal-pill" data-testid="unread-slot" title="Schedule not loaded" style={{color:T.muted,fontStyle:"italic",fontWeight:500}}><span className="cal-name">not loaded</span><span className="cal-code">?</span></span>;
             // Faraz 11/12: held for a derived week (heldOf above) - the roster's name colour, no fill, a dotted border
-            else if (!holder && held) body = <span className="cal-pill cal-held" data-testid="held-slot" data-held={held} title={heldTitle(held, role === "P" ? "primary" : "backup")} style={heldPillStyle(held)}><span className="cal-name">{nameOf(held)}</span><span className="cal-code">{codeOf(held)}</span></span>;
+            else if (!holder && held) body = <span className="cal-pill cal-held" data-testid="held-slot" data-held={held} title={heldTitle(held)} style={heldPillStyle(held)}><span className="cal-name">{nameOf(held)}</span><span className="cal-code">{codeOf(held)}</span></span>;
             // Unassigned before today (Central): a blank pill-height line - no text, no red (Faraz 9/22).
             else if (!holder && !slotIsOpen(day, holder, todayStr)) body = <span className="cal-pill cal-blank" aria-hidden="true">&nbsp;</span>;
             else if (!holder) body = <span className="cal-pill cal-open" style={{color:T.open,fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
@@ -8276,8 +8285,9 @@ function CallSchedule() {
                 const inMonth = d >= monthStartStr && d <= monthEndStr;
                 const isWk = dow === 5 || dow === 6 || dow === 0;
                 const hol = rulesCtx ? isHolidayDay(rulesCtx, d) : null;
-                // Item E2 (9/25): no East-derived / forecast lookup here any more - the cell draws no E / F / f badge
-                // and its hover title carries no "East-derived: ..." bit, for every viewer (the day editor has the East status).
+                // Item E2 (9/25): no East-derived / forecast BADGE here any more - the cell draws no E / F / f badge and its hover
+                // title carries no "East-derived: ..." bit, for every viewer (the day editor has the East status). 11/12: heldOf below
+                // does look a derived slot up, to print the holder's name where the slot read OPEN - never an East word.
                 const pH = dayHolder(a, "primary"); const bH = a ? a.backup : null;
                 // past unassigned days are blank, not OPEN; and nothing is OPEN before a schedule_days read landed (review 9/27 Do first 1)
                 const openP = daysReadOk && slotIsOpen(d, pH, todayStr), openB = daysReadOk && slotIsOpen(d, bH, todayStr);
@@ -8448,6 +8458,7 @@ function CallSchedule() {
             canEdit={isScheduler && !isPublicMode} eastDetailsVisible={eastDetailsVisible} rulesImported={rulesImported} isPublicMode={isPublicMode}
             nameOf={nameOf} codeOf={codeOf} colorOf={colorOf} mySurgeon={mySurgeon}
             vacationNames={vacNamesOn(editorDay)} focusExternal={editorFocus === "external"}
+            held={heldFor(editorDay)}
             eastVacWarn={eastDetailsVisible ? (eastVacWarnByDay[editorDay] || []) : []}
             appEntry={!isPublicMode ? appByDay[editorDay] || null : null} appChoices={appPickList(appNameRows)} appState={appDaysState} myProfileId={authUser && authUser.id} onSetApp={saveAppDayFromEditor}
             onGive={proposeGiveForDay} onOpenShifts={openShiftsBoard} openOnBoard={(d, r) => boardKeys.has(openSlotKey(d, r))}
@@ -9769,7 +9780,7 @@ function writeCollapseFlag(ck, open) {
 //    rpc/save_offers request: the no-primary days ride in p_np_add / p_np_clear (sent only when non-empty) and the
 //    function writes them through save_no_primary in the same transaction - all or nothing. A no-primary day is not an
 //    offer: the period count, the status and "Go by my rules" keep reading offers only.
-function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, availabilityRead, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose, eastDetails }) {
+function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isScheduler, offers, periods, schedule, availability, availabilityRead, ctx, ctxError, surgeonRules, groupRules, today, nameOf, preferPeriodId, onCommit, onClose, heldReady, eastDetails }) {
   const T = THEME[dk ? "dark" : "light"];
   const pid = person ? person.id : "";
   const t0 = parse(today);
@@ -9873,14 +9884,15 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
       const a = schedule ? schedule[ds] : null;
       row.holders = { primary: a ? dayHolder(a, "primary") : null, backup: a ? dayHolder(a, "backup") : null };
       // Faraz 11/12: the slots a derived week fills at the next Generate read "<name> (held)" on the P / B line instead of
-      // OPEN (rules.js derivedPending - display only; from today on; the words name no feed)
-      row.held = ctx && ds >= today && typeof derivedPending === "function" ? derivedPending(ctx, schedule || {}, ds) : { primary: null, backup: null };
+      // OPEN (rules.js derivedPending - display only; from today on; the words name no feed). heldReady is App's gate: signed
+      // in, the schedule and the vacations read - before that the line keeps its OPEN, never a held name over a real holder
+      row.held = heldReady && ctx && ds >= today && typeof derivedPending === "function" ? derivedPending(ctx, schedule || {}, ds) : { primary: null, backup: null };
       row.holdsPrimary = !!pid && row.holders.primary === pid; // published / saved primary: No primary is refused (trade first, NP008)
       row.others = othersByDay[ds] || 0;
       out.push(row);
     }
     return out;
-  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np, eastDetails]);
+  }, [ym, ctx, pid, person, periods, isScheduler, today, schedule, othersByDay, np, eastDetails, heldReady]);
   const rowByDay = React.useMemo(() => { const m = {}; days.forEach(r => { m[r.ds] = r; }); return m; }, [days]);
   const npExh = days.some(r => exhDay(r.ds)); // the shown month holds a day of an "Only these days" period (Prompt 28 review)
 
@@ -10910,6 +10922,10 @@ function DayEditor(props) {
   // Prompt 29: the APP of this day (appEntry from helpers.appDaysByDay, or null), the scheduler's pick list (appChoices =
   // helpers.appPickList), the load state, the viewer's own profile id (the summary's You chip) and the scheduler's save.
   const { appEntry, appChoices, appState, myProfileId, onSetApp } = props;
+  // Faraz 11/12 (held initials): held = App's heldFor(day) - { primary, backup }, the derived surgeon of an open slot the
+  // next Generate fills (null each on ?public=1, before the reads, on a past day). The SUMMARY words such a slot as the
+  // grid's pill does; the scheduler's editor keeps OPEN - it edits the row, and its East lines say whose week it is.
+  const held = props.held || null;
   // Day-click summary (Faraz 9/27: "me as the scheduler needs the full view, users don't need as much"): canEdit (the
   // scheduler) keeps the full editor below unchanged. Everyone else - a surgeon on his own or another's day, the office,
   // a viewer, a follower, ?public=1 - gets a SUMMARY: the holders by full name (the grid shows codes on a phone), a You
@@ -11142,6 +11158,7 @@ function DayEditor(props) {
   const summaryHolder = (role) => {
     const v = role === "primary" ? (draft.primary || (draft.externalCover ? "ext:" + draft.externalCover : null)) : draft.backup;
     const outside = <span style={{color:T.muted,fontWeight:400,fontSize:12}}> (outside surgeon)</span>;
+    if (!v && held && held[role]) return <span data-testid={"editor-" + role + "-held"} data-held={held[role]}><span style={{color:T.text,fontWeight:700}}>{nameOf(held[role])}</span><span style={{color:T.muted,fontWeight:400,fontSize:12}}> (held - set when the next schedule is made)</span></span>;
     if (!v) return openRoles.includes(role) ? <span data-testid={"editor-" + role + "-open"} style={{color:T.open,fontWeight:800}}>OPEN</span> : <span style={{color:T.muted}}>-</span>;
     if (String(v).indexOf("ext:") === 0) return <span style={{color:T.text,fontWeight:700}}>{String(v).slice(4)}{outside}</span>;
     const s = roster.find(x => x.id === v) || null;

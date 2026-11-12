@@ -1435,6 +1435,14 @@ const DW_RUNS = { n: 0 };
   const grDW = (over) => Object.assign({}, seed.groupRules, { eastFeed: Object.assign({}, seed.groupRules.eastFeed, { derivedWeeks: Object.assign({}, seed.groupRules.eastFeed.derivedWeeks, over) }) });
   const GR_NOKEY = Object.assign({}, seed.groupRules, { eastFeed: Object.assign({}, seed.groupRules.eastFeed) }); delete GR_NOKEY.eastFeed.derivedWeeks;
   const heldRow = (primary, locked) => ({ primary, backup: null, primaryLocked: !!locked, backupLocked: false, source: "manual", externalCover: null, note: null });
+  // Faraz 11/12 (held initials - display only): what rules.derivedPending names on the run's INPUT rows is what the run
+  // seeds - every pending slot of a day in the range comes out as his locked slot. The display's claim, one way only (a
+  // slot an unlocked row holds is not pending, and a default run still clears and seeds it); the count is returned.
+  const pendingSeeded = (name, c, run, from, to) => {
+    let n = 0;
+    daysList(from, to).forEach((d) => { const p = R.derivedPending(c, c.schedule, d); [P, B].forEach((role) => { const id = p[role]; if (!id) return; n++; const e = run.schedule[d]; ok(!!e && e[role] === id && e[role + "Locked"] === true, name + ": " + d + " " + role + " is pending for " + id + " on the input rows but the run did not seed it as his lock - " + JSON.stringify(e && [e[role], e[role + "Locked"]])); }); });
+    return n;
+  };
   const GR_EDGE = Object.assign({}, seed.groupRules, { eastFeed: Object.assign({}, seed.groupRules.eastFeed, { derivedWeeks: Object.assign({}, seed.groupRules.eastFeed.derivedWeeks, { yieldDayBefore: true }) }) });
   const edgeCtx = ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: VAC.start, end_date: VAC.end }], groupRules: GR_EDGE });
   const EDGE_LINE = (monday, role, days) => "vacation: the derived week of " + monday + " (" + NAME[FIERCE] + " Silvis " + role + ") keeps him on " + days.join(", ") + ", the day before his vacation - the day before a vacation does not move a derived week (lockViolations / fixedViolations list it)";
@@ -1569,6 +1577,16 @@ const DW_RUNS = { n: 0 };
       DW_RUNS.n++;
       eq([I0.fixedViolations.filter((x) => x.id === FIERCE).map((x) => x.day), I0.lockViolations.filter((l) => l.id === FIERCE).map((l) => l.day)], [["2027-03-30"], ["2027-04-04"]], "Tue 3/30 is the fixed violation, Sun 4/4 the lock violation");
       ok(I0.warnings.indexOf(EDGE_LINE("2027-03-29", P, ["2027-03-30", "2027-04-04"])) >= 0, "ONE kept-day line, the days in date order: " + JSON.stringify(I0.warnings.filter((x) => /keeps him on/.test(x))));
+      // (J) held initials (11/12) with rows in the way: Acton hand-locked on the unit's Sat + Sun - only Mon - Fri of his week
+      // are pending on the input rows (the unit is Acton's, so its Monday is not), and each of the five is seeded
+      CUR.range = "held initials (J) pending implies seeded, rows in the way";
+      const jCtx = ctxOf({ schedule: { "2027-05-29": heldRow(ACTON, true), "2027-05-30": heldRow(ACTON, true) } });
+      const j0 = GEN.generate(jCtx, "2027-05-17", "2027-06-06", { seed: s, bestOf: 2 });
+      DW_RUNS.n++;
+      eq(pendingSeeded("held initials (J)", jCtx, j0, "2027-05-17", "2027-06-06"), 5, "Acton holds the unit's Sat + Sun: five pending days (Mon - Fri), none on the unit - each seeded");
+      const k0 = GEN.generate(edgeCtx, "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 });
+      DW_RUNS.n++;
+      eq(pendingSeeded("yieldDayBefore true", edgeCtx, k0, "2027-03-22", "2027-04-11"), 2, "with the 11/11 reading on, Mon + Tue are pending and seeded (Wed yields)");
     }
     // (1) Memorial Day - his primary week of 5/24 keeps the unit
     CUR.range = "Faraz 11/11 Memorial Day (week of 2027-05-24)";
@@ -1597,6 +1615,8 @@ const DW_RUNS = { n: 0 };
     eq(LD.derivedUnitDays, [{ day: "2027-09-06", role: B, surgeonId: FIERCE, unit: "Labor Day" }], "diagnostics.derivedUnitDays names Mon 9/6 as backup");
     const lp = LAB.map((d) => LS[d].primary);
     ok(lp.every((x) => x === lp[0]), "the Labor Day unit's primary is one surgeon through its three days (or open through all): " + JSON.stringify(lp));
+    // held initials (11/12): pending implies seeded, on these four runs' input rows (none) - the counts are the derived days
+    eq([pendingSeeded("vacation", vacCtx, v, "2027-03-22", "2027-04-11"), pendingSeeded("vacation from the Monday after", monCtx, w, "2027-03-22", "2027-04-11"), pendingSeeded("Memorial Day", plainCtx, m, "2027-05-17", "2027-06-06"), pendingSeeded("Labor Day", plainCtx, l, "2027-08-23", "2027-09-12")], [3, 7, 8, 8], "derivedPending names 3 / 7 / 8 / 8 slots on those runs (Mon - Wed; the whole week; the week + the unit's Monday, twice) and each is seeded");
   }
   // The 11/11 review's findings, restated from the inputs:
   //  (a) the unit stays with him only while it IS his. Acton hand-locked as primary on Sat 5/29 + Sun 5/30: the unit is

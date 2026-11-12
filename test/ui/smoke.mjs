@@ -3081,7 +3081,9 @@ try {
       const want = `${mdOf(fwdDay)} OPEN`;
       await showMonth(Number(fwdDay.slice(0, 4)), Number(fwdDay.slice(5, 7)) - 1);
       const fwdEntries = await page.$$eval(`[data-testid=week-rows] tr[data-week="${fwdMonday}"] [data-kind="open"]`, els => els.map(e => ({ text: e.textContent.trim(), color: getComputedStyle(e).color })));
-      const fwdCell = await page.$eval(`[data-testid=cal-grid] [data-day="${fwdDay}"]`, el => ({ open: el.getAttribute("data-open"), pill: !!el.querySelector(".cal-pill.cal-open"), text: el.textContent })).catch(() => null);
+      // 11/12 (held initials): an open slot a derived week will fill reads the holder's name in a held pill instead of OPEN - the
+      // red pill is asked only of the open roles that are not held (data-open itself is unchanged)
+      const fwdCell = await page.$eval(`[data-testid=cal-grid] [data-day="${fwdDay}"]`, el => { const held = el.getAttribute("data-held") || "", open = el.getAttribute("data-open") || ""; const need = open.split("").some(l => !held.includes(l)); return { open, held, pill: need ? !!el.querySelector(".cal-pill.cal-open") && /OPEN/.test(el.textContent) : true, text: need ? el.textContent : "OPEN (held: " + held + ") " + el.textContent }; }).catch(() => null);
       const mine = fwdEntries.filter(e => e.text === want);
       if (mine.length !== fwdRoles.length) fail(`today-forward: the week row of ${mdOf(fwdMonday)} should list '${want}' once per open role (${fwdRoles.join(" + ")}) for ${fwdDay}${fwdWhy}, got ${JSON.stringify(fwdEntries.map(e => e.text))}`);
       else if (!mine.every(e => /rgb\(185, 28, 28\)/.test(e.color))) fail(`today-forward: '${want}' in the week row of ${mdOf(fwdMonday)} is not the OPEN red #B91C1C: ${mine.map(e => e.color).join(", ")}`);
@@ -3917,7 +3919,7 @@ try {
       const legend = await e3Scan(pg, ".cal-legend");
       const legendText = await pg.$eval(".cal-legend", el => el.innerText.replace(/\s+/g, " ")).catch(() => "");
       grid.noteKeys.forEach(k => e3NoteDays.add(k));
-      const lk = await pg.$$eval("[data-testid=cal-grid] .cal-lock", els => ({ n: els.length, offOpen: els.filter(e => { const ln = e.closest(".cal-line"); return !ln || !ln.querySelector(".cal-open"); }).length }));
+      const lk = await pg.$$eval("[data-testid=cal-grid] .cal-lock", els => ({ n: els.length, offOpen: els.filter(e => { const ln = e.closest(".cal-line"); return !ln || !ln.querySelector(".cal-open, .cal-held"); }).length }));   // 11/12: a locked OPEN slot a derived week will fill reads a held pill
       return { cells: cells.length, filled: cells.filter(c => c.p || c.ext).length, hits: grid.hits.concat(legend.hits), diamonds: await pg.$$eval("[data-testid=cal-grid] [data-eastvac]", els => els.length), legendText, locks: lk.n, locksOffOpen: lk.offOpen };
     };
     const e3Editor = async (pg, day) => {
@@ -4249,6 +4251,72 @@ try {
           const acts = R.kind === "surgeon" ? [] : [ed.you ? "a You chip" : "", ed.trade ? "Propose a trade" : "", ed.give ? "Give away" : "", ed.openShifts ? "See it on Open shifts" : ""].filter(Boolean);
           if (busy.length || acts.length) fail(`Day-click summary (${R.tag}), day editor ${d}: the summary shows ${busy.concat(acts).join(", ")}`);
           else ok(`Day-click summary (${R.tag}), day editor ${d}: the summary - no offers lines, no selects / Save, no keyboard hint, no filler${R.kind === "surgeon" ? (ed.you ? " (his own day: You chip" + (ed.trade && ed.give ? ", Propose a trade + Give away)" : ")") : "") : ", no action / You chip"}`);
+        }
+        // Faraz 11/12 (held initials): the first derived slot from today that this page's schedule does not hold - found by the
+        // rule's own questions on the page's rules context, never by derivedPending - reads its holder's NAME in the grid's
+        // dotted pill and in the day summary one tap away, with no East word anywhere; ?public=1 draws none and keeps OPEN.
+        // Whether such a slot exists is LIVE data (none once every derived week the cache serves is published here too):
+        // then this role's half is named as not exercised, never passed.
+        try {
+          const hf = await rp.evaluate((today) => {
+            const rootEl = document.getElementById("root");
+            const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+            if (!ck) return { error: "no React container key on #root" };
+            const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+            let ctx = null, n = 0; const stack = [current];
+            while (stack.length && !ctx && n++ < 500000) {
+              const f = stack.pop(); if (!f) continue;
+              if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+              if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+            }
+            if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+            if (typeof derivedUnitLost !== "function") return { error: "derivedUnitLost is not a page global" };
+            const add = (d, k) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + k * 86400000).toISOString().slice(0, 10);
+            for (let d = today, k = 0; k < 430; k++, d = add(d, 1)) {
+              const slot = (ctx.derivedByDay && ctx.derivedByDay[d]) || null, e = ctx.schedule[d] || null;
+              if (!slot) continue;
+              for (const [role, other, letter] of [["primary", "backup", "P"], ["backup", "primary", "B"]]) {
+                const id = slot[role];
+                if (!id) continue;
+                if (e && (e[role] || (role === "primary" && e.externalCover))) continue;
+                if (e && e[other] === id) continue;
+                if (derivedUnitLost(ctx, ctx.schedule, d, role, id)) continue;
+                return { day: d, role, letter, id, name: (ctx.rosterById[id] || {}).name || id };
+              }
+            }
+            return { none: true };
+          }, todayCentral);
+          if (hf.error) throw new Error("rules context: " + hf.error);
+          if (hf.none) console.log(`     ${T}, held initials (11/12): NOT EXERCISED - this page's rules context holds no derived slot from ${todayCentral} on that the served schedule does not hold already (every derived week the cache serves is published here too)`);
+          else {
+            await e3Month(rp, Number(hf.day.slice(0, 4)), Number(hf.day.slice(5, 7)) - 1);
+            const cell = await rp.$eval(`[data-testid=cal-grid] [data-day="${hf.day}"]`, (el) => ({ held: el.getAttribute("data-held") || "", open: el.getAttribute("data-open") || "", title: el.getAttribute("title") || "", pills: Array.from(el.querySelectorAll("[data-testid=held-slot]")).map(p => ({ id: p.getAttribute("data-held"), name: (p.querySelector(".cal-name") || {}).textContent || "", title: p.getAttribute("title") || "" })) }));
+            const gridHeld = await rp.$$eval("[data-testid=cal-grid] [data-testid=held-slot]", els => els.length);
+            const legendH = await rp.$eval("[data-testid=legend-held]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+            if (R.kind === "public") {
+              if (cell.held || cell.pills.length || gridHeld || legendH !== null) fail(`${T}, held initials (11/12): ?public=1 shows the published schedule only and must draw no held name - ${hf.day}: data-held '${cell.held}', ${gridHeld} held pill(s) in the grid, legend ${JSON.stringify(legendH)}`);
+              else if (!cell.open.includes(hf.letter)) fail(`${T}, held initials (11/12): ${hf.day} ${hf.role} should still read OPEN on ?public=1 (data-open '${cell.open}')`);
+              else ok(`${T}, held initials (11/12): no held pill and no legend line - ${hf.day} ${hf.role} (derived for ${hf.name} in the rules) reads OPEN here`);
+            } else {
+              const pill = cell.pills.find(p => p.id === hf.id);
+              await rp.click(`[data-day="${hf.day}"]`);
+              await rp.waitForSelector("[data-testid=day-editor]", { timeout: 5000 });
+              const sum = await rp.evaluate((role) => { const h = document.querySelector(`[data-testid=day-editor] [data-testid=editor-${role}-held]`); return { held: h ? h.textContent.replace(/\s+/g, " ").trim() : null, heldId: h ? h.getAttribute("data-held") : null, open: !!document.querySelector(`[data-testid=day-editor] [data-testid=editor-${role}-open]`) }; }, hf.role);
+              await rp.keyboard.press("Escape");
+              await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+              if (!cell.held.includes(hf.letter) || !pill || pill.name !== hf.name) fail(`${T}, held initials (11/12): ${hf.day} ${hf.role} should read '${hf.name}' in a held pill (data-held '${cell.held}', pills ${JSON.stringify(cell.pills)})`);
+              else if (pill.title !== "Held for " + hf.name + " - set when the next schedule is made") fail(`${T}, held initials (11/12): the pill's title reads '${pill.title}'`);
+              else if (/East|Davenport|derived|feed/i.test(pill.title + " " + cell.title + " " + (legendH || ""))) fail(`${T}, held initials (11/12): an East word reached a non-scheduler - pill '${pill.title}', cell '${cell.title}', legend '${legendH}'`);
+              else if (!cell.title.includes(hf.letter + " held for " + hf.name)) fail(`${T}, held initials (11/12): the cell's hover should say '${hf.letter} held for ${hf.name}': ${cell.title}`);
+              else if (!cell.open.includes(hf.letter)) fail(`${T}, held initials (11/12): data-open '${cell.open}' lost the slot - OPEN must stay the schedule's truth`);
+              else if (!/ = held for the next schedule \(not published yet\)$/.test(legendH || "")) fail(`${T}, held initials (11/12): the legend line is missing: ${JSON.stringify(legendH)}`);
+              else if (sum.held !== hf.name + " (held - set when the next schedule is made)" || sum.heldId !== hf.id || sum.open) fail(`${T}, held initials (11/12): the day summary of ${hf.day} should word the ${hf.role} as '${hf.name} (held - set when the next schedule is made)' and not as OPEN - ${JSON.stringify(sum)}`);
+              else ok(`${T}, held initials (11/12): ${hf.day} ${hf.role} - the grid's dotted pill and the day summary read '${hf.name}' as held, no East word in the pill's title, the cell's hover or the legend; data-open keeps the slot`);
+            }
+          }
+        } catch (e) {
+          fail(`${T}, held initials (11/12): ` + errLine(e));
+          if (await rp.$("[data-testid=day-editor]")) { await rp.keyboard.press("Escape").catch(() => {}); await rp.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {}); }
         }
         // Day-click summary (9/27): a surgeon on his OWN day (an upcoming day the served rows give him this month or in the
         // next two - 11/2; else his earliest past day this month) - the You chip on his row, Propose a trade +
@@ -10394,6 +10462,7 @@ try {
                   if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
                 }
                 if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+                if (typeof derivedUnitLost !== "function") return { error: "derivedUnitLost is not a page global" };
                 const add = (d, k) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + k * 86400000).toISOString().slice(0, 10);
                 const days = {}, who = {};
                 for (let d = from; d <= to; d = add(d, 1)) {
@@ -10403,7 +10472,7 @@ try {
                     if (!id || d < today) return;
                     if (e && (e[role] || (role === "primary" && e.externalCover))) return;
                     if (e && e[other] === id) return;
-                    if (typeof derivedUnitLost === "function" && derivedUnitLost(ctx, ctx.schedule, d, role, id)) return;
+                    if (derivedUnitLost(ctx, ctx.schedule, d, role, id)) return;
                     out[letter] = id; who[id] = { name: (ctx.rosterById[id] || {}).name || id, code: (ctx.rosterById[id] || {}).code || "" };
                   });
                   days[d] = out;
@@ -10416,12 +10485,13 @@ try {
               const nB = week(LM1).filter(d => heldWant.days[d].B).length, nP = week(LM2).filter(d => heldWant.days[d].P).length;
               const hMonths = Array.from(new Set(hDays.map(d => d.slice(0, 7))));
               // (1) the calendar, every month the two weeks touch
-              const calGot = {}; const legends = {};
+              const calGot = {}; const legends = {}, gridHeldN = {};
               for (const ym of hMonths) {
                 await showMonth(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1);
                 const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), held: e.getAttribute("data-held"), open: e.getAttribute("data-open") || "", title: e.getAttribute("title") || "",
                   pills: Array.from(e.querySelectorAll(".cal-line")).map(l => { const p = l.querySelector("[data-testid=held-slot]"), r = l.querySelector(".cal-role"); if (!p) return null; const cs = getComputedStyle(p); return { role: r ? r.textContent.trim() : "", id: p.getAttribute("data-held"), name: (p.querySelector(".cal-name") || {}).textContent || "", code: (p.querySelector(".cal-code") || {}).textContent || "", title: p.getAttribute("title") || "", border: cs.borderTopStyle, bg: cs.backgroundColor }; }).filter(Boolean) })));
                 cells.forEach(c => { if (c.day && c.day.slice(0, 7) === ym && heldWant.days[c.day]) calGot[c.day] = c; });
+                gridHeldN[ym] = cells.filter(c => c.held).length;
                 if (ym === LM1.slice(0, 7)) await page.locator("[data-testid=cal-grid]").screenshot({ path: path.join(OUT, "calendar-held.png") }).catch(() => {});
                 legends[ym] = await page.$eval("[data-testid=legend-held]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
               }
@@ -10437,12 +10507,19 @@ try {
                   if (!p) calBad.push(d + " " + letter + ": no held pill on that line");
                   else if (p.id !== id || p.name !== me.name || p.code !== me.code) calBad.push(d + " " + letter + ": the pill names " + JSON.stringify([p.id, p.name, p.code]) + ", wanted " + JSON.stringify([id, me.name, me.code]));
                   else if (p.border !== "dotted" || !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(p.bg)) calBad.push(d + " " + letter + ": the pill should be hollow and dotted, saw border " + p.border + " / background " + p.bg);
-                  else if (p.title !== "Held for " + me.name + ": East week - Silvis " + role + " (derived from the Davenport feed), written as a lock at the next Generate") calBad.push(d + " " + letter + ": the scheduler's title reads '" + p.title + "'");
+                  else if (p.title !== "Held for " + me.name + " - set when the next schedule is made" || /East|Davenport|derived|feed/i.test(p.title + " " + c.title)) calBad.push(d + " " + letter + ": the pill's title is one sentence for everyone and the grid names no feed (Item E2), the scheduler's included - pill '" + p.title + "', cell '" + c.title + "'");
                   else if (!c.open.includes(letter)) calBad.push(d + " " + letter + ": data-open '" + c.open + "' lost the slot - OPEN must stay the schedule's truth");
                   else if (!c.title.includes(letter + " held for " + me.name)) calBad.push(d + " " + letter + ": the cell's hover title should say '" + letter + " held for " + me.name + "': " + c.title);
                 });
               });
-              const legendBad = hMonths.filter(ym => { const any = hDays.some(d => d.slice(0, 7) === ym && hLetters(d)); return any ? !/ = held for the next schedule \(not published yet\)$/.test(legends[ym] || "") : legends[ym] !== null; });
+              // the legend line follows the GRID the page draws for that month (its leading and trailing cells and the third listed
+              // week included - the review of 11/12: judged by the two weeks' own days it failed falsely when a week started a month);
+              // and a month that draws none - a past one: held names start today - carries no line
+              await showMonth(Number(todayCentral.slice(0, 4)) - 1, 0);
+              const pastHeld = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.filter(e => e.getAttribute("data-held")).length);
+              const pastLegend = await page.$eval("[data-testid=legend-held]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+              const legendBad = hMonths.filter(ym => (gridHeldN[ym] > 0 ? !/ = held for the next schedule \(not published yet\)$/.test(legends[ym] || "") : legends[ym] !== null));
+              if (pastHeld || pastLegend !== null) legendBad.push(`January ${Number(todayCentral.slice(0, 4)) - 1} (a past month: ${pastHeld} held cell(s), legend ${JSON.stringify(pastLegend)})`);
               // (2) the offer painter (the scheduler's own, from My schedule): the P / B line of the same days
               await clickTab(page, "myschedule");
               await page.click("[data-testid=paint-offers]");
@@ -10478,7 +10555,7 @@ try {
               else if (legendBad.length) fail(`Held initials (11/12, calendar): the legend line 'held for the next schedule (not published yet)' should show exactly in the months that draw a held pill - wrong in ${legendBad.join(", ")}: ${JSON.stringify(legends)}`);
               else if (ofpBad.length) fail(`Held initials (11/12, painter): ${ofpBad.length} day(s) differ - ${ofpBad.slice(0, 4).join("; ")}`);
               else if (heldWrites.length) fail(`Held initials (11/12): looking wrote something - ${heldWrites.map(w => w.method + " " + w.path).join(", ")}`);
-              else ok(`Held initials (11/12): with the listed weeks derived and no schedule row there, the calendar draws a hollow dotted pill '${heldWant.who[heldWant.days[LM1].B].name}' on the B line of ${nB} day(s) of the week of ${LM1} and on the P line of ${nP} day(s) of the week of ${LM2} (${hDays.length} days ${hDays[0]}..${hDays[hDays.length - 1]} compared with the rules' pending derived slots; data-open keeps the slot; the scheduler's title names the East week; the legend line shows in ${hMonths.filter(ym => legends[ym]).join(", ")}); the offer painter's P / B line reads '<name> (held)' on the same days with a title that names no feed; nothing written`);
+              else ok(`Held initials (11/12): with the listed weeks derived and no schedule row there, the calendar draws a hollow dotted pill '${(Object.values(heldWant.who)[0] || {}).name}' on the B line of ${nB} day(s) of the week of ${LM1} and on the P line of ${nP} day(s) of the week of ${LM2} (${hDays.length} days ${hDays[0]}..${hDays[hDays.length - 1]} compared with the rules' pending derived slots; data-open keeps the slot; one title for everyone, no East word on the grid; the legend line shows exactly in the months whose grid draws a pill - ${hMonths.filter(ym => legends[ym]).join(", ")} - and not in a past month); the offer painter's P / B line reads '<name> (held)' on the same days; nothing written`);
               await clickTab(page, "setup");
               await openCard("setup_east");
             } catch (e) {
