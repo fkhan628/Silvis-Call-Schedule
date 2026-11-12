@@ -3393,7 +3393,9 @@ window is Part B's (section 24.5); the Davenport side is never written.
 
 *Faraz's decision of 2026-11-11 (Prompt 34): "Silvis reads Fierce's Davenport weeks from the DSG app, for the weeks Davenport
 hasn't published." Built 11/11 on branch `feat/fierce-weeks-from-dsg`; the client and the rules ship with the merge, the server
-function's v3 is prepared and waits for its deploy (26.6). Rules doc: section 3 (Fierce) and section 8 item 29.*
+function's v3 is prepared and waits for its deploy (26.6). Merged 11/12 (the client live as 2026.11.12a); the same day
+Faraz answered the day-before-a-vacation reading (26.5 item 2; branch `fix/derived-day-before`). Rules doc: section 3
+(Fierce) and section 8 item 29.*
 
 ### 26.1 The source - two lists, one fact
 
@@ -3515,27 +3517,38 @@ conflict reports and the UI see one picture:
    rule's own outcome, as before 11/11; rules doc section 8 item 29 (l)). With only PART of the unit's days of his week held
    by someone else the unit is not lost: the added day stays his, and a lock of his on it stands whatever the rest holds
    (locks never move) - the generator's warning names the split.
-2. **"Don't put him on if he has a vacation listed."** A derived lock yields on a day the vacation rules refuse him for that
-   role - `time-off`, and for a trailing-edge role (`ctx.trailingEdgeRoles` - read once, in `buildContext`: a value that is
-   no list reads as `["primary"]`, with a warning; the planner and the server function read it the same way, without
-   one) `day-before-vacation`; a holiday unit yields
-   whole (`holiday-unit` on the days the vacation itself does not touch). The day leaves `P.derived` and `ctx.derivedByDay`
+2. **"Don't put him on if he has a vacation listed."** A derived lock yields on a day of his own vacation (`time-off`); a
+   holiday unit yields
+   whole (`holiday-unit` on the days the vacation itself does not touch). **11/12 (Faraz: "he can be primary at Silvis that
+   week now" - the vacation moved to start the Monday after his week, and Sunday stays his): the day BEFORE a vacation does
+   not yield.** The derived lock stands there; `eligibility` still names `day-before-vacation` for him on that day, so the
+   generator - which seeds a derived lock whatever his own reasons - lists it in `diagnostics.lockViolations` (lock
+   `derived`) and adds one warning per derived week and role ("vacation: the derived week of ... keeps him on ..., the day
+   before his vacation - a derived week gives way only on the vacation's own days"). The 11/11 reading - the day before
+   yields too, `day-before-vacation`, for a trailing-edge role (`ctx.trailingEdgeRoles` - read once, in `buildContext`: a
+   value that is no list reads as `["primary"]`, with a warning; the planner and the server function read it the same way,
+   without one) - is the data switch `yieldDayBefore`. A yielded day leaves `P.derived` and `ctx.derivedByDay`
    (`ctx.derivedVacationYields`), so it is filled like any other day; `P.derivedYield` keeps the role, and `eligibility`
    still keeps an East primary week out of Silvis primary there (`east-busy`, as on an overridden derived backup day).
-   `helpers.planHolidays` reads the same: a vacation on a unit of his derived week no longer leaves the unit open. The
+   `helpers.planHolidays` reads the same: a vacation on a unit of his derived week no longer leaves the unit open, and
+   (11/12) a unit whose last day is the day before his vacation stays his - the planner sets his own day-before refusal
+   aside for the slot his week gives him and says so in a warning. The
    unit-whole reading is taken per role BEFORE the two-roles check, so a unit two derived weeks meet on in different roles
    yields in both when a vacation touches it (the 11/11 review). Without a vacation such a unit keeps each week's days, with
    a warning, and has slots nobody can hold (the engine's reading before 11/11; the planner reads "primary only") - none in the
    2027 lists, an open question in the rules doc (section 8 item 29 (j)).
 
-Both are data - `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation }`, on unless exactly `false` (the seed
-carries them; a blob without the key reads as on). The generator reports `diagnostics.derivedUnitDays` and
+They are data - `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation, yieldDayBefore }`: the first two on
+unless exactly `false`, `yieldDayBefore` off unless exactly `true` (the seed carries all three; a blob without the key
+reads as these defaults; `yieldDayBefore` adds to `yieldToVacation` and does nothing without it). The generator reports `diagnostics.derivedUnitDays` and
 `diagnostics.derivedVacationYields` with ONE warning per unit / per yielding week - each stating the OUTCOME as read from
 the finished schedule: the unit kept with him ("stays with", only when every added day is his and no unit day of his week is
 someone else's); or not kept whole, with what became of each added day (his; held by a named surgeon or an outside cover;
 left open; or his while named days of the unit in his week are not - a split to settle by hand); a held slot that keeps him
-on a vacation day is said so - and `test/generator-regression.js` restates both from the seed (80 runs: the week of
-3/29/2027 over a vacation, Memorial Day, Labor Day as backup, the review's cases - the unit held by someone else, a lock on
+on a vacation day is said so, and so is the day before a vacation his derived week keeps him on (11/12) - and
+`test/generator-regression.js` restates them from the seed (90 runs: the week of 3/29/2027 over a vacation - the day
+before it kept, as his one lock violation - the same week with the vacation starting the Monday after, the 11/11 reading
+switched on as data, Memorial Day, Labor Day as backup, the review's cases - the unit held by someone else, a lock on
 the added day, standing locks on his vacation - the re-check's - the holder unable to take the added day, an outside cover
 on the unit's days or on the added day itself, he himself locked into the other role, a unit published to him and then
 given away - and a unit held in part, or added by a week that starts on the holiday).

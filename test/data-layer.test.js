@@ -15387,8 +15387,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const say = (c, day) => lines(c, { eastMeta: { s5: { derivedWeeks: true } } }, day, () => "Fierce").map(l => l.tone + " " + l.text);
       assert.deepStrictEqual(say(ctx, "2027-05-27"), ["busy Fierce: East week -> Silvis primary (derived)"], "a day of the East week");
       assert.deepStrictEqual(say(ctx, "2027-05-31"), ["busy Fierce: East week -> Silvis primary (derived) - a day its holiday unit adds, outside the East week"], "Memorial Day Monday, the day the unit adds");
-      assert.deepStrictEqual(say(ctx, "2027-03-30"), ["busy Fierce: East week -> Silvis primary (derived)"], "Tue 3/30 stays derived");
-      ["2027-03-31", "2027-04-01", "2027-04-04"].forEach(d => assert.deepStrictEqual(say(ctx, d), ["warn Fierce: on East call this week (the derived Silvis primary yields to his vacation - the day is filled like any other)"], d + ": the lock yields to his vacation - said so"));
+      ["2027-03-30", "2027-03-31"].forEach(d => assert.deepStrictEqual(say(ctx, d), ["busy Fierce: East week -> Silvis primary (derived)"], d + " stays derived (Wed 3/31 is the day before his vacation - Faraz 11/12: it does not move the week)"));
+      ["2027-04-01", "2027-04-04"].forEach(d => assert.deepStrictEqual(say(ctx, d), ["warn Fierce: on East call this week (the derived Silvis primary yields to his vacation - the day is filled like any other)"], d + ": the lock yields to his vacation - said so"));
+      // ...and with the 11/11 reading switched on as data (yieldDayBefore exactly true) the day before says so again
+      const grOn = Object.assign({}, seedJ.groupRules, { eastFeed: Object.assign({}, seedJ.groupRules.eastFeed, { derivedWeeks: Object.assign({}, seedJ.groupRules.eastFeed.derivedWeeks, { yieldDayBefore: true }) }) });
+      const ctxOn = R34.buildContext(SA34.seedToContextInput(seedJ, { schedule: {}, eastBusyDays: {}, groupRules: grOn, eastDerived: [wk("2027-03-29", "primary")], timeOffRows: [{ person_id: "s5", start_date: "2027-04-01", end_date: "2027-04-07" }] }));
+      assert.deepStrictEqual(say(ctxOn, "2027-03-31"), ["warn Fierce: on East call this week (the derived Silvis primary yields to his vacation - the day is filled like any other)"], "yieldDayBefore true: Wed 3/31 yields and says so");
       assert.deepStrictEqual(say(ctx, "2027-06-02"), ["ok Fierce: no East week"], "a day outside every East week");
       const early = R34.buildContext(SA34.seedToContextInput(seedJ, { schedule: {}, eastBusyDays: {}, eastDerived: [wk("2026-10-26", "backup")] }));
       assert.deepStrictEqual(say(early, "2026-10-28"), ["warn Fierce: on East call this week (not derived - before the derive-from date)"], "a week before his deriveFrom (11/2/2026) still reads so");
@@ -15420,7 +15424,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const R34b = require(path.join(ROOT, "rules.js"));
       Array.from(used).forEach(k => assert.strictEqual(typeof R34b[k], "function", "rules.js does not export " + k + " (the Node path)"));
     });
-    check("P34 docs: the rules doc's Fierce section carries the three 11/11 entries (the DSG lists and their precedence, 'Give Fierce Memorial Day', 'Don't put him on if he has a vacation listed') and section 8 item 29 records the decision and the readings taken; the build guide's section 7 points at section 26 and section 26 has its seven parts in order; the seed carries the two switches, both on", () => {
+    check("P34 docs: the rules doc's Fierce section carries the three 11/11 entries (the DSG lists and their precedence, 'Give Fierce Memorial Day', 'Don't put him on if he has a vacation listed') and the 11/12 one (the day before a vacation does not move a derived week), and section 8 item 29 records the decision, the readings taken and the 11/12 answer; the build guide's section 7 points at section 26 and section 26 has its seven parts in order; the seed carries the three switches (the day-before yield off)", () => {
       const rules = read34("docs", "SILVIS-CALL-RULES.md"), guide = read34("docs", "SILVIS-BUILD-GUIDE.md"), seed34 = JSON.parse(read34("docs", "silvis-seed.json"));
       const flat = (t) => t.replace(/\s+/g, " ");
       const fi = rules.indexOf("### Fierce (s5)"), fj = rules.indexOf("### Sarkar (s6)");
@@ -15429,12 +15433,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       ["11/11 (Prompt 34, Faraz's decision): for the weeks Davenport has not published, his weeks come from the Davenport (DSG) app's two lists.", "`backupMondays` (Fierce East primary → Silvis **backup** all week)", "`fierceBackup` (Fierce East backup → Silvis **primary** all week)",
         "Precedence: a published Davenport week (flagged or not) → the DSG lists → Setup's stated weeks", "`deriveFrom` (11/2/2026) still applies", "keeps **both** cached lists as they are", "(published / DSG list / stated)",
         "\"Give Fierce Memorial Day.\"", "a holiday unit with a day in a derived week belongs to the derived surgeon in that role on all its days", "`groupRules.eastFeed.derivedWeeks.keepHolidayUnit`",
-        "\"Don't put him on if he has a vacation listed.\"", "a derived lock yields on a day the vacation rules refuse the derived surgeon for that role", "`groupRules.eastFeed.derivedWeeks.yieldToVacation`"].forEach(s => assert.ok(fierce.includes(s), "the Fierce section: " + s));
+        "\"Don't put him on if he has a vacation listed.\"", "a derived lock yields on a day of the derived surgeon's own vacation", "`groupRules.eastFeed.derivedWeeks.yieldToVacation`",
+        "11/12 (Faraz): the day before a vacation does not move a derived week.", "a derived lock yields only on the vacation's own days; on the day before a vacation the lock stands.", "`groupRules.eastFeed.derivedWeeks.yieldDayBefore`"].forEach(s => assert.ok(fierce.includes(s), "the Fierce section: " + s));
       const s8 = flat(rules.slice(rules.indexOf("## 8. Answered")));
       const i29 = s8.indexOf("29. **Fierce's weeks from the DSG lists; the Memorial Day unit; his vacation (Faraz 11/11, Prompt 34)");
       assert.ok(i29 > s8.indexOf("28. **Sarkar's November and December weeks") && s8.indexOf("28. **Sarkar's November and December weeks") > 0, "item 29 follows item 28");
       const item = s8.slice(i29);
-      ["no schema change", "`data.eastLists = { eastPrimary, eastBackup, readAt, dropped }`", "The read guard - the rule chosen", "all 60 of its published weeks matched", "Reading taken - a Monday in both lists", "confirm the general reading", "Wed 3/31 yields too",
+      ["no schema change", "`data.eastLists = { eastPrimary, eastBackup, readAt, dropped }`", "The read guard - the rule chosen", "all 60 of its published weeks matched", "Reading taken - a Monday in both lists", "confirm the general reading", "the day before a vacation: ANSWERED 11/12.", "So a derived week yields only on the vacation's own days", "Khan 36 / 36; Burchett 31 / 34; Acton 34 / 35; Philip 36 / 32; Fierce 37 / 41",
         "Open slots 4 → 4", "Khan 35 / 35 → 35 / 35; Burchett 34 / 34 → 33 / 32; Acton 36 / 37 → 34 / 36; Philip 35 / 35 → 37 / 33; Fierce 34 / 37 → 35 / 42", "the published schedule ends 1/3/2027", "`east-feed-refresh` v3 is prepared and waits for Faraz's deploy"]
         .forEach(s => assert.ok(item.includes(s), "item 29: " + s));
       const s7 = guide.slice(guide.indexOf("\n## 7. East feed"), guide.indexOf("\n## 8. UI"));
@@ -15443,7 +15448,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(guide.indexOf("\n## 26. Fierce's weeks from the DSG lists (Faraz 11/11; Prompt 34)") > 0 && s26.length > 2000, "section 26");
       ["### 26.1 The source - two lists, one fact", "### 26.2 The cache - no schema change", "### 26.3 The read guard (`eastListsGuard`) - the rule chosen", "### 26.4 Precedence, warnings and Setup", "### 26.5 Faraz's two calls on the preview (11/11) - `rules.js` `rdDerivedUnitsAndVacations`", "### 26.6 The server function - `east-feed-refresh` v3 (prepared; the deploy is Faraz's step)", "### 26.7 Tests, the preview and the ship"]
         .reduce((at, h) => { const k = s26.indexOf("\n" + h); assert.ok(k > at, "sub-heading in order: " + h); return k; }, -1);
-      assert.deepStrictEqual([seed34.groupRules.eastFeed.derivedWeeks.keepHolidayUnit, seed34.groupRules.eastFeed.derivedWeeks.yieldToVacation], [true, true], "the seed carries both switches, on");
+      assert.deepStrictEqual([seed34.groupRules.eastFeed.derivedWeeks.keepHolidayUnit, seed34.groupRules.eastFeed.derivedWeeks.yieldToVacation, seed34.groupRules.eastFeed.derivedWeeks.yieldDayBefore], [true, true, false], "the seed carries the three switches: the two 11/11 readings on, the day-before yield off (Faraz 11/12)");
     });
   }
   console.log("\n[P31A5] Prompt 31 Part A (A5): the docs - guide section 25 and its pointers, the rules doc, ONBOARDING, the edge-functions README, HISTORY");

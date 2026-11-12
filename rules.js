@@ -41,11 +41,13 @@
 //                 buildContext): a holiday unit with a day in a derived week is
 //                 the derived surgeon's in that role on ALL its days (the days
 //                 outside the week become derived days - ctx.derivedUnitDays),
-//                 and a derived lock YIELDS on a day his own vacation refuses
-//                 him for that role (the day itself; for a trailing-edge role
-//                 the day before it; a holiday unit yields whole -
-//                 ctx.derivedVacationYields). A yielded day is filled like any
-//                 other day.
+//                 and a derived lock YIELDS on a day of his own vacation (a
+//                 holiday unit yields whole - ctx.derivedVacationYields); a
+//                 yielded day is filled like any other day. Faraz 11/12: the
+//                 day BEFORE a vacation does not yield - the lock stands there
+//                 (the 11/11 reading, the day before yielding too for a
+//                 trailing-edge role, is data:
+//                 groupRules.eastFeed.derivedWeeks.yieldDayBefore exactly true).
 //   eastBusyDays  { [surgeonId]: Array | Set | { 'YYYY-MM-DD': truthy } |
 //                 { busy: Set, reasons } } - the last is deriveKhanBusyDays()'s
 //                 own return shape.
@@ -1215,28 +1217,34 @@ function buildContext(input) {
 //      day keeps the unit days of his week behind it (ctx.derivedUnitBase), and when every one of them is held by
 //      someone else in that role the added day counts as overridden - derivedUnitLost, read LIVE from the schedule by
 //      rdDerivedOverridden and by the generator's lock seeding (a unit Acton holds on Sat + Sun is Acton's on Monday).
-//  (2) "Don't put him on if he has a vacation listed." A derived lock YIELDS on a day the vacation rules refuse him for
-//      that role: the vacation day itself (time-off, a derived East vacation included), and for a trailing-edge role
-//      (ctx.trailingEdgeRoles - primary) the day before it. A holiday unit is one piece: refused on ANY of its days, the
+//  (2) "Don't put him on if he has a vacation listed." A derived lock YIELDS on a day of his own vacation (time-off, a
+//      derived East vacation included). Faraz 11/12, after he moved that vacation to start the Monday after the week
+//      ("he can be primary at Silvis that week now"): the day BEFORE a vacation does NOT yield - the derived lock stands
+//      there (eligibility still names 'day-before-vacation' for him; the generator seeds the lock and lists the day in
+//      lockViolations, with one warning). The 11/11 reading - the day before yields too, for a trailing-edge role
+//      (ctx.trailingEdgeRoles - primary) - is data: yieldDayBefore, off unless exactly true. A holiday unit is one
+//      piece: refused on ANY of its days, the
 //      lock yields on all of them (reason 'holiday-unit' on the days the vacation itself does not touch) - read per
 //      role BEFORE the two-roles check below, so a unit two derived weeks meet on in different roles yields in both
 //      when a vacation touches it (the 11/11 review). The day leaves
 //      P.derived and ctx.derivedByDay, so it is filled like any other day; P.derivedYield keeps the role that yielded -
 //      he is still on East call that week (eligibility keeps an East PRIMARY week out of Silvis primary there).
-// ctx.derivedVacationYields: [{ day, role, surgeonId, reason: 'time-off' | 'day-before-vacation' | 'holiday-unit', unit }]
+// ctx.derivedVacationYields: [{ day, role, surgeonId, reason: 'time-off' | 'holiday-unit' | 'day-before-vacation' (only with yieldDayBefore), unit }]
 // by surgeon (roster order), then day. Needs P.vacation / P.dayBeforeVacation and ctx.holidayByDay (all set above).
-// Both readings are DATA (groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation } - on unless the key is
-// exactly false; no Setup field, the group rules' Edit-as-JSON): keepHolidayUnit false leaves a unit's days outside the
-// week alone (the reading before 11/11: the unit's one-holder rule and his run limit decide), yieldToVacation false keeps
-// the lock over his vacation (the lock stands; the generator lists the days as lockViolations).
+// The readings are DATA (groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation, yieldDayBefore }; no Setup
+// field, the group rules' Edit-as-JSON). keepHolidayUnit and yieldToVacation are on unless the key is exactly false:
+// keepHolidayUnit false leaves a unit's days outside the week alone (the reading before 11/11: the unit's one-holder rule
+// and his run limit decide), yieldToVacation false keeps the lock over his vacation (the lock stands; the generator
+// lists the days as lockViolations). yieldDayBefore is OFF unless exactly true (Faraz 11/12): on, the day before a
+// vacation yields too for a trailing-edge role - the 11/11 reading; it adds to yieldToVacation and does nothing without it.
 function rdDerivedUnitsAndVacations(ctx) {
   var dwRules = (ctx.groupRules && ctx.groupRules.eastFeed && ctx.groupRules.eastFeed.derivedWeeks) || {};
-  var keepUnit = dwRules.keepHolidayUnit !== false, yieldVac = dwRules.yieldToVacation !== false;
+  var keepUnit = dwRules.keepHolidayUnit !== false, yieldVac = dwRules.yieldToVacation !== false, yieldEdge = dwRules.yieldDayBefore === true;
   var trailing = ctx.trailingEdgeRoles;   // always a list: buildContext reads a non-list as ["primary"], with a warning
   function refusal(P, d, role) {
     if (!yieldVac) return null;
     if (P.vacation.has(d)) return "time-off";
-    if (P.dayBeforeVacation.has(d) && trailing.indexOf(role) >= 0) return "day-before-vacation";
+    if (yieldEdge && P.dayBeforeVacation.has(d) && trailing.indexOf(role) >= 0) return "day-before-vacation";
     return null;
   }
   function yieldDay(P, id, d, role, reason, unit) {

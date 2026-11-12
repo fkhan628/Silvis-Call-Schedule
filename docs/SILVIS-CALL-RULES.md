@@ -391,13 +391,22 @@ decides the Trauma Director role.
   `diagnostics.derivedUnitDays` and the generator's warnings name the added days and what became of each. Data:
   `groupRules.eastFeed.derivedWeeks.keepHolidayUnit` (on unless exactly `false`).
 - ⟶ **11/11 (Faraz, on the same preview): "Don't put him on if he has a vacation listed."** His primary week of 3/29/2027
-  runs into a vacation of his. **Rule (general): a derived lock yields on a day the vacation rules refuse the
-  derived surgeon for that role** — the vacation day itself and, for primary, the day before it (the trailing-edge rule of
-  §1) — and that day is filled like any other day; a holiday unit yields whole (refused on any of its days, the lock yields
-  on all of them, so the unit goes to one other surgeon). In the week of 3/29 he holds Mon 3/29 and Tue 3/30; Wed 3/31 –
-  Sun 4/4 go to the pool. Before, the lock placed him over the vacation and the preview listed five lock violations.
-  `diagnostics.derivedVacationYields` and one warning per week name the days; the holiday plan reads the same (§5 item 5).
-  Data: `groupRules.eastFeed.derivedWeeks.yieldToVacation` (on unless exactly `false`).
+  ran into a vacation of his. **Rule (general): a derived lock yields on a day of the derived surgeon's own vacation**,
+  and that day is filled like any other day; a holiday unit yields whole (a vacation day on any of its days, the lock
+  yields on all of them, so the unit goes to one other surgeon). Before, the lock placed him over the vacation and the
+  preview listed five lock violations. `diagnostics.derivedVacationYields` and one warning per week name the days; the
+  holiday plan reads the same (§5 item 5). Data: `groupRules.eastFeed.derivedWeeks.yieldToVacation` (on unless exactly
+  `false`).
+- ⟶ **11/12 (Faraz): the day before a vacation does not move a derived week.** He moved that vacation to start the Monday
+  after the week of 3/29 ("he can be primary at Silvis that week now"), and Sunday 4/4, the day before it, stays his. The
+  11/11 build had read "a vacation listed" with the vacation's trailing edge (§1: no primary the day before a vacation), so
+  it still took that Sunday off him - and before the move, the Wednesday before the vacation's first day. **Rule (general):
+  a derived lock yields only on the vacation's own days; on the day before a vacation the lock stands.** The day-before
+  rule itself is unchanged for everyone and for every other day of his, and on that day it still names itself: a Generate
+  keeps him there, lists the day under Lock violations ("vacation starts the next morning") and adds one line saying his
+  derived week keeps him on it. A holiday unit whose last day is the day before his vacation stays his too (the yearly
+  holiday plan names him for it, with a warning). Data: `groupRules.eastFeed.derivedWeeks.yieldDayBefore` — off unless
+  exactly `true`, which brings back the 11/11 reading (the day before yields too, for a trailing-edge role).
 - **Outside those weeks he is in the pool and can be primary**, under his weekday pattern (via Faraz, 9/21):
 
   | Day | Where he is | Silvis eligibility |
@@ -1373,8 +1382,8 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     that week, because Burchett offered Mon 1/11 and wins it on his offered bonus. Her own offers for 1/11 primary, 1/12
     primary, 1/13 backup and 1/14 primary (Setup > Periods > Enter for Sarkar) repeat the November shape in most preview runs
     (33 of 36); locking those four days before the Generate repeats it every time - Faraz decides.
-29. **Fierce's weeks from the DSG lists; the Memorial Day unit; his vacation (Faraz 11/11, Prompt 34) — DECIDED 11/11; the
-    readings taken, confirm.** (a) **The source and the precedence** are Faraz's decision (Prompt 34): a published Davenport
+29. **Fierce's weeks from the DSG lists; the Memorial Day unit; his vacation (Faraz 11/11, Prompt 34) — DECIDED 11/11; (f)
+    ANSWERED 11/12; the other readings taken, confirm.** (a) **The source and the precedence** are Faraz's decision (Prompt 34): a published Davenport
     week, then the Davenport (DSG) app's two lists, then Setup's stated weeks; `deriveFrom` applies; the stated weeks (all
     published or past now) stay as the manual override for a week the lists do not name. (b) **Where the lists are cached -
     no schema change:** in the `east_feed` payload of the weeks each refresh writes (`data.eastLists = { eastPrimary,
@@ -1399,12 +1408,17 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     → East feed; **confirm**. (e) **"Give Fierce Memorial Day"** is read as the general rule of §3 (a holiday unit stays
     with the derived surgeon on all its days - the holiday plan's rule since 9/30), not as a one-off lock on 5/31/2027;
     **confirm the general reading** - its other case in 2027 is Labor Day Monday 9/6, as backup, after his backup week of
-    8/30. (f) **"Don't put him on if he has a vacation listed"** is read with the vacation's own trailing edge - the day
-    before a vacation is a primary rule (§1), so Wed 3/31 yields too, and he may still be backup that day under his
-    ordinary rules - and with a holiday unit yielding whole; **confirm**. His East backup call for the rest of that week
-    is Davenport's to cover. Both (e) and (f) are data: `groupRules.eastFeed.derivedWeeks { keepHolidayUnit,
-    yieldToVacation }`, on unless exactly `false` (Setup → Rules → Edit group rules as JSON; no key in the live blob
-    reads as on). (g) **The preview** (read-only: `scripts/preview-generate.js` 2027-01-04 → 2027-06-30, seed 7, bestOf
+    8/30. (f) **"Don't put him on if he has a vacation listed" - the day before a vacation: ANSWERED 11/12.** The 11/11
+    build read it with the vacation's own trailing edge (the day before a vacation is a primary rule, §1), so on that
+    preview Wed 3/31 yielded too. On 11/12 Faraz moved the vacation to start the Monday after the week ("he can be primary
+    at Silvis that week now") and, asked whether Sunday 4/4 - the day before it - stays his: **yes**. So a derived week
+    yields only on the vacation's own days; on the day before, the lock stands and a Generate lists it as a lock
+    violation, with a line in words (§3). A holiday unit still yields whole when a vacation day falls on it. **Reading
+    taken, confirm:** a holiday unit whose LAST day is the day before his vacation stays his whole - the day the unit
+    adds included (no such case in the 2027 lists). His East call on a yielded day is Davenport's to cover. (e) and (f)
+    are data: `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation, yieldDayBefore }` - the first two on
+    unless exactly `false`, the third off unless exactly `true` (the 11/11 reading); Setup → Rules → Edit group rules as
+    JSON; no key in the live blob reads as these defaults. (g) **The preview** (read-only: `scripts/preview-generate.js` 2027-01-04 → 2027-06-30, seed 7, bestOf
     200, today 2026-11-23, the live rows of 11/11 evening; *before* = the lists ignored, *after* = the lists read the way
     the refresh reads them, `--east-lists live`; the script cannot read offers, so the 11/23 Generate will fill
     differently): Fierce is Silvis backup all week of 1/4, 2/22, 4/19 and 6/21 and Silvis primary all week of 2/1 and
@@ -1441,4 +1455,10 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     rules (with a warning), in the planner and in the server function.
     **Faraz to see:** when a holiday unit is someone else's inside his week and that holder cannot take the day the unit
     would have added, that day comes out OPEN with reasons (a unit keeps one holder - the rule before 11/11); the lock
-    never gives it to Fierce. Say so if it should fall back to him instead.
+    never gives it to Fierce. Say so if it should fall back to him instead. (m) **11/12 - the vacation moved, the day
+    before answered (f), the preview again** (the same script and arguments on the live rows of 11/12 19:42 UTC, the lists
+    read live; the 11/11 figures in (g) stand as that day's record - the live rows changed in between, so the two runs are
+    not a like-for-like pair): the week of 3/29 is his on all seven days, Sunday 4/4 the one lock violation of the run
+    (the day before his vacation), with its line in words; Memorial Day and the other listed weeks as in (g); open slots
+    the same four. Primary / backup days in the range: Khan 36 / 36; Burchett 31 / 34; Acton 34 / 35; Philip 36 / 32;
+    Fierce 37 / 41; Sarkar none. On the code before this answer the same run still gave that Sunday to someone else.

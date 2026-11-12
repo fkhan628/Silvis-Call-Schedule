@@ -3384,8 +3384,11 @@ step("10/18 (Acton's rest preference): restBetweenStretches - soft short-rest be
 //  (1) "Give Fierce Memorial Day": a holiday unit with a day in a derived week belongs to the derived surgeon in that role
 //      on ALL its days (the holiday plan's rule since Prompt 25). His primary week of 5/24/2027 ends Sunday; the unit runs
 //      Sat 5/29 - Mon 5/31 - Monday became OPEN behind his 7-day run limit while the unit kept everyone else out.
-//  (2) "Don't put him on if he has a vacation listed": a derived lock yields on a day the vacation rules refuse him for
-//      that role (the vacation day; for primary also the day before it). A holiday unit yields whole.
+//  (2) "Don't put him on if he has a vacation listed": a derived lock yields on a day of his own vacation. A holiday unit
+//      yields whole. The day BEFORE a vacation does not yield (Faraz 11/12, after he moved that vacation to start the
+//      Monday after the week of 3/29: "he can be primary at Silvis that week now" - Sunday stays his): the lock stands
+//      there and the generator lists it as a lock violation. The 11/11 reading - the day before yields too, for a
+//      trailing-edge role - is data: groupRules.eastFeed.derivedWeeks.yieldDayBefore, off unless exactly true.
 step("derived weeks: a holiday unit stays with the derived surgeon (Faraz 11/11)");
 {
   const wk = (monday, role) => ({ weekMonday: monday, surgeonId: FIERCE, silvisRole: role });
@@ -3439,42 +3442,67 @@ step("derived weeks: the lock yields to his own vacation (Faraz 11/11)");
 
   // a primary week (3/29/2027, a derived week of the lists) and a vacation that starts on its Thursday - fixture dates
   const c = dctx([wk("2027-03-29", P)], [vac("2027-04-01", "2027-04-07")]);
-  eq(days(c), ["2027-03-29", "2027-03-30"], "week of 3/29 over a vacation from Thu 4/1: only Mon and Tue stay derived");
+  eq(days(c), ["2027-03-29", "2027-03-30", "2027-03-31"], "week of 3/29 over a vacation from Thu 4/1: Mon, Tue and Wed stay derived (Faraz 11/12: the day before a vacation stays his)");
   eq(c.derivedVacationYields, [
-    { day: "2027-03-31", role: P, surgeonId: FIERCE, reason: "day-before-vacation", unit: null },
     { day: "2027-04-01", role: P, surgeonId: FIERCE, reason: "time-off", unit: null },
     { day: "2027-04-02", role: P, surgeonId: FIERCE, reason: "time-off", unit: null },
     { day: "2027-04-03", role: P, surgeonId: FIERCE, reason: "time-off", unit: null },
     { day: "2027-04-04", role: P, surgeonId: FIERCE, reason: "time-off", unit: null },
-  ], "ctx.derivedVacationYields: Wed 3/31 (primary the day before a vacation) and the four vacation days");
-  eq([c.derivedByDay["2027-03-30"], c.derivedByDay["2027-03-31"], c.derivedByDay["2027-04-02"]], [{ primary: FIERCE }, undefined, undefined], "the yielded days hold no derived slot");
+  ], "ctx.derivedVacationYields: the four vacation days - Wed 3/31, the day before, is not one of them");
+  eq([c.derivedByDay["2027-03-30"], c.derivedByDay["2027-03-31"], c.derivedByDay["2027-04-02"]], [{ primary: FIERCE }, { primary: FIERCE }, undefined], "the day before keeps its derived slot; a vacation day holds none");
   blocked(R.eligibility(c, "2027-04-02", P, FIERCE), "time-off:2027-04-02", "he is not placed on a vacation day");
-  blocked(R.eligibility(c, "2027-03-31", P, FIERCE), "day-before-vacation", "...nor as primary the day before it");
+  blocked(R.eligibility(c, "2027-03-31", P, FIERCE), "day-before-vacation", "Wed 3/31: the day-before rule still names itself for him (the derived lock stands - the generator seeds it and lists the lock violation)");
   eq(R.eligibility(c, "2027-03-30", P, FIERCE).lockHolder, true, "Tue 3/30 is still his derived day");
-  ["2027-03-31", "2027-04-01", "2027-04-02", "2027-04-03", "2027-04-04"].forEach(d => [KHAN, BURCHETT, ACTON, PHILIP].forEach(id => {
+  ["2027-04-01", "2027-04-02", "2027-04-03", "2027-04-04"].forEach(d => [KHAN, BURCHETT, ACTON, PHILIP].forEach(id => {
     lacks(R.eligibility(c, d, P, id, { allHard: true }).hard, "derived-lock-held", "a yielded day is open to the others like any day: " + d + " " + id);
   }));
-  blocked(R.eligibility(c, "2027-03-30", P, ACTON, { allHard: true }), "derived-lock-held:" + FIERCE, "Tue 3/30 stays held for him");
-  lacks(R.eligibility(c, "2027-03-31", B, FIERCE, { allHard: true }).hard, "derived-lock", "Wed 3/31: no derived lock keeps him out of backup (his ordinary rules decide)");
+  ["2027-03-30", "2027-03-31"].forEach(d => blocked(R.eligibility(c, d, P, ACTON, { allHard: true }), "derived-lock-held:" + FIERCE, d + " stays held for him"));
+  blocked(R.eligibility(c, "2027-03-31", B, FIERCE, { allHard: true }), "derived-lock:primary", "Wed 3/31: his derived primary keeps him out of backup, as on any derived day");
+  // his week as it stands since 11/12: the vacation starts the Monday AFTER it - the whole week is his, Sunday included
+  const mon = dctx([wk("2027-03-29", P)], [vac("2027-04-05", "2027-04-18")]);
+  eq([days(mon), mon.derivedVacationYields], [["2027-03-29", "2027-03-30", "2027-03-31", "2027-04-01", "2027-04-02", "2027-04-03", "2027-04-04"], []], "week of 3/29 with a vacation from Mon 4/5: all seven days stay derived, nothing yields");
+  eq(mon.derivedByDay["2027-04-04"], { primary: FIERCE }, "Sun 4/4, the day before his vacation, is his");
+  blocked(R.eligibility(mon, "2027-04-04", P, ACTON, { allHard: true }), "derived-lock-held:" + FIERCE, "...and held for him against everyone else");
+  has(R.eligibility(mon, "2027-04-04", P, FIERCE, { allHard: true }).hard, "day-before-vacation", "...while eligibility still says what day it is (a lock violation in a Generate, never a reason to move the lock)");
+  // the 11/11 reading is data: yieldDayBefore exactly true makes the day before yield too (a trailing-edge role)
+  const grEdge = (v) => { const g = clone(seed.groupRules); g.eastFeed.derivedWeeks = Object.assign({}, g.eastFeed.derivedWeeks, { yieldDayBefore: v }); return g; };
+  const ce = dctx([wk("2027-03-29", P)], [vac("2027-04-01", "2027-04-07")], { groupRules: grEdge(true) });
+  eq([days(ce), ce.derivedVacationYields.map(y => y.day + " " + y.reason)], [["2027-03-29", "2027-03-30"], ["2027-03-31 day-before-vacation", "2027-04-01 time-off", "2027-04-02 time-off", "2027-04-03 time-off", "2027-04-04 time-off"]], "yieldDayBefore true: Wed 3/31 yields with the four vacation days (the 11/11 reading)");
+  eq(ce.derivedByDay["2027-03-31"], undefined, "...and holds no derived slot");
+  lacks(R.eligibility(ce, "2027-03-31", B, FIERCE, { allHard: true }).hard, "derived-lock", "...so no derived lock keeps him out of backup that day");
+  eq(dctx([wk("2027-03-29", P)], [vac("2027-04-05", "2027-04-18")], { groupRules: grEdge(true) }).derivedVacationYields.map(y => y.day + " " + y.reason), ["2027-04-04 day-before-vacation"], "yieldDayBefore true, vacation from Mon 4/5: Sunday yields");
+  [1, "true", "yes", {}, false, null, undefined].forEach(v => eq(dctx([wk("2027-03-29", P)], [vac("2027-04-05", "2027-04-18")], { groupRules: grEdge(v) }).derivedVacationYields, [], "yieldDayBefore " + JSON.stringify(v) + " is not exactly true: the day before stays his"));
+  eq(seed.groupRules.eastFeed.derivedWeeks.yieldDayBefore, false, "seed: yieldDayBefore is written out, off");
   // a colleague's vacation changes nothing
   eq(dctx([wk("2027-03-29", P)], [vac("2027-04-01", "2027-04-07", ACTON)]).derivedVacationYields, [], "someone else's vacation yields nothing");
 
-  // a backup week: the day before a vacation is a primary rule, so only the vacation days yield
+  // a backup week: only the vacation days yield (the day before a vacation is a primary rule - and since 11/12 it yields for no role unless yieldDayBefore is on)
   const b = dctx([wk("2027-04-19", B)], [vac("2027-04-22", "2027-04-23")]);
   eq(b.derivedVacationYields.map(y => y.day + " " + y.role + " " + y.reason), ["2027-04-22 backup time-off", "2027-04-23 backup time-off"], "backup week of 4/19 with a Thu-Fri vacation: those two days yield, Wed 4/21 does not");
   eq(days(b).length, 5);
-  // ...unless the group's trailing-edge roles name backup too (the data lever)
+  // ...with yieldDayBefore on, the day before yields for the trailing-edge roles: primary by default, backup too when the
+  // group's trailing-edge roles name it (the data lever)
   const grBoth = clone(seed.groupRules); grBoth.dayBeforeRules.trailingEdgeRoles = ["primary", "backup"];
-  eq(dctx([wk("2027-04-19", B)], [vac("2027-04-22", "2027-04-23")], { groupRules: grBoth }).derivedVacationYields.map(y => y.day + " " + y.reason), ["2027-04-21 day-before-vacation", "2027-04-22 time-off", "2027-04-23 time-off"], "trailingEdgeRoles with backup: the day before yields for a backup week too");
+  eq(dctx([wk("2027-04-19", B)], [vac("2027-04-22", "2027-04-23")], { groupRules: grBoth }).derivedVacationYields.map(y => y.day + " " + y.reason), ["2027-04-22 time-off", "2027-04-23 time-off"], "trailingEdgeRoles with backup, yieldDayBefore off: still only the vacation days");
+  const grBothEdge = clone(grBoth); grBothEdge.eastFeed.derivedWeeks = Object.assign({}, grBothEdge.eastFeed.derivedWeeks, { yieldDayBefore: true });
+  eq(dctx([wk("2027-04-19", B)], [vac("2027-04-22", "2027-04-23")], { groupRules: grBothEdge }).derivedVacationYields.map(y => y.day + " " + y.reason), ["2027-04-21 day-before-vacation", "2027-04-22 time-off", "2027-04-23 time-off"], "trailingEdgeRoles with backup AND yieldDayBefore true: the day before yields for a backup week too");
+  eq(dctx([wk("2027-04-19", B)], [vac("2027-04-22", "2027-04-23")], { groupRules: grEdge(true) }).derivedVacationYields.map(y => y.day + " " + y.reason), ["2027-04-22 time-off", "2027-04-23 time-off"], "yieldDayBefore true with the seed's primary-only trailing edge: a backup week's day before does not yield");
 
   // a holiday unit is one piece: refused on any of its days, the lock yields on all of them
   const u = dctx([wk("2027-05-24", P)], [vac("2027-05-31", "2027-05-31")]);
   eq(days(u), ["2027-05-24", "2027-05-25", "2027-05-26", "2027-05-27", "2027-05-28"], "primary week of 5/24, vacation on Memorial Day Monday: the whole unit yields - Mon to Fri stay his");
   eq(u.derivedVacationYields, [
     { day: "2027-05-29", role: P, surgeonId: FIERCE, reason: "holiday-unit", unit: "Memorial Day" },
-    { day: "2027-05-30", role: P, surgeonId: FIERCE, reason: "day-before-vacation", unit: "Memorial Day" },
-  ], "Sat 5/29 yields with its unit, Sun 5/30 is the day before the vacation; Mon 5/31 was never added");
+    { day: "2027-05-30", role: P, surgeonId: FIERCE, reason: "holiday-unit", unit: "Memorial Day" },
+  ], "Sat 5/29 and Sun 5/30 yield with their unit (since 11/12 the day before a vacation is no reason of its own); Mon 5/31 was never added");
   eq(u.derivedUnitDays, [], "a yielded unit adds no day");
+  eq(dctx([wk("2027-05-24", P)], [vac("2027-05-31", "2027-05-31")], { groupRules: grEdge(true) }).derivedVacationYields.map(y => y.day + " " + y.reason), ["2027-05-29 holiday-unit", "2027-05-30 day-before-vacation"], "yieldDayBefore true: Sun 5/30 carries the day-before reason (the 11/11 reading)");
+  // a vacation that starts the day AFTER the unit: no day of the unit is a vacation day, so the unit stays his whole - the
+  // Monday the unit adds included, although it is the day before his vacation (rules doc section 8 item 29 (f))
+  const after = dctx([wk("2027-05-24", P)], [vac("2027-06-01", "2027-06-03")]);
+  eq([days(after).length, after.derivedVacationYields, after.derivedUnitDays.map(x => x.day)], [8, [], ["2027-05-31"]], "primary week of 5/24, vacation from Tue 6/1: the unit is kept, Mon 5/31 added, nothing yields");
+  const afterEdge = dctx([wk("2027-05-24", P)], [vac("2027-06-01", "2027-06-03")], { groupRules: grEdge(true) });
+  eq([days(afterEdge), afterEdge.derivedVacationYields.map(y => y.day + " " + y.reason), afterEdge.derivedUnitDays], [["2027-05-24", "2027-05-25", "2027-05-26", "2027-05-27", "2027-05-28"], ["2027-05-29 holiday-unit", "2027-05-30 holiday-unit"], []], "yieldDayBefore true: Mon 5/31 as the day before refuses him, so the unit yields whole (the 11/11 reading)");
   // on a day that yielded with its unit he is still on East call: an East PRIMARY week keeps him out of Silvis primary
   const ub = dctx([wk("2027-08-30", B)], [vac("2027-09-06", "2027-09-06")]);
   eq(ub.derivedVacationYields.map(y => y.day + " " + y.reason), ["2027-09-04 holiday-unit", "2027-09-05 holiday-unit"], "backup week of 8/30, vacation on Labor Day Monday: Sat and Sun yield with the unit");
@@ -3488,7 +3516,7 @@ step("derived weeks: the lock yields to his own vacation (Faraz 11/11)");
   eq(seed.groupRules.eastFeed.derivedWeeks.keepHolidayUnit === true && seed.groupRules.eastFeed.derivedWeeks.yieldToVacation === true, true, "seed: both switches are on");
   const gr = (over) => { const g = clone(seed.groupRules); g.eastFeed.derivedWeeks = Object.assign({}, g.eastFeed.derivedWeeks, over); return g; };
   const noKey = clone(seed.groupRules); delete noKey.eastFeed.derivedWeeks;
-  eq(dctx([wk("2027-03-29", P)], [vac("2027-04-01", "2027-04-07")], { groupRules: noKey }).derivedVacationYields.length, 5, "no key at all (the live blob today): both readings are on");
+  eq(dctx([wk("2027-03-29", P)], [vac("2027-04-01", "2027-04-07")], { groupRules: noKey }).derivedVacationYields.length, 4, "no key at all (the live blob today): both readings are on, and the day before stays his");
   eq(dctx([wk("2027-05-24", P)], [], { groupRules: noKey }).derivedUnitDays.length, 1);
   // yieldToVacation false: the lock stands over his vacation, as before 11/11 (the generator lists it as a lock violation)
   const stand = dctx([wk("2027-03-29", P)], [vac("2027-04-01", "2027-04-07")], { groupRules: gr({ yieldToVacation: false }) });
@@ -3591,17 +3619,18 @@ step("derived weeks: the review's findings (11/11) - a unit someone else holds, 
   // re-check (11/11): read as ["primary"] ONCE, in buildContext, for every reader - the planner's reading - so the day
   // before the vacation still yields, eligibility agrees with it and nothing throws later (a string used to "work" by
   // String.indexOf, a number or an object threw at the first day before a vacation)
-  [{ primary: true }, 7, "primary", "backup", null, undefined].forEach(bad => {
-    const g = clone(seed.groupRules); g.dayBeforeRules.trailingEdgeRoles = bad;
+  [{ primary: true }, 7, "primary", "backup", null, undefined].forEach(bad => [true, false].forEach(edge => {
+    const g = clone(seed.groupRules); g.dayBeforeRules.trailingEdgeRoles = bad; g.eastFeed.derivedWeeks = Object.assign({}, g.eastFeed.derivedWeeks, { yieldDayBefore: edge });
+    const tag = "trailingEdgeRoles " + JSON.stringify(bad) + (edge ? " with yieldDayBefore on" : "");
     let built = null, threw = null, e1 = null;
     try { built = makeCtx({ schedule: {}, eastDerived: [wk("2027-03-29", P)], timeOffRows: [vac("2027-04-01", "2027-04-07")], groupRules: g }); e1 = R.eligibility(built, "2027-03-31", P, FIERCE, { allHard: true }); } catch (e) { threw = e; }
-    ok(!threw && built && built.per, "trailingEdgeRoles " + JSON.stringify(bad) + ": the context builds and eligibility answers" + (threw ? " - threw " + threw.message : ""));
+    ok(!threw && built && built.per, tag + ": the context builds and eligibility answers" + (threw ? " - threw " + threw.message : ""));
     if (threw) return;
-    eq(built.trailingEdgeRoles, ["primary"], "trailingEdgeRoles " + JSON.stringify(bad) + " reads as [primary]");
-    eq(built.derivedVacationYields.map(y => y.day + " " + y.reason).slice(0, 2), ["2027-03-31 day-before-vacation", "2027-04-01 time-off"], "trailingEdgeRoles " + JSON.stringify(bad) + ": the day before yields with the vacation days");
-    has(e1.hard, "day-before-vacation", "trailingEdgeRoles " + JSON.stringify(bad) + ": eligibility refuses primary the day before, as the yield does");
-    eq(built.warnings.filter(w => /trailingEdgeRoles/.test(w)).length, bad === null || bad === undefined ? 0 : 1, "trailingEdgeRoles " + JSON.stringify(bad) + ": " + (bad === null || bad === undefined ? "no warning for an absent key" : "one warning names the bad value"));
-  });
+    eq(built.trailingEdgeRoles, ["primary"], tag + " reads as [primary]");
+    eq(built.derivedVacationYields.map(y => y.day + " " + y.reason).slice(0, 2), edge ? ["2027-03-31 day-before-vacation", "2027-04-01 time-off"] : ["2027-04-01 time-off", "2027-04-02 time-off"], tag + ": " + (edge ? "the day before yields with the vacation days" : "the vacation days yield and the day before stays his"));
+    has(e1.hard, "day-before-vacation", tag + ": eligibility names the day before for primary" + (edge ? ", as the yield does" : ""));
+    eq(built.warnings.filter(w => /trailingEdgeRoles/.test(w)).length, bad === null || bad === undefined ? 0 : 1, tag + ": " + (bad === null || bad === undefined ? "no warning for an absent key" : "one warning names the bad value"));
+  }));
   eq(makeCtx({ schedule: {}, groupRules: Object.assign(clone(seed.groupRules), { dayBeforeRules: Object.assign({}, seed.groupRules.dayBeforeRules, { trailingEdgeRoles: [] }) }) }).trailingEdgeRoles, [], "an EMPTY list is a list: no role trails (as before)");
 
   // (B8) another surgeon's derived slot is never taken by a unit: Fierce's primary week 5/24 and a second surgeon derived as

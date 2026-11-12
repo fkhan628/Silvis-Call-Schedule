@@ -3020,8 +3020,11 @@ function defaultHolidayUnits(year, opts) {
      included - rules.js), and the derived East week: a unit on any day of a derived week takes the surgeon in that role
      (derived-lock:<role> for his other role, derived-lock-held:<id> for everyone else, as rules.js - since 11/11 the
      generator reads it the same way: rules.js rdDerivedUnitsAndVacations makes every day of such a unit a derived day).
-     Faraz 11/11: unless his own vacation refuses him on the unit (time-off:<day>, or day-before-vacation for a
-     trailing-edge role) - then the derived week yields the whole unit and it is planned like any other.
+     Faraz 11/11: unless a day of the unit is his own vacation day (time-off:<day>) - then the derived week yields the
+     whole unit and it is planned like any other. Faraz 11/12: the day BEFORE a vacation does not move a derived week -
+     the unit stays his and his own day-before refusal is set aside for that slot, with a warning (the 11/11 reading,
+     the day before yielding the unit too for a trailing-edge role, is data:
+     groupRules.eastFeed.derivedWeeks.yieldDayBefore exactly true).
    Decisions, in order (lexicographic over complete plans; each later item only breaks ties of the earlier ones):
      hard  - rule 1's limits; primary != backup on a unit; the tier shape (rule 2): per tier, n = the surgeons who can
              hold at least one of its slots, each serves between floor(S/n) and ceil(S/n) of the tier's S = 2 x units
@@ -3340,9 +3343,14 @@ function hplPrepare(Y, o) {
       if (roles.length > 1) { warnings.push(nameOf(id) + "'s derived East weeks give him both roles on " + u.name + " " + Y + " - planned for primary only; check by hand"); roles = ["primary"]; }
       var role = roles[0];
       // Faraz 11/11 (rules.js rdDerivedUnitsAndVacations): a derived week yields to the surgeon's own vacation, and a
-      // holiday unit yields whole - refused on any of its days (time off; for a trailing-edge role the day before it),
-      // the week does not take the unit and it is planned like any other. He stays refused by the vacation itself.
+      // holiday unit yields whole - a vacation day on any of its days, and the week does not take the unit: it is
+      // planned like any other. He stays refused by the vacation itself.
       // (data: groupRules.eastFeed.derivedWeeks.yieldToVacation, on unless exactly false - rules.js reads the same key)
+      // Faraz 11/12: the day BEFORE a vacation does not move a derived week. A unit whose last day is the day before
+      // his vacation stays with him - the week takes the unit and his own day-before refusal is set aside for that
+      // slot, with a warning (the engine keeps the derived lock on that day and lists a lock violation). The 11/11
+      // reading - the day before yields the unit too, for a trailing-edge role - is data: yieldDayBefore, off unless
+      // exactly true (rules.js reads the same key). With yieldToVacation false nothing changes: the slot stays open.
       // The OTHER switch, keepHolidayUnit, is not read here (the 11/11 review): the plan has given a unit on any day of a
       // derived week to its surgeon since Prompt 25, whatever that key says. With keepHolidayUnit false the engine goes
       // back to its reading before 11/11 (the unit's day outside the week is left to the one-holder rule and his run
@@ -3350,12 +3358,17 @@ function hplPrepare(Y, o) {
       // Two derived weeks giving him BOTH roles on one unit: planned "primary only" just above; the engine keeps each
       // week's days and warns (rules doc section 8 item 29 (j) - open).
       var dwRules = (groupRules.eastFeed && groupRules.eastFeed.derivedWeeks) || {};
-      if (dwRules.yieldToVacation !== false && block[ui][id][role].some(function (why) { return why.indexOf("time-off:") === 0 || why === "day-before-vacation"; })) {
+      var yieldVac = dwRules.yieldToVacation !== false, yieldEdge = dwRules.yieldDayBefore === true;
+      if (yieldVac && block[ui][id][role].some(function (why) { return why.indexOf("time-off:") === 0 || (yieldEdge && why === "day-before-vacation"); })) {
         warnings.push(nameOf(id) + "'s derived East week does not take " + u.name + " " + Y + " (" + role + "): he has a vacation on it - the unit is planned like any other");
         return;
       }
       if (forced[ui][role] && forced[ui][role] !== id) { warnings.push(u.name + " " + Y + " " + role + ": derived East weeks name both " + nameOf(forced[ui][role]) + " and " + nameOf(id) + " - the first is kept"); return; }
       forced[ui][role] = id;
+      if (yieldVac && !yieldEdge && block[ui][id][role].indexOf("day-before-vacation") >= 0) {
+        block[ui][id][role] = block[ui][id][role].filter(function (why) { return why !== "day-before-vacation"; });
+        warnings.push(nameOf(id) + "'s derived East week keeps " + u.name + " " + Y + " (" + role + ") although his vacation starts the morning after the unit - the day before a vacation does not move a derived week");
+      }
       var otherRole = role === "primary" ? "backup" : "primary";
       if (block[ui][id][otherRole].indexOf("derived-lock:" + role) < 0) block[ui][id][otherRole].push("derived-lock:" + role);
     });

@@ -171,8 +171,10 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   `buildContext` reads two more generic things about a derived week (`rdDerivedUnitsAndVacations`; data:
   `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation }`, on unless exactly `false`): a holiday unit with a
   day in the week is the derived surgeon's in that role on all its days ("Give Fierce Memorial Day"), and the lock yields on
-  a day his own vacation refuses him - the day itself, for primary the day before - a holiday unit whole ("don't put him on
-  if he has a vacation listed"); `helpers.planHolidays` reads the same. A day a unit adds stands only while the unit is his
+  a day of his own vacation - a holiday unit whole ("don't put him on if he has a vacation listed"). Since 11/12 (Faraz:
+  "he can be primary at Silvis that week now") the day BEFORE a vacation does not move a derived week: the lock stands
+  there and a Generate lists it as a lock violation, with a line in words (`yieldDayBefore`, off unless exactly `true` -
+  the 11/11 reading, the day before yielding too); `helpers.planHolidays` reads the same. A day a unit adds stands only while the unit is his
   (`derivedUnitLost`, read live by `rdDerivedOverridden` and the generator's lock seeding): when ALL the unit's days of his
   week are someone else's the added day is not his - it follows that holder, or stays open with reasons when he cannot take
   it; the generator's warnings say what became of each added day.
@@ -215,5 +217,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   `edge-functions/README.md` §3), and the first scheduled run's read-back (done - 2026-10-20 10:30 UTC: one `east.refresh` audit
   row from `cron`, `ok` true; README §3 step 6). Readings taken, to confirm: §8 items 25-27 (no-primary days, East
   vacations' open questions, the rest rule) and item 29 (Prompt 34: a Monday on both lists, the general reading of the
-  Memorial Day call, the day before a vacation). Faraz's own Prompt 34 step: the `east-feed-refresh` v3 deploy and its
+  Memorial Day call; the day before a vacation was answered 11/12 - it stays his - which leaves a holiday unit ending the
+  day before one). Faraz's own Prompt 34 step: the `east-feed-refresh` v3 deploy and its
   dry-run proof (`edge-functions/README.md` §3, "2026-11-11 - the East week lists") - v3 is prepared and waits for it.

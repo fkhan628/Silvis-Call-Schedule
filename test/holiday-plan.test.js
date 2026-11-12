@@ -493,10 +493,25 @@ step("G2b (Faraz 11/11): a derived week yields a unit to the holder's own vacati
   ok(p.warnings.some((w) => w === "Foxtrot's derived East week does not take Thanksgiving 2027 (primary): he has a vacation on it - the unit is planned like any other"), "the warning says so: " + JSON.stringify(p.warnings));
   ok(!p.warnings.some((w) => /nobody can hold that slot|^OPEN: Thanksgiving/.test(w)), "no open-slot warning");
   ok(p.assignments.every((a) => a.primary && a.backup), "every slot of the year is filled");
-  // the day before a vacation is a primary rule: a derived PRIMARY week yields the unit, and he may still be its backup
+  // Faraz 11/12: the day before a vacation does not move a derived week. A vacation from the Monday after the unit leaves
+  // Thanksgiving with him - held for him against everyone else, his own day-before refusal set aside for the slot his
+  // week gives him (the engine keeps the derived lock there and lists a lock violation), and a warning says so
   const dayBefore = plan(2027, { surgeonRules: sr, east, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }] });
-  eq([blockedOf(dayBefore, "Thanksgiving", "f", "primary"), blockedOf(dayBefore, "Thanksgiving", "f", "backup"), blockedOf(dayBefore, "Thanksgiving", "a", "primary")], [["day-before-vacation"], [], []], "a vacation from the Monday after: primary refused (Sunday is the day before), backup open to him, nobody kept out");
-  ok(byName(dayBefore, "Thanksgiving").primary !== "f" && byName(dayBefore, "Thanksgiving").primary, "...and someone else is its primary");
+  eq([byName(dayBefore, "Thanksgiving").primary, blockedOf(dayBefore, "Thanksgiving", "f", "primary"), blockedOf(dayBefore, "Thanksgiving", "a", "primary")], ["f", [], ["derived-lock-held:f"]], "a vacation from the Monday after: the derived week keeps Thanksgiving primary, held for him");
+  ok(dayBefore.warnings.some((w) => w === "Foxtrot's derived East week keeps Thanksgiving 2027 (primary) although his vacation starts the morning after the unit - the day before a vacation does not move a derived week"), "...and a warning says so: " + JSON.stringify(dayBefore.warnings));
+  ok(!dayBefore.warnings.some((w) => /nobody can hold that slot|^OPEN: Thanksgiving|does not take Thanksgiving/.test(w)), "...with no open-slot and no yield warning");
+  eq(blockedOf(dayBefore, "Thanksgiving", "f", "backup"), ["derived-lock:primary"], "...and he cannot also be its backup");
+  ok(dayBefore.assignments.every((a) => a.primary && a.backup), "...every slot of the year is filled");
+  // the 11/11 reading is data (groupRules.eastFeed.derivedWeeks.yieldDayBefore, exactly true - the key rules.js reads): a
+  // derived PRIMARY week yields the unit to the day before his vacation, and he may still be its backup
+  const dayBeforeOn = plan(2027, { surgeonRules: sr, east, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }], groupRules: { eastFeed: { derivedWeeks: { yieldDayBefore: true } } } });
+  eq([blockedOf(dayBeforeOn, "Thanksgiving", "f", "primary"), blockedOf(dayBeforeOn, "Thanksgiving", "f", "backup"), blockedOf(dayBeforeOn, "Thanksgiving", "a", "primary")], [["day-before-vacation"], [], []], "yieldDayBefore true: primary refused (Sunday is the day before), backup open to him, nobody kept out");
+  ok(byName(dayBeforeOn, "Thanksgiving").primary !== "f" && byName(dayBeforeOn, "Thanksgiving").primary, "...and someone else is its primary");
+  ok(dayBeforeOn.warnings.some((w) => w === "Foxtrot's derived East week does not take Thanksgiving 2027 (primary): he has a vacation on it - the unit is planned like any other"), "...with the yield warning");
+  // yieldToVacation false leaves the day-before case as it was before 11/11 too: the slot stays OPEN, said loudly
+  const dayBeforeOff = plan(2027, { surgeonRules: sr, east, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }], groupRules: { eastFeed: { derivedWeeks: { yieldToVacation: false } } } });
+  eq(byName(dayBeforeOff, "Thanksgiving").primary, null, "yieldToVacation false: the day-before clash leaves Thanksgiving primary open, as before 11/11");
+  ok(dayBeforeOff.warnings.some((w) => /^The derived East week makes Foxtrot the Thanksgiving 2027 primary but day-before-vacation - nobody can hold that slot$/.test(w)), "...with the old warning: " + JSON.stringify(dayBeforeOff.warnings));
   // a derived BACKUP week does not yield to the day before a vacation (a primary rule) - it still takes the unit
   const bk = plan(2027, { surgeonRules: sr, east: { eastDerived: [{ surgeonId: "f", weekMonday: "2027-11-22", silvisRole: "backup" }] }, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }] });
   eq([byName(bk, "Thanksgiving").backup, blockedOf(bk, "Thanksgiving", "a", "backup")], ["f", ["derived-lock-held:f"]], "a derived backup week with a vacation starting the day after the unit: the unit is still his");

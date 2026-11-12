@@ -64,9 +64,12 @@
 //                     Faraz 11/11: which days ARE derived is the context's reading
 //                     (rules.js rdDerivedUnitsAndVacations) - a holiday unit a
 //                     derived week touches is the derived surgeon's on all its
-//                     days (diagnostics.derivedUnitDays), and a day his own
-//                     vacation refuses him is no derived day at all
+//                     days (diagnostics.derivedUnitDays), and a day of his own
+//                     vacation is no derived day at all
 //                     (diagnostics.derivedVacationYields; filled like any day).
+//                     Faraz 11/12: the day BEFORE his vacation stays a derived
+//                     day - the lock is seeded, lockViolations lists it and one
+//                     "vacation: ... keeps him on ..." warning says so.
 //   2 build units     holiday units (rules.holidayUnits) pre-empt weekend days;
 //                     leftover Fri/Sat/Sun form a reduced weekend unit; every
 //                     other day is a day unit. Tightness per unit/role is
@@ -2093,6 +2096,27 @@ function genDiagnostics(G, best, meta) {
     if (free.length) warnings.push("vacation: the derived week of " + p[0] + " (" + derivedName(p[2]) + " Silvis " + p[1] + ") does not place him on " + free.join(", ") + " - filled like any other day");
     if (kept.length) warnings.push("vacation: the derived week of " + p[0] + " (" + derivedName(p[2]) + " Silvis " + p[1] + ") yields on " + kept.join(", ") + ", but a held slot keeps him there (lockViolations / fixedViolations list it when the vacation itself refuses that day)");
   });
+  // Faraz 11/12 ("he can be primary at Silvis that week now"): the day BEFORE his vacation does not move a derived week -
+  // the context keeps it a derived day (rules.js rdDerivedUnitsAndVacations yields only on the vacation's own days unless
+  // groupRules.eastFeed.derivedWeeks.yieldDayBefore is exactly true), the lock is seeded and lockViolations lists the day.
+  // Said in words too, ONE line per derived week + role, so the lock-violation line reads as the decision it is. Not with
+  // yieldToVacation false: there the lock stands over everything and nothing "gives way". The week named is the DERIVED
+  // week's (a day a holiday unit added lies outside its Mon - Sun: ctx.derivedUnitBase).
+  var dwSwitches = (ctx.groupRules && ctx.groupRules.eastFeed && ctx.groupRules.eastFeed.derivedWeeks) || {};
+  if (dwSwitches.yieldToVacation !== false) {
+    var edgeKept = {};
+    lockViolations.forEach(function (l) {
+      var Pl = ctx.per[l.id];
+      if (!/derived/.test(l.lock || "") || !Pl || Pl.derived[l.day] !== l.role || l.reasons.indexOf("day-before-vacation") < 0) return;
+      var ub = ctx.derivedUnitBase ? ctx.derivedUnitBase[l.day + "|" + l.role + "|" + l.id] : null;
+      var k = (ub && ub.weekMonday ? ub.weekMonday : genMondayOf(l.day)) + "|" + l.role + "|" + l.id;
+      (edgeKept[k] = edgeKept[k] || []).push(l.day);
+    });
+    Object.keys(edgeKept).sort().forEach(function (k) {
+      var p = k.split("|");
+      warnings.push("vacation: the derived week of " + p[0] + " (" + derivedName(p[2]) + " Silvis " + p[1] + ") keeps him on " + edgeKept[k].join(", ") + ", the day before his vacation - a derived week gives way only on the vacation's own days (lockViolations lists it)");
+    });
+  }
   // Prompt 12 N (9/22 evening): window weeks of every windows surgeon that overlap the range. primaries /
   // backups count her days over the whole Mon-Sun week (published days outside the range included, as
   // eligibility counts them); status: partial = some window days lie outside the range, else met / under /
