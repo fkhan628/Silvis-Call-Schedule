@@ -408,9 +408,10 @@ decides the Trauma Director role.
   derived week keeps him on it. A holiday unit whose last day is the day before his vacation stays his too (the yearly
   holiday plan names him for it, with a warning). **What follows for that vacation:** once the week is published he is on
   call the day before it, so the on-call guard of §1 (the app's check and the database's, which count the day before for
-  primary) refuses any later edit of that vacation's dates, and nobody else can take a derived day in a trade - the
-  scheduler changes that day by hand first (the day editor), then the vacation can be edited; deleting it is not
-  refused. Data: `groupRules.eastFeed.derivedWeeks.yieldDayBefore` — off unless
+  primary) refuses a later edit of that vacation that keeps its first day or moves it earlier - a new end date included:
+  the guard looks at the new range and at the day before its new first day - and nobody else can take a derived day in a
+  trade; the scheduler changes that day by hand first (the day editor), then the vacation can be edited. Moving the
+  first day later, and deleting the vacation, are not refused. Data: `groupRules.eastFeed.derivedWeeks.yieldDayBefore` — off unless
   exactly `true`, which brings back the 11/11 reading (the day before yields too, for a trailing-edge role).
 - **Outside those weeks he is in the pool and can be primary**, under his weekday pattern (via Faraz, 9/21):
 
@@ -1470,7 +1471,9 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     (the day before his vacation), with its line in words; Memorial Day and the other listed weeks as in (g); open slots
     the same four. Primary / backup days in the range: Khan 36 / 36; Burchett 31 / 34; Acton 34 / 35; Philip 36 / 32;
     Fierce 37 / 41; Sarkar none. On the code before this answer the same run still gave that Sunday to someone else.
-    One consequence to know (§3): once that week is published, his vacation cannot be edited until the scheduler takes
-    Sunday 4/4 off him by hand - the on-call guard counts the day before a vacation. An independent review of this
-    change (11/12) found no defect in the rule; its findings - this section's item 5 of §5 still carried the 11/11
-    reading, and the new warning's conditions had no test of their own - are fixed with it.
+    One consequence to know (§3): once that week is published, his vacation can only be moved later or deleted - any
+    other edit of it (a new end date included) waits until the scheduler takes Sunday 4/4 off him by hand, because the
+    on-call guard counts the day before a vacation. An independent review of this
+    change (11/12) found no defect in the rule; its findings - §5 item 5 still carried the 11/11 reading, and the
+    new warning's conditions had no test of their own - are fixed with it, and so are the small ones of the re-check
+    of those fixes.

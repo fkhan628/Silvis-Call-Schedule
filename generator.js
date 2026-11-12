@@ -2098,12 +2098,12 @@ function genDiagnostics(G, best, meta) {
     if (kept.length) warnings.push("vacation: the derived week of " + p[0] + " (" + derivedName(p[2]) + " Silvis " + p[1] + ") yields on " + kept.join(", ") + ", but a held slot keeps him there (lockViolations / fixedViolations list it when the vacation itself refuses that day)");
   });
   // Faraz 11/12 ("he can be primary at Silvis that week now"): the day BEFORE his vacation does not move a derived week -
-  // the context keeps it a derived day (rules.js rdDerivedUnitsAndVacations yields only on the vacation's own days unless
+  // the context keeps it a derived day (rules.js rdDerivedUnitsAndVacations does not yield on the day before a vacation unless
   // groupRules.eastFeed.derivedWeeks.yieldDayBefore is exactly true), the lock is seeded and lockViolations lists the day.
   // Said in words too, ONE line per derived week + role, so the violation line reads as the decision it is. The days are
   // the holder's own derived days in that role (the context's reading: P.derived - never another surgeon's lock the day
   // before HIS vacation, never a derived lock over another rule) that carry the day-before reason, in lockViolations or -
-  // a held slot that is no lock, fill-open-only - in fixedViolations (the 11/12 review). Not with yieldToVacation false:
+  // a held slot that is no lock: fill-open-only, a claimed or traded day - in fixedViolations (the 11/12 review). Not with yieldToVacation false:
   // there the lock stands over the vacation itself too and nothing is being told apart. The week named is the DERIVED
   // week's (a day a holiday unit added lies outside its Mon - Sun: ctx.derivedUnitBase).
   var dwSwitches = (ctx.groupRules && ctx.groupRules.eastFeed && ctx.groupRules.eastFeed.derivedWeeks) || {};

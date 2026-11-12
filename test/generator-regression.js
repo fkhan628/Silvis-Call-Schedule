@@ -1547,6 +1547,28 @@ const DW_RUNS = { n: 0 };
       eq(F0.fixedViolations.filter((x) => x.id === FIERCE).map((x) => x.day + " " + x.role + " " + x.kept + " " + x.reasons.join("+")), ["2027-04-04 primary fill-open-only day-before-vacation"], "the held slot is a fixed violation");
       eq(F0.lockViolations.filter((l) => l.id === FIERCE), [], "...and no lock violation of his");
       eq(F0.warnings.filter((x) => /^vacation: /.test(x)), [EDGE_LINE("2027-03-29", P, ["2027-04-04"])], "the kept-day line covers a fixed slot too");
+      // The re-check of those fixes (11/12):
+      // (G) his own hand lock in the OTHER role on a derived day is no day his week keeps him on: backup week of 8/30, locked
+      // as PRIMARY on Wed 9/1, a vacation on Thu 9/2 - Fri 9/3 (fixture dates) - the lock is a violation, with NO kept-day line
+      CUR.range = "11/12 re-check (G) his lock in the other role on a derived day";
+      const g0 = GEN.generate(ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: "2027-09-02", end_date: "2027-09-03" }], schedule: { "2027-09-01": heldRow(FIERCE, true) } }), "2027-08-23", "2027-09-12", { seed: s, bestOf: 2 }), G0 = g0.diagnostics;
+      DW_RUNS.n++;
+      ok(g0.schedule["2027-09-01"].primary === FIERCE && g0.schedule["2027-09-01"].backup !== FIERCE, "his hand lock as primary on Wed 9/1 stands (and he is not also its backup)");
+      ok(G0.lockViolations.some((l) => l.day === "2027-09-01" && l.role === P && l.id === FIERCE && l.reasons.indexOf("day-before-vacation") >= 0), "...and is a lock violation the day before his vacation: " + JSON.stringify(G0.lockViolations.filter((l) => l.id === FIERCE)));
+      eq(G0.warnings.filter((x) => /^vacation: /.test(x)), ["vacation: the derived week of 2027-08-30 (" + NAME[FIERCE] + " Silvis backup) does not place him on 2027-09-02, 2027-09-03 - filled like any other day"], "the yield line for his two vacation days, and no kept-day line for a lock that is not his derived role");
+      // (H) a fixed slot of the other kind - a claimed day (fixed in every mode): the line covers it as well
+      CUR.range = "11/12 re-check (H) a claimed day of his on the day before";
+      const h0 = GEN.generate(ctxOf({ timeOffRows: [MON_ROW], schedule: { "2027-04-04": Object.assign(heldRow(FIERCE, false), { source: "claim" }) } }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 }), H0 = h0.diagnostics;
+      DW_RUNS.n++;
+      eq(H0.fixedViolations.filter((x) => x.id === FIERCE).map((x) => x.day + " " + x.role + " " + x.kept + " " + x.reasons.join("+")), ["2027-04-04 primary claim day-before-vacation"], "the claimed day is a fixed violation (kept: claim)");
+      eq(H0.warnings.filter((x) => /^vacation: /.test(x)), [EDGE_LINE("2027-03-29", P, ["2027-04-04"])], "...with the kept-day line");
+      // (I) a fixed slot BEFORE a lock in one week (fill-open-only: an unlocked row of his on Tue 3/30, the day before a
+      // one-day vacation; Sun 4/4 seeded as a derived lock): ONE line, the days in date order
+      CUR.range = "11/12 re-check (I) a fixed slot before a lock in one week";
+      const i0 = GEN.generate(ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: "2027-03-31", end_date: "2027-03-31" }, MON_ROW], schedule: { "2027-03-30": heldRow(FIERCE, false) } }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2, fillOpenOnly: true }), I0 = i0.diagnostics;
+      DW_RUNS.n++;
+      eq([I0.fixedViolations.filter((x) => x.id === FIERCE).map((x) => x.day), I0.lockViolations.filter((l) => l.id === FIERCE).map((l) => l.day)], [["2027-03-30"], ["2027-04-04"]], "Tue 3/30 is the fixed violation, Sun 4/4 the lock violation");
+      ok(I0.warnings.indexOf(EDGE_LINE("2027-03-29", P, ["2027-03-30", "2027-04-04"])) >= 0, "ONE kept-day line, the days in date order: " + JSON.stringify(I0.warnings.filter((x) => /keeps him on/.test(x))));
     }
     // (1) Memorial Day - his primary week of 5/24 keeps the unit
     CUR.range = "Faraz 11/11 Memorial Day (week of 2027-05-24)";

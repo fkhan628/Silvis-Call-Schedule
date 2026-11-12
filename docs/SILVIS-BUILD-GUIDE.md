@@ -3523,8 +3523,8 @@ conflict reports and the UI see one picture:
    week now" - the vacation moved to start the Monday after his week, and Sunday stays his): the day BEFORE a vacation does
    not yield.** The derived lock stands there; `eligibility` still names `day-before-vacation` for him on that day, so the
    generator - which seeds a derived lock whatever his own reasons - lists it in `diagnostics.lockViolations` (lock
-   `derived`; `import+derived` once the row is published or is an accepted plan unit; a held slot that is no lock, in the
-   fill-open-only mode, goes to `diagnostics.fixedViolations`) and adds one warning per derived week and role
+   `derived`; `import+derived` once the row is published or is an accepted plan unit; a held slot that is no lock - a
+   fixed slot: fill-open-only, or a claimed or traded day - goes to `diagnostics.fixedViolations`) and adds one warning per derived week and role
    ("vacation: the derived week of ... keeps him on ..., the day before his vacation - the day before a vacation does not
    move a derived week"). The line is about his own derived day and that one reason (never another surgeon's lock the day
    before his vacation, never a derived lock over another rule), names the derived week also for a day a holiday unit
@@ -3551,10 +3551,11 @@ the finished schedule: the unit kept with him ("stays with", only when every add
 someone else's); or not kept whole, with what became of each added day (his; held by a named surgeon or an outside cover;
 left open; or his while named days of the unit in his week are not - a split to settle by hand); a held slot that keeps him
 on a vacation day is said so, and so is the day before a vacation his derived week keeps him on (11/12) - and
-`test/generator-regression.js` restates them from the seed (104 runs: the week of 3/29/2027 over a vacation - the day
+`test/generator-regression.js` restates them from the seed (110 runs: the week of 3/29/2027 over a vacation - the day
 before it kept, as his one lock violation - the same week with a vacation starting the Monday after, the 11/11 reading
 switched on as data, the kept-day line's own conditions (`yieldToVacation` false, a blob without the key, a unit's added
-day as the day before, two such days in one week, another surgeon's lock and another rule, a fixed slot), Memorial Day, Labor Day as backup, the review's cases - the unit held by someone else, a lock on
+day as the day before, two such days in one week, another surgeon's lock, another rule and his own lock in the other
+role, a fixed slot of each kind), Memorial Day, Labor Day as backup, the review's cases - the unit held by someone else, a lock on
 the added day, standing locks on his vacation - the re-check's - the holder unable to take the added day, an outside cover
 on the unit's days or on the added day itself, he himself locked into the other role, a unit published to him and then
 given away - and a unit held in part, or added by a week that starts on the holiday).
