@@ -3367,7 +3367,9 @@ function hplPrepare(Y, o) {
       forced[ui][role] = id;
       if (yieldVac && !yieldEdge && block[ui][id][role].indexOf("day-before-vacation") >= 0) {
         block[ui][id][role] = block[ui][id][role].filter(function (why) { return why !== "day-before-vacation"; });
-        warnings.push(nameOf(id) + "'s derived East week keeps " + u.name + " " + Y + " (" + role + ") although his vacation starts the morning after the unit - the day before a vacation does not move a derived week");
+        // "keeps" only when he does keep it: another refusal of his (an opt-out, a major-holiday limit) leaves the slot
+        // open, said by the line below - never both lines for one slot (the 11/12 review)
+        if (!block[ui][id][role].length) warnings.push(nameOf(id) + "'s derived East week keeps " + u.name + " " + Y + " (" + role + ") although his vacation starts the morning after the unit - the day before a vacation does not move a derived week");
       }
       var otherRole = role === "primary" ? "backup" : "primary";
       if (block[ui][id][otherRole].indexOf("derived-lock:" + role) < 0) block[ui][id][otherRole].push("derived-lock:" + role);

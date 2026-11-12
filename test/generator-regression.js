@@ -1409,10 +1409,10 @@ ok(r2Json.size > 1, "50 seeds produced only " + r2Json.size + " distinct Nov-Dec
 //      Thursday (fixture dates, 4/1 - 4/7) - Thu - Sun are filled by someone else, or open with reasons that never cite
 //      his derived lock, and he holds nothing on a vacation day. Faraz 11/12 ("he can be primary at Silvis that week
 //      now"): the day BEFORE a vacation does not yield - he holds Mon, Tue and Wed 3/31, and that Wednesday is his one
-//      lock violation (day-before-vacation), said in a warning. The same week with his vacation as it stands since
-//      11/12 (from the Monday after, 4/5 - 4/18): all seven days are his, Sunday 4/4 the one lock violation. The 11/11
+//      lock violation (day-before-vacation), said in a warning. The same week with a vacation that starts the Monday
+//      after it (fixture dates, 4/5 - 4/9): all seven days are his, Sunday 4/4 the one lock violation. The 11/11
 //      reading (the day before yields too) is data - groupRules.eastFeed.derivedWeeks.yieldDayBefore, exactly true -
-//      and is run as well (seeds 1 and 2).
+//      and is run as well, with the cases that pin the kept-day line's own conditions (the 11/12 review; seeds 1 and 2).
 const DW_RUNS = { n: 0 };
 {
   const WEEKS = [{ weekMonday: "2027-03-29", surgeonId: FIERCE, silvisRole: P }, { weekMonday: "2027-05-24", surgeonId: FIERCE, silvisRole: P }, { weekMonday: "2027-08-30", surgeonId: FIERCE, silvisRole: B }];
@@ -1429,11 +1429,15 @@ const DW_RUNS = { n: 0 };
     return c;
   };
   const vacCtx = ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: VAC.start, end_date: VAC.end }] }), plainCtx = ctxOf({});
-  // Faraz 11/12: his vacation as it stands (from the Monday after the week), and the 11/11 reading as data
-  const monCtx = ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: "2027-04-05", end_date: "2027-04-18" }] });
+  // Faraz 11/12: a vacation that starts the Monday after the week (fixture dates), and the 11/11 reading as data
+  const VAC_ROW = { person_id: FIERCE, start_date: VAC.start, end_date: VAC.end }, MON_ROW = { person_id: FIERCE, start_date: "2027-04-05", end_date: "2027-04-09" };
+  const monCtx = ctxOf({ timeOffRows: [MON_ROW] });
+  const grDW = (over) => Object.assign({}, seed.groupRules, { eastFeed: Object.assign({}, seed.groupRules.eastFeed, { derivedWeeks: Object.assign({}, seed.groupRules.eastFeed.derivedWeeks, over) }) });
+  const GR_NOKEY = Object.assign({}, seed.groupRules, { eastFeed: Object.assign({}, seed.groupRules.eastFeed) }); delete GR_NOKEY.eastFeed.derivedWeeks;
+  const heldRow = (primary, locked) => ({ primary, backup: null, primaryLocked: !!locked, backupLocked: false, source: "manual", externalCover: null, note: null });
   const GR_EDGE = Object.assign({}, seed.groupRules, { eastFeed: Object.assign({}, seed.groupRules.eastFeed, { derivedWeeks: Object.assign({}, seed.groupRules.eastFeed.derivedWeeks, { yieldDayBefore: true }) }) });
   const edgeCtx = ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: VAC.start, end_date: VAC.end }], groupRules: GR_EDGE });
-  const EDGE_LINE = (monday, role, days) => "vacation: the derived week of " + monday + " (" + NAME[FIERCE] + " Silvis " + role + ") keeps him on " + days.join(", ") + ", the day before his vacation - a derived week gives way only on the vacation's own days (lockViolations lists it)";
+  const EDGE_LINE = (monday, role, days) => "vacation: the derived week of " + monday + " (" + NAME[FIERCE] + " Silvis " + role + ") keeps him on " + days.join(", ") + ", the day before his vacation - the day before a vacation does not move a derived week (lockViolations / fixedViolations list it)";
   const isHis = (e, role) => !!e && e[role] === FIERCE && e[role + "Locked"] === true;
   const common = (name, D, lv) => {
     eq(D.hardViolations, [], name + ": hard violations");
@@ -1466,14 +1470,14 @@ const DW_RUNS = { n: 0 };
     eq(VD.derivedVacationYields, yielded.map((d) => ({ day: d, role: P, surgeonId: FIERCE, reason: "time-off", unit: null })), "diagnostics.derivedVacationYields = Thu 4/1 - Sun 4/4, the vacation's own days");
     eq(VD.derivedUnitDays, [], "the vacation run: no holiday unit is involved");
     eq(VD.warnings.filter((w) => /^vacation: /.test(w)), ["vacation: the derived week of 2027-03-29 (" + NAME[FIERCE] + " Silvis primary) does not place him on " + yielded.join(", ") + " - filled like any other day", EDGE_LINE("2027-03-29", P, ["2027-03-31"])], "one warning for the yielding days and one for the day before");
-    // (2b) Faraz 11/12: his vacation as it stands - from the Monday after the week (4/5 - 4/18). The whole week is his.
+    // (2b) Faraz 11/12: a vacation from the Monday after the week (fixture dates, 4/5 - 4/9). The whole week is his.
     CUR.range = "Faraz 11/12 vacation from the Monday after (week of 2027-03-29)";
-    const w = GEN.generate(monCtx, "2027-03-22", "2027-04-18", { seed: s, bestOf: 2 }), WS = w.schedule, WD = w.diagnostics;
+    const w = GEN.generate(monCtx, "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 }), WS = w.schedule, WD = w.diagnostics;
     DW_RUNS.n++;
     common("vacation from the Monday after", WD, ["2027-04-04 primary derived day-before-vacation"]);
     daysList("2027-03-29", "2027-04-04").forEach((d) => { ok(isHis(WS[d], P), d + ": his locked primary - all seven days of the week, Sunday (the day before his vacation) included"); eq(WS[d].source, "east-derived", d + " source"); });
     ok(!WD.uncovered.some((u) => u.day === "2027-04-04" && u.role === P), "Sun 4/4 primary is no open slot");
-    daysList("2027-04-05", "2027-04-18").forEach((d) => ok(WS[d].primary !== FIERCE && WS[d].backup !== FIERCE, d + ": he holds nothing on a vacation day"));
+    daysList(MON_ROW.start_date, MON_ROW.end_date).forEach((d) => ok(WS[d].primary !== FIERCE && WS[d].backup !== FIERCE, d + ": he holds nothing on a vacation day"));
     eq([WD.derivedVacationYields, WD.derivedUnitDays], [[], []], "nothing yields and no unit is involved");
     eq(WD.warnings.filter((x) => /^vacation: /.test(x)), [EDGE_LINE("2027-03-29", P, ["2027-04-04"])], "ONE warning: he is kept on the day before his vacation");
     if (s <= 2) {
@@ -1487,6 +1491,62 @@ const DW_RUNS = { n: 0 };
       oy.forEach((d) => { ok(OS[d].primary !== FIERCE, d + ": he is not placed as primary"); eq(OS[d].primaryLocked, false, d + ": no derived lock is seeded"); });
       eq(OD.derivedVacationYields, oy.map((d, i) => ({ day: d, role: P, surgeonId: FIERCE, reason: i === 0 ? "day-before-vacation" : "time-off", unit: null })), "yieldDayBefore true: Wed 3/31 (the day before) and Thu 4/1 - Sun 4/4 yield");
       eq(OD.warnings.filter((x) => /^vacation: /.test(x)), ["vacation: the derived week of 2027-03-29 (" + NAME[FIERCE] + " Silvis primary) does not place him on " + oy.join(", ") + " - filled like any other day"], "one warning, and no kept-day line");
+    }
+    if (s <= 2) {
+      // The 11/12 review: the kept-day line's own conditions, each pinned by a run.
+      // (A) yieldToVacation false: the lock stands over the vacation itself too - five lock violations and NO vacation line
+      // at all (nothing yields, and nothing is being told apart); yieldDayBefore true on top changes nothing.
+      CUR.range = "11/12 review (A) yieldToVacation false";
+      const a0 = GEN.generate(ctxOf({ timeOffRows: [VAC_ROW], groupRules: grDW({ yieldToVacation: false }) }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 }), A0 = a0.diagnostics;
+      DW_RUNS.n++;
+      daysList("2027-03-29", "2027-04-04").forEach((d) => ok(isHis(a0.schedule[d], P), d + ": the lock stands (yieldToVacation false)"));
+      const lvA = A0.lockViolations.filter((l) => l.id === FIERCE);
+      eq(lvA.map((l) => l.day), ["2027-03-31"].concat(daysList("2027-04-01", "2027-04-04")), "the day before and the four vacation days are his lock violations");
+      ok(lvA[0].reasons.indexOf("day-before-vacation") >= 0 && lvA.slice(1).every((l) => l.reasons.some((r) => r.indexOf("time-off:") === 0)), "...each with its own reason: " + JSON.stringify(lvA.map((l) => l.reasons)));
+      eq(A0.warnings.filter((x) => /^vacation: /.test(x)), [], "no vacation line: no yield, and no kept-day line with yieldToVacation false");
+      const a1 = GEN.generate(ctxOf({ timeOffRows: [VAC_ROW], groupRules: grDW({ yieldToVacation: false, yieldDayBefore: true }) }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 });
+      DW_RUNS.n++;
+      eq([a1.diagnostics.derivedVacationYields, a1.diagnostics.warnings.filter((x) => /^vacation: /.test(x)), daysList("2027-03-29", "2027-04-04").every((d) => isHis(a1.schedule[d], P))], [[], [], true], "yieldDayBefore true does nothing without yieldToVacation");
+      // (B) no derivedWeeks key at all (the live blob): the defaults - the day before is kept, with its line
+      CUR.range = "11/12 review (B) no derivedWeeks key";
+      const b0 = GEN.generate(ctxOf({ timeOffRows: [MON_ROW], groupRules: GR_NOKEY }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 }), B0 = b0.diagnostics;
+      DW_RUNS.n++;
+      ok(isHis(b0.schedule["2027-04-04"], P), "no key: Sun 4/4 is his");
+      eq(B0.warnings.filter((x) => /^vacation: /.test(x)), [EDGE_LINE("2027-03-29", P, ["2027-04-04"])], "no key: the kept-day line is there");
+      // (C) the day a holiday unit ADDS is the day before his vacation (week of 5/24, Memorial Day Mon 5/31, a vacation from
+      // Tue 6/1 - fixture dates): the unit stays his whole, and the line names his DERIVED week, 5/24 - not the week 5/31 is in
+      CUR.range = "11/12 review (C) the unit's added day is the day before a vacation";
+      const c0 = GEN.generate(ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: "2027-06-01", end_date: "2027-06-03" }] }), "2027-05-17", "2027-06-06", { seed: s, bestOf: 2 }), C0 = c0.diagnostics;
+      DW_RUNS.n++;
+      daysList("2027-05-24", "2027-05-31").forEach((d) => ok(isHis(c0.schedule[d], P), d + ": the week and the unit's Monday are his"));
+      eq(C0.lockViolations.filter((l) => l.id === FIERCE).map((l) => l.day + " " + l.lock + " " + l.reasons.join("+")), ["2027-05-31 derived day-before-vacation"], "Mon 5/31 is his one lock violation");
+      eq([C0.derivedUnitDays.map((x) => x.day), C0.derivedVacationYields], [["2027-05-31"], []], "the unit day is added and nothing yields");
+      eq(C0.warnings.filter((x) => /^vacation: /.test(x)), [EDGE_LINE("2027-05-24", P, ["2027-05-31"])], "the line names the derived week of 5/24");
+      // (D) two days before a vacation in one derived week (a one-day vacation on Wed 3/31 and one from Mon 4/5 - fixture
+      // dates): ONE line names both
+      CUR.range = "11/12 review (D) two days before a vacation in one week";
+      const d0 = GEN.generate(ctxOf({ timeOffRows: [{ person_id: FIERCE, start_date: "2027-03-31", end_date: "2027-03-31" }, MON_ROW] }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 }), D0 = d0.diagnostics;
+      DW_RUNS.n++;
+      ["2027-03-29", "2027-03-30", "2027-04-01", "2027-04-02", "2027-04-03", "2027-04-04"].forEach((d) => ok(isHis(d0.schedule[d], P), d + ": his"));
+      ok(d0.schedule["2027-03-31"].primary !== FIERCE, "Wed 3/31, the vacation day, is not his");
+      eq(D0.warnings.filter((x) => /^vacation: /.test(x)), ["vacation: the derived week of 2027-03-29 (" + NAME[FIERCE] + " Silvis primary) does not place him on 2027-03-31 - filled like any other day", EDGE_LINE("2027-03-29", P, ["2027-03-30", "2027-04-04"])], "one yield line and ONE kept-day line naming both days");
+      // (E) the line is about HIS derived day and the day-before reason only: another surgeon hand-locked the day before his
+      // own vacation gets none, nor does a derived lock that breaks another rule (a dated unavailable row of his)
+      CUR.range = "11/12 review (E) other locks, other rules";
+      const e0 = GEN.generate(ctxOf({ timeOffRows: [{ person_id: ACTON, start_date: "2027-04-08", end_date: "2027-04-09" }], availabilityRows: SA.seedToAvailabilityRows(seed).concat([{ person_id: FIERCE, start_date: "2027-03-30", end_date: "2027-03-30", kind: "unavailable", role: "any" }]), schedule: { "2027-04-07": heldRow(ACTON, true) } }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2 }), E0 = e0.diagnostics;
+      DW_RUNS.n++;
+      const lvE = E0.lockViolations.map((l) => l.day + " " + l.id + " " + l.lock + " " + l.reasons.join("+"));
+      ok(lvE.some((x) => x.indexOf("2027-04-07 " + ACTON + " import ") === 0 && /day-before-vacation/.test(x)), "Acton's hand lock the day before his own vacation is a lock violation: " + JSON.stringify(lvE));
+      ok(lvE.some((x) => x.indexOf("2027-03-30 " + FIERCE + " derived ") === 0 && /unavailable-row/.test(x)), "Fierce's derived lock over his own unavailable row is one too: " + JSON.stringify(lvE));
+      eq(E0.warnings.filter((x) => /^vacation: /.test(x)), [], "...and neither gets a kept-day line");
+      // (F) fill-open-only: an UNLOCKED row holding him on Sun 4/4 is a fixed slot, not a lock - listed in fixedViolations,
+      // and the line covers it too
+      CUR.range = "11/12 review (F) fill-open-only, an unlocked row of his on the day before";
+      const f0 = GEN.generate(ctxOf({ timeOffRows: [MON_ROW], schedule: { "2027-04-04": heldRow(FIERCE, false) } }), "2027-03-22", "2027-04-11", { seed: s, bestOf: 2, fillOpenOnly: true }), F0 = f0.diagnostics;
+      DW_RUNS.n++;
+      eq(F0.fixedViolations.filter((x) => x.id === FIERCE).map((x) => x.day + " " + x.role + " " + x.kept + " " + x.reasons.join("+")), ["2027-04-04 primary fill-open-only day-before-vacation"], "the held slot is a fixed violation");
+      eq(F0.lockViolations.filter((l) => l.id === FIERCE), [], "...and no lock violation of his");
+      eq(F0.warnings.filter((x) => /^vacation: /.test(x)), [EDGE_LINE("2027-03-29", P, ["2027-04-04"])], "the kept-day line covers a fixed slot too");
     }
     // (1) Memorial Day - his primary week of 5/24 keeps the unit
     CUR.range = "Faraz 11/11 Memorial Day (week of 2027-05-24)";

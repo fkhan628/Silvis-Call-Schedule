@@ -3523,8 +3523,12 @@ conflict reports and the UI see one picture:
    week now" - the vacation moved to start the Monday after his week, and Sunday stays his): the day BEFORE a vacation does
    not yield.** The derived lock stands there; `eligibility` still names `day-before-vacation` for him on that day, so the
    generator - which seeds a derived lock whatever his own reasons - lists it in `diagnostics.lockViolations` (lock
-   `derived`) and adds one warning per derived week and role ("vacation: the derived week of ... keeps him on ..., the day
-   before his vacation - a derived week gives way only on the vacation's own days"). The 11/11 reading - the day before
+   `derived`; `import+derived` once the row is published or is an accepted plan unit; a held slot that is no lock, in the
+   fill-open-only mode, goes to `diagnostics.fixedViolations`) and adds one warning per derived week and role
+   ("vacation: the derived week of ... keeps him on ..., the day before his vacation - the day before a vacation does not
+   move a derived week"). The line is about his own derived day and that one reason (never another surgeon's lock the day
+   before his vacation, never a derived lock over another rule), names the derived week also for a day a holiday unit
+   added, and is not written with `yieldToVacation` false. The 11/11 reading - the day before
    yields too, `day-before-vacation`, for a trailing-edge role (`ctx.trailingEdgeRoles` - read once, in `buildContext`: a
    value that is no list reads as `["primary"]`, with a warning; the planner and the server function read it the same way,
    without one) - is the data switch `yieldDayBefore`. A yielded day leaves `P.derived` and `ctx.derivedByDay`
@@ -3532,7 +3536,8 @@ conflict reports and the UI see one picture:
    still keeps an East primary week out of Silvis primary there (`east-busy`, as on an overridden derived backup day).
    `helpers.planHolidays` reads the same: a vacation on a unit of his derived week no longer leaves the unit open, and
    (11/12) a unit whose last day is the day before his vacation stays his - the planner sets his own day-before refusal
-   aside for the slot his week gives him and says so in a warning. The
+   aside for the slot his week gives him and says so in a warning - only when nothing else refuses him: with an opt-out or
+   a limit on top the slot stays open, said once. The
    unit-whole reading is taken per role BEFORE the two-roles check, so a unit two derived weeks meet on in different roles
    yields in both when a vacation touches it (the 11/11 review). Without a vacation such a unit keeps each week's days, with
    a warning, and has slots nobody can hold (the engine's reading before 11/11; the planner reads "primary only") - none in the
@@ -3546,9 +3551,10 @@ the finished schedule: the unit kept with him ("stays with", only when every add
 someone else's); or not kept whole, with what became of each added day (his; held by a named surgeon or an outside cover;
 left open; or his while named days of the unit in his week are not - a split to settle by hand); a held slot that keeps him
 on a vacation day is said so, and so is the day before a vacation his derived week keeps him on (11/12) - and
-`test/generator-regression.js` restates them from the seed (90 runs: the week of 3/29/2027 over a vacation - the day
-before it kept, as his one lock violation - the same week with the vacation starting the Monday after, the 11/11 reading
-switched on as data, Memorial Day, Labor Day as backup, the review's cases - the unit held by someone else, a lock on
+`test/generator-regression.js` restates them from the seed (104 runs: the week of 3/29/2027 over a vacation - the day
+before it kept, as his one lock violation - the same week with a vacation starting the Monday after, the 11/11 reading
+switched on as data, the kept-day line's own conditions (`yieldToVacation` false, a blob without the key, a unit's added
+day as the day before, two such days in one week, another surgeon's lock and another rule, a fixed slot), Memorial Day, Labor Day as backup, the review's cases - the unit held by someone else, a lock on
 the added day, standing locks on his vacation - the re-check's - the holder unable to take the added day, an outside cover
 on the unit's days or on the added day itself, he himself locked into the other role, a unit published to him and then
 given away - and a unit held in part, or added by a week that starts on the holiday).

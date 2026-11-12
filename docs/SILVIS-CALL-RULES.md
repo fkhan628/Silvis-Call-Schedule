@@ -401,11 +401,16 @@ decides the Trauma Director role.
   after the week of 3/29 ("he can be primary at Silvis that week now"), and Sunday 4/4, the day before it, stays his. The
   11/11 build had read "a vacation listed" with the vacation's trailing edge (§1: no primary the day before a vacation), so
   it still took that Sunday off him - and before the move, the Wednesday before the vacation's first day. **Rule (general):
-  a derived lock yields only on the vacation's own days; on the day before a vacation the lock stands.** The day-before
+  a derived lock yields on the vacation's own days (a holiday unit whole) and never on the day before one; there the lock
+  stands.** The day-before
   rule itself is unchanged for everyone and for every other day of his, and on that day it still names itself: a Generate
   keeps him there, lists the day under Lock violations ("vacation starts the next morning") and adds one line saying his
   derived week keeps him on it. A holiday unit whose last day is the day before his vacation stays his too (the yearly
-  holiday plan names him for it, with a warning). Data: `groupRules.eastFeed.derivedWeeks.yieldDayBefore` — off unless
+  holiday plan names him for it, with a warning). **What follows for that vacation:** once the week is published he is on
+  call the day before it, so the on-call guard of §1 (the app's check and the database's, which count the day before for
+  primary) refuses any later edit of that vacation's dates, and nobody else can take a derived day in a trade - the
+  scheduler changes that day by hand first (the day editor), then the vacation can be edited; deleting it is not
+  refused. Data: `groupRules.eastFeed.derivedWeeks.yieldDayBefore` — off unless
   exactly `true`, which brings back the 11/11 reading (the day before yields too, for a trailing-edge role).
 - **Outside those weeks he is in the pool and can be primary**, under his weekday pattern (via Faraz, 9/21):
 
@@ -554,9 +559,12 @@ The rules (data in `groupRules.holidayPlan`, with code defaults `HOLIDAY_PLAN_DE
    than 12 apart, history included, the engine's window), and **Fierce's derived week**: a unit on any day of one of his
    derived East weeks takes him in that week's Silvis role and nobody else in it; if he is refused that slot by anything
    but his own vacation (his holiday opt-out, a major-holiday limit), it stays OPEN and the plan says so. ⟶ **11/11 (Faraz:
-   "don't put him on if he has a vacation listed"): a vacation of his on the unit - any of its days, or for primary the day
-   before one - makes the derived week yield the whole unit, and it is planned like any other** (the plan's warning says
-   so; §3 Fierce). ⟶ **11/11 ("Give Fierce Memorial Day"): the generator reads this rule too** - every day of such a unit
+   "don't put him on if he has a vacation listed"): a vacation day of his on the unit - any of its days - makes the derived
+   week yield the whole unit, and it is planned like any other** (the plan's warning says so; §3 Fierce). ⟶ **11/12
+   (Faraz): the day before a vacation does not move a derived week** - a unit whose last day is the day before his
+   vacation stays his: his own day-before refusal is set aside for the slot his week gives him, and the plan says so in a
+   warning; another refusal of his on top (an opt-out, a limit) still leaves the slot open, as above (§3 Fierce; data:
+   `yieldDayBefore`). ⟶ **11/11 ("Give Fierce Memorial Day"): the generator reads this rule too** - every day of such a unit
    is a derived day of his, the days outside the week included (§3 Fierce).
 6. **History:** lifetime counts come from the schedule (every stored unit somebody holds; only the years BEFORE the one
    being planned count — the planned year never, and a later year on file feeds only the `maxMajorHolidays` 12-month window
@@ -1412,8 +1420,8 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     build read it with the vacation's own trailing edge (the day before a vacation is a primary rule, §1), so on that
     preview Wed 3/31 yielded too. On 11/12 Faraz moved the vacation to start the Monday after the week ("he can be primary
     at Silvis that week now") and, asked whether Sunday 4/4 - the day before it - stays his: **yes**. So a derived week
-    yields only on the vacation's own days; on the day before, the lock stands and a Generate lists it as a lock
-    violation, with a line in words (§3). A holiday unit still yields whole when a vacation day falls on it. **Reading
+    yields on the vacation's own days (a holiday unit whole) and never on the day before; there the lock stands and a
+    Generate lists it as a lock violation, with a line in words (§3). A holiday unit still yields whole when a vacation day falls on it. **Reading
     taken, confirm:** a holiday unit whose LAST day is the day before his vacation stays his whole - the day the unit
     adds included (no such case in the 2027 lists). His East call on a yielded day is Davenport's to cover. (e) and (f)
     are data: `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation, yieldDayBefore }` - the first two on
@@ -1462,3 +1470,7 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     (the day before his vacation), with its line in words; Memorial Day and the other listed weeks as in (g); open slots
     the same four. Primary / backup days in the range: Khan 36 / 36; Burchett 31 / 34; Acton 34 / 35; Philip 36 / 32;
     Fierce 37 / 41; Sarkar none. On the code before this answer the same run still gave that Sunday to someone else.
+    One consequence to know (§3): once that week is published, his vacation cannot be edited until the scheduler takes
+    Sunday 4/4 off him by hand - the on-call guard counts the day before a vacation. An independent review of this
+    change (11/12) found no defect in the rule; its findings - this section's item 5 of §5 still carried the 11/11
+    reading, and the new warning's conditions had no test of their own - are fixed with it.

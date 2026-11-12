@@ -512,6 +512,15 @@ step("G2b (Faraz 11/11): a derived week yields a unit to the holder's own vacati
   const dayBeforeOff = plan(2027, { surgeonRules: sr, east, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }], groupRules: { eastFeed: { derivedWeeks: { yieldToVacation: false } } } });
   eq(byName(dayBeforeOff, "Thanksgiving").primary, null, "yieldToVacation false: the day-before clash leaves Thanksgiving primary open, as before 11/11");
   ok(dayBeforeOff.warnings.some((w) => /^The derived East week makes Foxtrot the Thanksgiving 2027 primary but day-before-vacation - nobody can hold that slot$/.test(w)), "...with the old warning: " + JSON.stringify(dayBeforeOff.warnings));
+  // only exactly true switches the 11/11 reading on (the 11/12 review): a truthy value that is not true keeps the unit with him
+  [1, "true"].forEach((v) => eq(byName(plan(2027, { surgeonRules: sr, east, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }], groupRules: { eastFeed: { derivedWeeks: { yieldDayBefore: v } } } }), "Thanksgiving").primary, "f", "yieldDayBefore " + JSON.stringify(v) + " is not exactly true: the unit stays his"));
+  // ...and ONLY the day-before reason is set aside: with a refusal of his own on top (a holiday opt-out) the slot is OPEN,
+  // said once - never 'keeps' for a slot he does not keep
+  const srOut = { f: { eastFeed: { enabled: true }, holidayRules: { holidaysOff: ["Thanksgiving"] } } };
+  const both = plan(2027, { surgeonRules: srOut, east, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }] });
+  eq([byName(both, "Thanksgiving").primary, blockedOf(both, "Thanksgiving", "f", "primary")], [null, ["holiday-opt-out:Thanksgiving"]], "the day before a vacation AND a holiday opt-out: the opt-out stands and the slot stays open");
+  ok(both.warnings.some((w) => /^The derived East week makes Foxtrot the Thanksgiving 2027 primary but holiday-opt-out:Thanksgiving - nobody can hold that slot$/.test(w)), "...with the open-slot warning naming the opt-out only: " + JSON.stringify(both.warnings));
+  ok(!both.warnings.some((w) => /keeps Thanksgiving/.test(w)), "...and no 'keeps' line for a slot he does not keep");
   // a derived BACKUP week does not yield to the day before a vacation (a primary rule) - it still takes the unit
   const bk = plan(2027, { surgeonRules: sr, east: { eastDerived: [{ surgeonId: "f", weekMonday: "2027-11-22", silvisRole: "backup" }] }, vacations: [{ person_id: "f", start_date: "2027-11-29", end_date: "2027-11-30" }] });
   eq([byName(bk, "Thanksgiving").backup, blockedOf(bk, "Thanksgiving", "a", "backup")], ["f", ["derived-lock-held:f"]], "a derived backup week with a vacation starting the day after the unit: the unit is still his");
