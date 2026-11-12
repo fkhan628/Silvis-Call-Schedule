@@ -3590,3 +3590,32 @@ meanwhile the app derives from published and stated weeks and says the lists are
 - **The preview** (read-only; `scripts/preview-generate.js --east-lists cache|live|none`: the cache's copy, the lists read
   from Davenport in memory the way the refresh reads them, or none): rules doc section 8 item 29 (g).
 - **The ship:** no apply. The merge is the client; then the one function deploy and its dry-run proof by Faraz.
+
+### 26.8 Held initials - his name on a derived week before any row exists (Faraz 11/12; display only)
+
+*Faraz 11/12: "The app shows the areas shaded that are his primary shifts but not his initials - can we put those in as locks
+so that when the next schedule is in place, his back up shifts and primary shifts are already marked out". Generate already
+seeds every derived day as a locked row with his name (26.5); writing those locks months ahead would freeze them - a later
+change of the Davenport lists would no longer follow - and leave the other role of some fifty days OPEN and claimable. Of
+the two ways offered he chose: show the name, write nothing.*
+
+- **The reading - `rules.js` `derivedPending(ctx, schedule, day)`** → `{ primary, backup }`: the derived surgeon of each role
+  the schedule does not hold yet - the slot the next Generate seeds (`genSeedLocks` asks the same questions of its working
+  copy). A role is pending for him when it is derived for him that day (`ctx.derivedByDay`: a day that yields to his
+  vacation has left it, a day a holiday unit added is in it, the day before a vacation stays - 26.5), nobody holds that
+  role in the schedule (he himself included - the row shows him then; an outside cover holds a primary), he does not hold
+  the other role that day, and a day a unit added is still his (`derivedUnitLost`). Pure, and display only: no rule, no
+  export and no feed reads it, and `eligibility` answers exactly as before.
+- **The calendar** (`SlotLine`'s `held`): such a slot reads his name in a hollow, dotted pill in the roster's name colour
+  (`cal-held`, `data-testid="held-slot"`; the cell carries `data-held` = `P`, `B` or `PB`) where it read OPEN. Signed-in
+  sessions only - never `?public=1` - from today on and once the schedule is read; a Generate preview's days show their own
+  rows. The cell's `data-open`, the only-OPEN filter, the Open-shifts board, the week rows, the share page, the print view,
+  the exports and the calendar feeds keep reading the schedule alone: the slot IS open until Generate writes it. The cell's
+  hover says "held for <name>"; the pill's own title names the East week for the scheduler only (decision 11, 10/14) -
+  everyone else reads "Held for <name> - set when the next schedule is made". A surgeon chip filters his held days in, and
+  the legend gains "= held for the next schedule (not published yet)" only while the month draws one.
+- **The offer painter:** the P / B line of such a day reads "<name> (held)" in place of OPEN (`ofp-held`; the row's
+  `data-held`), for every painter - the words name no feed.
+- **Tests:** `test/rules.test.js` (the reading case by case, and `eligibility` unchanged on a pending day);
+  `test/data-layer.test.js` (the page's guards and pins; the title's two wordings, lifted); `test/ui/smoke.mjs` (the calendar
+  and the painter on listed weeks the harness serves ten months ahead, restated from the page's own rules context).

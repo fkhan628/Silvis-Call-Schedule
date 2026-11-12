@@ -8063,12 +8063,27 @@ function CallSchedule() {
           // schedule alone - they never see who is looking.
           const isMine = (h) => !isPublicMode && !!mySurgeon && h === mySurgeon;
           const mineRing = { borderColor: T.mineRim, boxShadow: "0 0 0 " + (dk ? 1.5 : 1) + "px " + T.mineRing };
-          const SlotLine = ({ role, day, holder, locked }) => {
+          // Faraz 11/12 ("the app shows the areas shaded that are his primary shifts but not his initials" - chosen: show them,
+          // write nothing): a slot the schedule does not hold yet that a derived week fills at the next Generate reads that
+          // surgeon's name in a HOLLOW, dotted pill - held, not published. rules.js derivedPending decides (the generator's own
+          // seeding questions), read over the rows the cells read (a Generate preview overlays its days - its rows carry the
+          // seeded locks themselves). Signed-in sessions only (never ?public=1), from today on, and only once the schedule is
+          // read. Display only: data-open, the only-OPEN filter, the week rows, the exports and the feeds keep reading the
+          // schedule alone. The words name no feed for anyone but the scheduler (decision 11, 10/14).
+          const HELD_NONE = { primary: null, backup: null };
+          const heldSched = previewGen && previewGen.schedule ? Object.assign({}, schedule, previewGen.schedule) : schedule;
+          const heldOn = !isPublicMode && !!rulesCtx && loaded && daysReadOk && typeof derivedPending === "function";
+          const heldOf = (d) => (heldOn && d >= todayStr ? derivedPending(rulesCtx, heldSched, d) : HELD_NONE);
+          const heldTitle = (id, role) => "Held for " + nameOf(id) + (eastDetailsVisible ? ": East week - Silvis " + role + " (derived from the Davenport feed), written as a lock at the next Generate" : " - set when the next schedule is made");
+          const heldPillStyle = (id) => { const hc = textColorOf(id); return { background: "transparent", color: hc, borderColor: hc, borderStyle: "dotted" }; };
+          const SlotLine = ({ role, day, holder, locked, held }) => {
             const isExt = typeof holder === "string" && holder.indexOf("ext:") === 0;
             let body;
             if (!holder && !loaded) body = <span className="cal-skel" data-testid="loading-slot" style={{background:T.skeleton}}/>;
             // Review 9/27 Do first 1: loaded, but no schedule_days read has landed - "not loaded", never OPEN (own testid).
             else if (!holder && !daysReadOk) body = <span className="cal-pill" data-testid="unread-slot" title="Schedule not loaded" style={{color:T.muted,fontStyle:"italic",fontWeight:500}}><span className="cal-name">not loaded</span><span className="cal-code">?</span></span>;
+            // Faraz 11/12: held for a derived week (heldOf above) - the roster's name colour, no fill, a dotted border
+            else if (!holder && held) body = <span className="cal-pill cal-held" data-testid="held-slot" data-held={held} title={heldTitle(held, role === "P" ? "primary" : "backup")} style={heldPillStyle(held)}><span className="cal-name">{nameOf(held)}</span><span className="cal-code">{codeOf(held)}</span></span>;
             // Unassigned before today (Central): a blank pill-height line - no text, no red (Faraz 9/22).
             else if (!holder && !slotIsOpen(day, holder, todayStr)) body = <span className="cal-pill cal-blank" aria-hidden="true">&nbsp;</span>;
             else if (!holder) body = <span className="cal-pill cal-open" style={{color:T.open,fontWeight:800,letterSpacing:0.4}}>OPEN</span>;
@@ -8094,6 +8109,8 @@ function CallSchedule() {
           const legendVac = gridDays.some(gd => calVac(gd).length > 0);
           // Item 2 (Faraz 11/1): the ring's legend line - only while this month's grid draws a ring (the rows the cells read: gridRow)
           const legendMine = gridDays.some(gd => { const g = gridRow(gd); return isMine(dayHolder(g, "primary")) || isMine(dayHolder(g, "backup")); });
+          // Faraz 11/12: the held pill's legend line - only while this month's grid draws one (its first holder lends the swatch its colour)
+          const legendHeld = gridDays.map(gd => { const h = heldOf(gd); return h.primary || h.backup || null; }).find(Boolean) || null;
           // Item 2: "Your next call" in On call now - Mine's next-call list (upcomingDaysOf: the published rows, never a preview) read
           // against the shift on now (helpers.myNextCallLine); his own line only, and nothing before the schedule_days read landed
           const myNext = !isPublicMode && mySurgeon && daysShown ? myNextCallLine(onCall, mySurgeon, upcomingDaysOf(mySurgeon, null), lastPublishedDay) : null;
@@ -8264,13 +8281,15 @@ function CallSchedule() {
                 const pH = dayHolder(a, "primary"); const bH = a ? a.backup : null;
                 // past unassigned days are blank, not OPEN; and nothing is OPEN before a schedule_days read landed (review 9/27 Do first 1)
                 const openP = daysReadOk && slotIsOpen(d, pH, todayStr), openB = daysReadOk && slotIsOpen(d, bH, todayStr);
-                const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup)));
+                // Faraz 11/12: the derived surgeon the next Generate puts on an open slot of this day (heldOf; null for a slot somebody holds)
+                const heldD = heldOf(d), heldP = !pH ? heldD.primary : null, heldB = !bH ? heldD.backup : null;
+                const inFilter = calSurgeonFilters.length === 0 || (a && (calSurgeonFilters.includes(a.primary) || calSurgeonFilters.includes(a.backup))) || (!!heldP && calSurgeonFilters.includes(heldP)) || (!!heldB && calSurgeonFilters.includes(heldB));
                 const dim = !inFilter || (calOnlyOpen && !(openKeys.has(openSlotKey(d, "primary")) || openKeys.has(openSlotKey(d, "backup")))); // only-OPEN reads the openSlots Set, never a per-cell rule
                 const isToday = d === todayStr;
                 const bg = hol ? T.holiday : isWk ? T.weekend : T.surface;
                 const bracket = isWk ? { borderTop: "2px solid " + (isToday ? T.accent : T.navyMuted), borderTopLeftRadius: dow === 5 ? 8 : 6, borderTopRightRadius: dow === 0 ? 8 : 6 } : {};
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
-                const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (bH || openB ? holderLabel(bH, nameOf) : "-")];
+                const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (heldP ? "held for " + nameOf(heldP) : pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (heldB ? "held for " + nameOf(heldB) : bH || openB ? holderLabel(bH, nameOf) : "-")];
                 if (hol) titleBits.push(hol.name + " (holiday unit)"); const noteT = a && a.note ? (isScheduler ? a.note : dayNoteShown(a.note)) : ""; if (noteT) titleBits.push("note: " + noteT); // 10/30: the importer's provenance is the scheduler's (dayNoteShown)
                 // Prompt 29: the APP on call that day (signed-in sessions only - appByDay is {} on ?public=1)
                 const appE = !isPublicMode ? appByDay[d] || null : null;
@@ -8292,7 +8311,7 @@ function CallSchedule() {
                 const vacJoin = { l: vacHere.length > 0 && col > 0 && pvAt(dPrev) === isPreview && calVacKey(dPrev) === calVacKey(d), r: vacHere.length > 0 && col < 6 && pvAt(dNext) === isPreview && calVacKey(dNext) === calVacKey(d) };
                 const vacTitle = [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ");
                 return (
-                  <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")}
+                  <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")} data-held={(heldP ? "P" : "") + (heldB ? "B" : "")}
                     onClick={()=>openCellDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCellDay(d); } }}
                     title={titleBits.join(" | ")}
                     style={{background:bg, border: isToday ? "2px solid " + T.accent : "1px solid " + dkCardBorder, ...bracket, opacity: dim ? 0.28 : inMonth ? 1 : 0.5, color:dkText, boxShadow: isToday ? "0 0 0 2px rgba(255,95,5,0.18)" : "none"}}>
@@ -8304,8 +8323,8 @@ function CallSchedule() {
                       {awaitingConfirmation(a) && <span data-badge="confirm" data-testid="confirm-badge" title="awaiting the scheduler's confirmation" style={badge(true, "#c2410c")}>?</span>}
                       {ovS && <span data-badge="over-soft" data-testid="over-soft-badge" data-over-soft-id={ovS.id} title={overSoftLimitTitle(ovS, nameOf)} style={overSoftBadgeStyle}><span className="cal-os-long">{overSoftLimitWords(ovS.limit)}</span><span className="cal-os-short">{">" + ovS.limit}</span></span>}
                     </div>
-                    <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)}/>
-                    <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>
+                    <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)} held={heldP}/>
+                    <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)} held={heldB}/>
                     {/* Prompt 29: the third line "A <name>" - the APP on call (italic, no pill, appText); the full name is in the hover and the day summary */}
                     {appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[appE.profileId] || appE.short}</span></div>}
                     {/* 10/21: the vacation bar (calVac above) - who is off that day, at the bottom of the cell, joined to the next day's bar when
@@ -8336,6 +8355,8 @@ function CallSchedule() {
               {/* Item 2 (Faraz 11/1): his own pill, ringed, as the swatch - only while the grid draws a ring (legendMine) */}
               {legendMine && (() => { const c = colorOf(mySurgeon); return <span data-testid="legend-mine" style={{display:"inline-flex",alignItems:"center",gap:4}}><span className="cal-pill" style={{background:c.tg,color:c.tx,borderStyle:c.dashed?"dashed":"solid",...mineRing}}><span className="cal-name">{nameOf(mySurgeon)}</span><span className="cal-code">{codeOf(mySurgeon)}</span></span> = you on call</span>; })()}
               {legendExt && <span data-testid="legend-ext"><span style={{fontStyle:"italic"}}>{legendExt}</span> = external cover</span>}
+              {/* Faraz 11/12: the held pill - only while this month's grid draws one (legendHeld) */}
+              {legendHeld && <span data-testid="legend-held" style={{display:"inline-flex",alignItems:"center",gap:4}}><span className="cal-pill cal-held" style={heldPillStyle(legendHeld)}><span className="cal-name">{nameOf(legendHeld)}</span><span className="cal-code">{codeOf(legendHeld)}</span></span> = held for the next schedule (not published yet)</span>}
               {!isPublicMode && (isScheduler || gridDays.some(gd => { const g = schedule[gd]; return !!g && slotIsOpen(gd, null, todayStr) && ((g.primaryLocked && !dayHolder(g, "primary")) || (g.backupLocked && !g.backup)); })) && <span data-testid="legend-lock" style={{display:"inline-flex",alignItems:"center",gap:3}}><Padlock/> locked slot{isScheduler ? "" : " (ask the scheduler)"}</span>}
               {/* Item E2 (9/25): no "E East-derived week" / "F East forecast" line - the grid draws neither badge any more */}
               {/* 10/30: the holiday's name, on a phone only - a wide cell prints it in the cell */}
@@ -9851,6 +9872,9 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
       else if (row.block.primary && row.block.backup) row.grey = row.block.primary === row.block.backup ? row.block.primary : row.block.primary + " / " + row.block.backup;
       const a = schedule ? schedule[ds] : null;
       row.holders = { primary: a ? dayHolder(a, "primary") : null, backup: a ? dayHolder(a, "backup") : null };
+      // Faraz 11/12: the slots a derived week fills at the next Generate read "<name> (held)" on the P / B line instead of
+      // OPEN (rules.js derivedPending - display only; from today on; the words name no feed)
+      row.held = ctx && ds >= today && typeof derivedPending === "function" ? derivedPending(ctx, schedule || {}, ds) : { primary: null, backup: null };
       row.holdsPrimary = !!pid && row.holders.primary === pid; // published / saved primary: No primary is refused (trade first, NP008)
       row.others = othersByDay[ds] || 0;
       out.push(row);
@@ -10125,10 +10149,12 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
           const partialShown = partial && !(r.npRange && r.block.primary === NO_PRIMARY_RANGE_WORDS && !r.block.backup); // the range pill says it
           const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;
           const holderP = holderText(r.holders.primary, ds), holderB = holderText(r.holders.backup, ds);
+          const heldP = !r.holders.primary ? r.held.primary : null, heldB = !r.holders.backup ? r.held.backup : null; // Faraz 11/12 (row.held above)
+          const heldSpan = (id, role) => <span data-testid="ofp-held" data-held-role={role} data-held={id} title={"Held for " + nameOf(id) + " - set when the next schedule is made"} style={{ color: text, fontWeight: 600, fontStyle: "italic" }}>{nameOf(id)} (held)</span>;
           const npPill = OFFER_BRUSH.noprimary;
           const clearWhat = clearable(r) ? (savedByDay[ds] && np.own[ds] ? " - saved offer and No primary: Clear can take them back" : savedByDay[ds] ? " - saved offer: Clear can take it back" : " - saved No primary: Clear can take it back") : "";
           return (
-            <button key={ds} data-testid="ofp-day" data-day={ds} data-state={grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free"} data-offer={eff || ""} data-why={r.grey || partial || ""} data-clearable={grey && clearable(r) ? "1" : "0"} data-noprimary={effN ? "own" : r.npRange ? "range" : ""} data-np-draft={npDrafted ? (npDraft[ds] ? "add" : "clear") : ""} data-np-why={npWhy} data-surface="1" disabled={!tappable} onClick={() => tapDay(ds)}
+            <button key={ds} data-testid="ofp-day" data-day={ds} data-state={grey && !drafted ? "blocked" : drafted ? "draft" : eff ? "saved" : "free"} data-offer={eff || ""} data-why={r.grey || partial || ""} data-clearable={grey && clearable(r) ? "1" : "0"} data-noprimary={effN ? "own" : r.npRange ? "range" : ""} data-np-draft={npDrafted ? (npDraft[ds] ? "add" : "clear") : ""} data-np-why={npWhy} data-held={(heldP ? "P" : "") + (heldB ? "B" : "")} data-surface="1" disabled={!tappable} onClick={() => tapDay(ds)}
               style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", minHeight: 52, padding: "7px 10px", marginBottom: 4, borderRadius: 9, cursor: tappable ? "pointer" : "not-allowed", fontFamily: font, background: rowBg, opacity: grey ? 0.6 : 1, border: `1px solid ${isPending ? T.accent : drafted ? T.accent : border}` }}>
               <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
                 <div style={{ fontSize: 17, fontWeight: 800, color: text, fontFamily: mono }}>{r.d}</div>
@@ -10147,8 +10173,8 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
                   {!grey && armed === "noprimary" && npWhy && <span data-testid="ofp-why" data-np-reason="1" style={{ fontSize: 10.5, fontWeight: 700, color: T.paintText }}>{npWhy}</span>}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10.5, color: muted, marginTop: 2 }}>
-                  <span>P <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span></span>
-                  <span>B <span style={{ color: holderB === "OPEN" ? openRed : text, fontWeight: holderB === "OPEN" ? 800 : 600 }}>{holderB}</span></span>
+                  <span>P {heldP ? heldSpan(heldP, "primary") : <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span>}</span>
+                  <span>B {heldB ? heldSpan(heldB, "backup") : <span style={{ color: holderB === "OPEN" ? openRed : text, fontWeight: holderB === "OPEN" ? 800 : 600 }}>{holderB}</span>}</span>
                   {r.others > 0 && <span data-testid="ofp-others">{r.others} other{r.others === 1 ? "" : "s"} offered</span>}
                 </div>
               </div>

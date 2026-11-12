@@ -170,6 +170,10 @@ export const contrastTable = (mod) => {
       add(theme, `pill ${id} name on its tint`, c.tx, c.tg, "label");
       add(theme, `name ${id} on page`, theme === "dark" ? c.dk : c.tx, T.bg, "label");
       add(theme, `name ${id} on card`, theme === "dark" ? c.dk : c.tx, T.surface, "label");
+      // Faraz 11/12 (held initials): the hollow dotted pill writes the name straight on the calendar cell - the card is the
+      // row above, the weekend and holiday tints are these (a name at 600: the label class; its dotted border is the same ink)
+      add(theme, `held pill ${id} name on the weekend tint`, theme === "dark" ? c.dk : c.tx, T.weekend, "label");
+      add(theme, `held pill ${id} name on the holiday tint`, theme === "dark" ? c.dk : c.tx, T.holiday, "label");
     }
     add(theme, "outside surgeon pill on its tint", OUTSIDE_SURGEON_COLOR.tx, OUTSIDE_SURGEON_COLOR.tg, "label");
     (m.FALLBACK_SURGEON_COLORS || []).forEach((c, i) => add(theme, `fallback pill ${i} name on its tint`, c.tx, c.tg, "label"));

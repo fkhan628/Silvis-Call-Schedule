@@ -413,6 +413,14 @@ decides the Trauma Director role.
   trade; the scheduler changes that day by hand first (the day editor), then the vacation can be edited. Moving the
   first day later, and deleting the vacation, are not refused. Data: `groupRules.eastFeed.derivedWeeks.yieldDayBefore` — off unless
   exactly `true`, which brings back the 11/11 reading (the day before yields too, for a trailing-edge role).
+- ⟶ **11/12 (Faraz): his initials show on his East weeks before the schedule is made.** He asked to put his derived days
+  in as locks ahead of time, so that they are already marked out when the next schedule is in place. Generate does that
+  by itself - every derived day comes out as a locked row with his name - and locks written months ahead would stop
+  following the Davenport lists and leave the other role of those days OPEN and claimable. Chosen instead: the app
+  **shows** his name on those days and writes nothing - a hollow, dotted pill on the calendar where the slot read OPEN,
+  "<name> (held)" on the offer painter's P / B line - for everyone signed in (not on the public page, the share page or
+  the calendar feeds, which show the published schedule only). Until Generate writes the row the slot is still open in
+  the schedule, nobody else can take it (as before), and the display follows the lists as they change. Build guide §26.8.
 - **Outside those weeks he is in the pool and can be primary**, under his weekday pattern (via Faraz, 9/21):
 
   | Day | Where he is | Silvis eligibility |

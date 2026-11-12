@@ -3645,6 +3645,51 @@ step("derived weeks: the review's findings (11/11) - a unit someone else holds, 
   eq(two.warnings.filter(w => /by his own derived week - not added/.test(w)).length, 3, "...three warnings (Mon for Fierce; Sat and Sun for the other): " + JSON.stringify(two.warnings.filter(w => /not added/.test(w))));
 }
 
+/* ------------------------------------------------ derived weeks: what the next Generate will seed (Faraz 11/12) */
+// Faraz 11/12: "The app shows the areas shaded that are his primary shifts but not his initials" - chosen: show them,
+// without writing anything. derivedPending(ctx, schedule, day) names the derived surgeon of each role the schedule does
+// not hold yet (the slot genSeedLocks seeds at the next Generate); the calendar and the offer painter draw it as held.
+step("derived weeks: derivedPending - the slots the next Generate seeds, for display only (Faraz 11/12)");
+{
+  const wk = (monday, role, id) => ({ weekMonday: monday, surgeonId: id || FIERCE, silvisRole: role });
+  const row = (primary, backup, lockP, lockB, extra) => Object.assign({ primary: primary || null, backup: backup || null, primaryLocked: !!lockP, backupLocked: !!lockB, source: "manual", externalCover: null }, extra || {});
+  const none = { primary: null, backup: null };
+  eq(typeof R.derivedPending, "function", "rules.js exports derivedPending");
+  const c = makeCtx({ schedule: {}, eastDerived: [wk("2027-03-29", P), wk("2027-04-19", B)] });
+  eq(R.derivedPending(c, {}, "2027-03-31"), { primary: FIERCE, backup: null }, "a day of his primary week with no row: primary is pending for him");
+  eq(R.derivedPending(c, {}, "2027-04-21"), { primary: null, backup: FIERCE }, "a day of his backup week: backup is pending");
+  eq(R.derivedPending(c, {}, "2027-04-07"), none, "a day outside every derived week: nothing");
+  eq(R.derivedPending(c, undefined, "2027-03-31"), { primary: FIERCE, backup: null }, "no schedule at all reads as no rows");
+  // a row that holds the role - anyone, he himself included - shows itself: nothing is pending
+  eq(R.derivedPending(c, { "2027-03-31": row(FIERCE, null, true) }, "2027-03-31"), none, "he holds it already: the row shows him");
+  eq(R.derivedPending(c, { "2027-03-31": row(ACTON, null, false) }, "2027-03-31"), none, "someone else holds it: the row shows that holder");
+  eq(R.derivedPending(c, { "2027-03-31": row(null, KHAN) }, "2027-03-31"), { primary: FIERCE, backup: null }, "a row with only the OTHER role held by someone else: still pending");
+  eq(R.derivedPending(c, { "2027-03-31": row(null, null, false, false, { externalCover: "locums" }) }, "2027-03-31"), none, "an outside cover holds the primary");
+  eq(R.derivedPending(c, { "2027-04-21": row(null, null, false, false, { externalCover: "locums" }) }, "2027-04-21"), { primary: null, backup: FIERCE }, "...which says nothing about a pending backup");
+  eq(R.derivedPending(c, { "2027-03-31": row(null, FIERCE) }, "2027-03-31"), none, "he holds the other role that day: never both");
+  eq(R.derivedPending(c, { "2027-04-21": row(FIERCE, null) }, "2027-04-21"), none, "...the same for a backup week: he is that day's primary");
+  // his vacation: a vacation day has left the derived days; the day before stays his (11/12)
+  const v = makeCtx({ schedule: {}, eastDerived: [wk("2027-03-29", P)], timeOffRows: [{ person_id: FIERCE, start_date: "2027-04-01", end_date: "2027-04-07" }] });
+  eq([R.derivedPending(v, {}, "2027-03-31"), R.derivedPending(v, {}, "2027-04-01")], [{ primary: FIERCE, backup: null }, none], "the day before his vacation is pending, a vacation day is not");
+  // a holiday unit: the day it adds is pending while the unit is his, and not once the unit is someone else's
+  const m = makeCtx({ schedule: {}, eastDerived: [wk("2027-05-24", P)] });
+  eq(R.derivedPending(m, {}, "2027-05-31"), { primary: FIERCE, backup: null }, "Memorial Day Monday, the day the unit adds");
+  eq(R.derivedPending(m, { "2027-05-29": row(ACTON), "2027-05-30": row(ACTON) }, "2027-05-31"), none, "...not when Acton holds the unit's Sat + Sun (derivedUnitLost)");
+  eq(R.derivedPending(m, { "2027-05-29": row(ACTON) }, "2027-05-31"), { primary: FIERCE, backup: null }, "...still his when only Saturday is someone else's");
+  // one derived surgeon per role on one day
+  const two = makeCtx({ schedule: {}, eastDerived: [wk("2027-03-29", P), wk("2027-03-29", B, KHAN)] });
+  eq(R.derivedPending(two, {}, "2027-03-30"), { primary: FIERCE, backup: KHAN }, "two derived surgeons, one per role");
+  eq(R.derivedPending(two, { "2027-03-30": row(null, ACTON) }, "2027-03-30"), { primary: FIERCE, backup: null }, "...each role judged on its own");
+  // display only: no context / no map answers nothing, and the context is never written
+  eq([R.derivedPending({}, {}, "2027-03-31"), R.derivedPending(null, {}, "2027-03-31")], [none, none], "no context or no map: nothing pending");
+  const before = JSON.stringify([c.derivedByDay, c.per[FIERCE].derived]);
+  const sched = { "2027-03-31": row(ACTON) }, schedBefore = JSON.stringify(sched);
+  R.derivedPending(c, sched, "2027-03-31");
+  eq([JSON.stringify([c.derivedByDay, c.per[FIERCE].derived]), JSON.stringify(sched)], [before, schedBefore], "it reads - the context and the schedule are as they were");
+  // ...and eligibility does not read it: his own pending day answers as before (the lock holder), everyone else is held out
+  eq([R.eligibility(c, "2027-03-31", P, FIERCE).lockHolder, R.eligibility(c, "2027-03-31", P, ACTON, { allHard: true }).hard.indexOf("derived-lock-held:" + FIERCE) >= 0], [true, true], "eligibility is unchanged on a pending day");
+}
+
 const total = Date.now() - t0;
 const BUDGET_MS = process.env.SILVIS_RULES_BUDGET_MS ? Math.floor(+process.env.SILVIS_RULES_BUDGET_MS) : 5000;
 const budgetNote = "budget " + BUDGET_MS + " ms" + (process.env.SILVIS_RULES_BUDGET_MS ? " via SILVIS_RULES_BUDGET_MS" : "");

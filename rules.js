@@ -1628,6 +1628,30 @@ function derivedUnitLost(ctx, schedule, date, role, id) {
     return !!(e[other + "Locked"] && e[other] === id);
   });
 }
+// derivedPending(ctx, schedule, date) -> { primary: id | null, backup: id | null }. Faraz 11/12 ("the app shows the areas
+// shaded that are his primary shifts but not his initials" - chosen: show them, write nothing). DISPLAY ONLY: the derived
+// surgeon of each role on a day the schedule does not hold yet - the slot the next Generate seeds as his derived lock
+// (generator.js genSeedLocks asks the same questions of its working copy). A role is pending for him when the day is a
+// derived day of his in that role (ctx.derivedByDay: a day that yields to his vacation has left it, a day a holiday unit
+// added is in it), nobody holds that role in `schedule` (he himself included - the row shows him then; an outside cover
+// holds a primary), he does not hold the OTHER role that day, and a day a unit added is still his (derivedUnitLost).
+// The calendar and the offer painter draw it as "held"; nothing is written and no rule reads it - eligibility, the
+// generator and every export decide exactly as before.
+function derivedPending(ctx, schedule, date) {
+  var out = { primary: null, backup: null };
+  var slot = ctx && ctx.derivedByDay ? ctx.derivedByDay[date] : null;
+  if (!slot) return out;
+  var e = (schedule && schedule[date]) || null;
+  ["primary", "backup"].forEach(function (role) {
+    var id = slot[role], other = role === "primary" ? "backup" : "primary";
+    if (!id || !ctx.per || !ctx.per[id]) return;
+    if (e && (e[role] || (role === "primary" && e.externalCover))) return;
+    if (e && e[other] === id) return;
+    if (derivedUnitLost(ctx, schedule || {}, date, role, id)) return;
+    out[role] = id;
+  });
+  return out;
+}
 
 // The weekday-pattern family for one (surgeon, date, role): recurring blacklist,
 // weekday allow-list, the outside-derived-weeks pattern and the Aledo rules.
@@ -2903,6 +2927,7 @@ if (typeof module !== "undefined") {
     eligibility: eligibility,
     eastConflicts: eastConflicts,
     derivedUnitLost: derivedUnitLost, // 11/11 review: is a day a holiday unit added to a derived week still his? (the generator asks of its working copy)
+    derivedPending: derivedPending,   // Faraz 11/12: the derived slots the schedule does not hold yet - display only (the calendar's and the painter's "held")
     eastVacationConflicts: eastVacationConflicts,
     weekendUnitPatterns: weekendUnitPatterns,
     holidayUnits: holidayUnits,

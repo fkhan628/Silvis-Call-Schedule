@@ -3889,7 +3889,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   check("I2 source pins: SlotLine rings only the signed-in surgeon's own pill (isMine: his roster id, never ?public=1) with its own border + a box-shadow in THEME tokens; the legend line follows the drawn rings; the next-call line sits in On call now (signed-in surgeon only, after the read landed); the exports never see the viewer", () => {
     assert.strictEqual(count("const isMine = (h) => !isPublicMode && !!mySurgeon && h === mySurgeon;"), 1, "one predicate: the profile's roster link, never ?public=1");
     assert.strictEqual(count('const mineRing = { borderColor: T.mineRim, boxShadow: "0 0 0 " + (dk ? 1.5 : 1) + "px " + T.mineRing };'), 1, "the ring: the existing 1 px border recoloured + a box-shadow - no padding, width or outline (no pill grows: vis-001)");
-    const sl = src.slice(src.indexOf("          const SlotLine = ({ role, day, holder, locked }) => {"), src.indexOf("          const badge = (solid, color) =>"));
+    // pin moved deliberately 11/12 (held initials): SlotLine takes `held` too; kept intent - the roster pill's own ring
+    const sl = src.slice(src.indexOf("          const SlotLine = ({ role, day, holder, locked, held }) => {"), src.indexOf("          const badge = (solid, color) =>"));
     assert.ok(sl.includes("const c = colorOf(holder), mine = isMine(holder);") && sl.includes('data-mine={mine ? "1" : undefined}') && sl.includes("...(mine ? mineRing : {})"), "the roster pill reads isMine and wears the ring");
     assert.ok(sl.includes("...(mine && locked && isScheduler ? { marginRight: 2 } : {})"), "the scheduler's padlock after his own locked pill keeps 2 px off the ring");
     assert.strictEqual((sl.match(/mineRing/g) || []).length, 1, "only the roster pill wears it - never OPEN, the external cover, the blank past slot or a placeholder");
@@ -12914,7 +12915,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // pin moved deliberately 10/3 (fix/painter-dark-mode, spec H): the line also carries the phone label (cal-app-code,
       // helpers.appGridLabels); kept intent: the A tag, the short name, the title and the appText colour.
       assert.strictEqual(cnt(SRC, '{appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[appE.profileId] || appE.short}</span></div>}'), 1);
-      const cellB = SRC.indexOf('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)}/>'), cellA = SRC.indexOf('data-testid="cal-app"');
+      // pin moved deliberately 11/12 (held initials): the B line carries held={heldB}; kept intent - the APP line right after B
+      const cellB = SRC.indexOf('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)} held={heldB}/>'), cellA = SRC.indexOf('data-testid="cal-app"');
       assert.ok(cellB > 0 && cellA > cellB && cellA - cellB < 400, "the APP line is the third line, right after B");
       // the merge with main (10/2): a failed read is said in place - the legend for every signed-in role, the summary for all but the scheduler
       assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn\'t be loaded - the A lines may be missing</span>}'), 1, "the legend's failed line");
@@ -13671,7 +13673,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(onSurface.filter(t => !/data-surface="1"/.test(t.tag)).map(t => "line " + t.line), [], "buttons drawn on the dark surface without data-surface");
       const marked = tags.filter(t => /data-surface="1"/.test(t.tag));
       assert.strictEqual(marked.length, 4, "four button tags carry data-surface: " + marked.map(t => t.line).join(", "));
-      assert.ok(offer.includes('data-np-why={npWhy} data-surface="1" disabled={!tappable} onClick={() => tapDay(ds)}'), "the offer painter's day row");
+      // pin moved deliberately 11/12 (held initials): the row carries data-held before data-surface; kept intent - data-surface on the day row
+      assert.ok(offer.includes('data-np-why={npWhy} data-held={(heldP ? "P" : "") + (heldB ? "B" : "")} data-surface="1" disabled={!tappable} onClick={() => tapDay(ds)}'), "the offer painter's day row");
       assert.ok(vac.includes('<button key={ds} data-testid="vacp-day" data-day={ds} data-surface="1" onClick={() => tapDay(ds)}'), "the vacation painter's day row");
       assert.ok(card.includes('data-testid="appdays-cell" data-day={d} data-state={st} data-holder={holder ? holder.short : undefined} data-surface="1"'), "My APP days' day cell");
       assert.ok(card.includes('data-testid="appdays-prev" data-surface="1"') && card.includes("background: atStart ? T.surface : T.raised") && card.includes("<span style={atStart ? {color: T.muted} : undefined}>&lsaquo;</span>"), "the month arrow: no fill when disabled (T.surface, kept dark), the raised fill when it can move; the disabled glyph T.muted");
@@ -13727,7 +13730,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(L.paintOpen, L.open, "light: the painter's OPEN stays T.open (the look is unchanged)");
       assert.strictEqual(D.paintOpen, "#FF8A8A", "dark: the painter's own red");
       assert.ok(offer.includes("const openRed = T.paintOpen;") && cntP(offer, "openRed") === 3, "openRed = T.paintOpen, read by the two holder spans only");
-      assert.ok(offer.includes('<span>P <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span></span>') && offer.includes('<span>B <span style={{ color: holderB === "OPEN" ? openRed : text, fontWeight: holderB === "OPEN" ? 800 : 600 }}>{holderB}</span></span>'), "both holder spans paint OPEN with openRed");
+      // pin moved deliberately 11/12 (held initials): a held name (the painter's text token, italic) can stand in the span's
+      // place; kept intent - an OPEN slot is painted with openRed, never a literal
+      assert.ok(offer.includes('<span>P {heldP ? heldSpan(heldP, "primary") : <span style={{ color: holderP === "OPEN" ? openRed : text, fontWeight: holderP === "OPEN" ? 800 : 600 }}>{holderP}</span>}</span>') && offer.includes('<span>B {heldB ? heldSpan(heldB, "backup") : <span style={{ color: holderB === "OPEN" ? openRed : text, fontWeight: holderB === "OPEN" ? 800 : 600 }}>{holderB}</span>}</span>'), "both holder spans paint OPEN with openRed");
+      assert.ok(offer.includes('style={{ color: text, fontWeight: 600, fontStyle: "italic" }}>{nameOf(id)} (held)</span>;'), "the held name uses the painter's text token - no literal colour");
       assert.ok(offer.includes("const rowBg = grey ? PR.blocked : isPending ? PR.pending : drafted ? PR.draft : r.weekend ? T.weekend : panelBg;"), "the five backgrounds a day row can take (the pairs below)");
       assert.ok(!/"OPEN"/.test(vac), "the vacation painter shows no OPEN");
       const { pathToFileURL } = require("url");
@@ -15449,6 +15455,47 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       ["### 26.1 The source - two lists, one fact", "### 26.2 The cache - no schema change", "### 26.3 The read guard (`eastListsGuard`) - the rule chosen", "### 26.4 Precedence, warnings and Setup", "### 26.5 Faraz's two calls on the preview (11/11) - `rules.js` `rdDerivedUnitsAndVacations`", "### 26.6 The server function - `east-feed-refresh` v3 (prepared; the deploy is Faraz's step)", "### 26.7 Tests, the preview and the ship"]
         .reduce((at, h) => { const k = s26.indexOf("\n" + h); assert.ok(k > at, "sub-heading in order: " + h); return k; }, -1);
       assert.deepStrictEqual([seed34.groupRules.eastFeed.derivedWeeks.keepHolidayUnit, seed34.groupRules.eastFeed.derivedWeeks.yieldToVacation, seed34.groupRules.eastFeed.derivedWeeks.yieldDayBefore], [true, true, false], "the seed carries the three switches: the two 11/11 readings on, the day-before yield off (Faraz 11/12)");
+    });
+    check("Held initials (Faraz 11/12, display only): rules.js derivedPending is exported and the page reads it - the calendar's SlotLine draws a hollow dotted 'held' pill for a slot nobody holds (signed in, the schedule read, from today, never ?public=1; data-open untouched), its title names the East week for the scheduler only, the cell carries data-held and the chips filter it in, the legend line shows only while a pill is drawn; the offer painter's P / B line reads '<name> (held)'; no export reads it; the docs say so", () => {
+      const R34h = require(path.join(ROOT, "rules.js"));
+      assert.strictEqual(typeof R34h.derivedPending, "function", "rules.js exports derivedPending");
+      // the reading's guards on the page: a rules context, a loaded and read schedule, signed in - and from today on
+      assert.ok(src.includes('const heldOn = !isPublicMode && !!rulesCtx && loaded && daysReadOk && typeof derivedPending === "function";'), "heldOn: never on ?public=1, never before the schedule is read");
+      assert.ok(src.includes("const heldOf = (d) => (heldOn && d >= todayStr ? derivedPending(rulesCtx, heldSched, d) : HELD_NONE);"), "heldOf: from today on, over the rows the cells read");
+      assert.ok(src.includes("const heldSched = previewGen && previewGen.schedule ? Object.assign({}, schedule, previewGen.schedule) : schedule;"), "a Generate preview's rows overlay the schedule");
+      // the title, lifted and run: the East words are the scheduler's only (decision 11, 10/14)
+      const tl = /\n\s*(const heldTitle = \(id, role\) => [^\n]+;)\n/.exec(src);
+      assert.ok(tl, "heldTitle");
+      const titleOf = (east) => new Function("nameOf", "eastDetailsVisible", tl[1] + "\nreturn heldTitle;")((id) => ({ s5: "Fierce" })[id] || id, east);
+      assert.strictEqual(titleOf(true)("s5", "primary"), "Held for Fierce: East week - Silvis primary (derived from the Davenport feed), written as a lock at the next Generate");
+      assert.strictEqual(titleOf(false)("s5", "backup"), "Held for Fierce - set when the next schedule is made");
+      assert.ok(!/East|Davenport|feed|derived/i.test(titleOf(false)("s5", "primary")), "a non-scheduler's title names no feed");
+      // the pill: only where nobody holds the slot, after the not-loaded branches and before blank / OPEN
+      const sl = src.slice(src.indexOf("const SlotLine = ({ role, day, holder, locked, held }) => {"), src.indexOf("const badge = (solid, color) =>"));
+      assert.ok(sl.length > 500 && sl.length < 6000, "SlotLine");
+      const at = (t) => sl.indexOf(t);
+      assert.ok(at('data-testid="unread-slot"') > 0 && at('else if (!holder && held) body = <span className="cal-pill cal-held" data-testid="held-slot" data-held={held}') > at('data-testid="unread-slot"') && at('className="cal-pill cal-blank"') > at('data-testid="held-slot"') && at('className="cal-pill cal-open"') > at('className="cal-pill cal-blank"'), "the held branch sits after not-loaded and before blank / OPEN, and only for a slot nobody holds");
+      assert.ok(src.includes('const heldPillStyle = (id) => { const hc = textColorOf(id); return { background: "transparent", color: hc, borderColor: hc, borderStyle: "dotted" }; };'), "hollow, dotted, in the roster's name colour");
+      // the cell: data-held beside data-open (which keeps reading the schedule), the hover words, the chip filter
+      assert.ok(src.includes("const heldD = heldOf(d), heldP = !pH ? heldD.primary : null, heldB = !bH ? heldD.backup : null;"), "never over a held slot");
+      assert.ok(src.includes('data-open={(openP ? "P" : "") + (openB ? "B" : "")} data-held={(heldP ? "P" : "") + (heldB ? "B" : "")}'), "data-held beside an unchanged data-open");
+      assert.ok(src.includes("const openP = daysReadOk && slotIsOpen(d, pH, todayStr), openB = daysReadOk && slotIsOpen(d, bH, todayStr);"), "OPEN is still the schedule's own reading");
+      assert.ok(src.includes('"P " + (heldP ? "held for " + nameOf(heldP) : pH || openP ? holderLabel(pH, nameOf) : "-")') && src.includes('"B " + (heldB ? "held for " + nameOf(heldB) : bH || openB ? holderLabel(bH, nameOf) : "-")'), "the hover title says held for <name>");
+      assert.ok(src.includes("|| (!!heldP && calSurgeonFilters.includes(heldP)) || (!!heldB && calSurgeonFilters.includes(heldB));"), "a surgeon chip filters his held days in");
+      assert.ok(src.includes('<SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)} held={heldP}/>') && src.includes('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)} held={heldB}/>'), "both lines get their held holder");
+      assert.ok(src.includes('{legendHeld && <span data-testid="legend-held"') && src.includes("= held for the next schedule (not published yet)</span>}"), "the legend line, only while the month draws one");
+      // the offer painter
+      assert.ok(src.includes('row.held = ctx && ds >= today && typeof derivedPending === "function" ? derivedPending(ctx, schedule || {}, ds) : { primary: null, backup: null };'), "the painter reads the same function, from today on");
+      assert.ok(src.includes("const heldP = !r.holders.primary ? r.held.primary : null, heldB = !r.holders.backup ? r.held.backup : null;"), "never over a holder");
+      assert.ok(src.includes("{nameOf(id)} (held)</span>;") && src.includes('title={"Held for " + nameOf(id) + " - set when the next schedule is made"}'), "'<name> (held)', with a title that names no feed");
+      assert.ok(src.includes('<span>P {heldP ? heldSpan(heldP, "primary") : <span') && src.includes('<span>B {heldB ? heldSpan(heldB, "backup") : <span'), "on the P / B line, in place of OPEN");
+      // display only: the exports, the week rows, the feeds, the importer and the generator are built without it
+      ["helpers.js", "generator.js", "east-feed.js", "importer.js"].forEach(f => assert.ok(!read34(f).includes("derivedPending"), f + " does not read derivedPending"));
+      // the docs
+      const rulesH = read34("docs", "SILVIS-CALL-RULES.md").replace(/\s+/g, " "), guideH = read34("docs", "SILVIS-BUILD-GUIDE.md");
+      assert.ok(rulesH.includes("11/12 (Faraz): his initials show on his East weeks before the schedule is made."), "rules doc section 3");
+      assert.ok(guideH.includes("\n### 26.8 Held initials - his name on a derived week before any row exists (Faraz 11/12; display only)"), "build guide 26.8");
+      assert.ok(guideH.includes("`derivedPending(ctx, schedule, day)`") && read34("CLAUDE.md").includes("`derivedPending`"), "the function is named in the guide and in CLAUDE.md");
     });
   }
   console.log("\n[P31A5] Prompt 31 Part A (A5): the docs - guide section 25 and its pointers, the rules doc, ONBOARDING, the edge-functions README, HISTORY");

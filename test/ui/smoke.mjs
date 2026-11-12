@@ -10373,6 +10373,120 @@ try {
             else if (a.card.warnings.length !== 1 || a.card.warnings[0].week !== LM3 || a.card.warnings[0].why !== "both-lists" || !/BOTH DSG lists/.test(a.card.warnings[0].text)) fail("P34 Setup lists (a): one warning for the Monday on both lists (" + LM3 + "): " + J(a.card.warnings));
             else if (!/published Davenport week decides first/.test(a.card.legend || "")) fail("P34 Setup lists (a): the legend is missing: " + a.card.legend);
             else ok(`P34 Setup lists (a): a healthy read - the week written carries [${LM1}, ${LM3}] / [${LM2}, ${LM3}] (dropped 1, named in the toast and the audit row); the card: 'DSG lists last read ...: 2 + 2', ${WANT.join(", ")} each '(DSG list)', one both-lists warning for ${LM3}, the legend; ${a.card.rows.filter(r => r.source === "feed").length} published and ${a.card.rows.filter(r => r.source === "stated").length} stated week(s) beside them`);
+            // Faraz 11/12 ("the app shows the areas shaded that are his primary shifts but not his initials" - chosen: show them,
+            // write nothing). With the listed weeks derived and no schedule row that far ahead, the calendar reads the derived
+            // surgeon's name in a HOLLOW dotted pill on those weeks (LM1 as backup, LM2 as primary) and the offer painter's P / B
+            // line reads "<name> (held)" instead of OPEN - while OPEN stays the schedule's truth (the cell's data-open). The
+            // wanted slots are restated from the page's own rules context by the rule's questions (the role is derived for
+            // him; nobody holds it; he does not hold the other role; a day a holiday unit added is still his) - never by the
+            // page's derivedPending. Nothing may be written by looking.
+            try {
+              const heldBefore = writes.length;
+              const heldWant = await page.evaluate(([from, to, today]) => {
+                const rootEl = document.getElementById("root");
+                const ck = rootEl && Object.keys(rootEl).find(k => k.startsWith("__reactContainer$"));
+                if (!ck) return { error: "no React container key on #root" };
+                const hostRoot = rootEl[ck], current = (hostRoot && hostRoot.stateNode && hostRoot.stateNode.current) || hostRoot;
+                let ctx = null, n = 0; const stack = [current];
+                while (stack.length && !ctx && n++ < 500000) {
+                  const f = stack.pop(); if (!f) continue;
+                  if (f.tag === 0 || f.tag === 11 || f.tag === 15) for (let h = f.memoizedState; h && typeof h === "object" && "next" in h; h = h.next) { const v = h.memoizedState; if (Array.isArray(v) && v[0] && typeof v[0] === "object" && "error" in v[0] && v[0].ctx && v[0].ctx.per && v[0].ctx.holidayByDay && v[0].ctx.schedule) { ctx = v[0].ctx; break; } }
+                  if (f.sibling) stack.push(f.sibling); if (f.child) stack.push(f.child);
+                }
+                if (!ctx) return { error: "the App's rulesCtxState memo was not found on the committed React tree" };
+                const add = (d, k) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + k * 86400000).toISOString().slice(0, 10);
+                const days = {}, who = {};
+                for (let d = from; d <= to; d = add(d, 1)) {
+                  const slot = (ctx.derivedByDay && ctx.derivedByDay[d]) || {}, e = ctx.schedule[d] || null, out = { P: null, B: null };
+                  [["primary", "backup", "P"], ["backup", "primary", "B"]].forEach(([role, other, letter]) => {
+                    const id = slot[role];
+                    if (!id || d < today) return;
+                    if (e && (e[role] || (role === "primary" && e.externalCover))) return;
+                    if (e && e[other] === id) return;
+                    if (typeof derivedUnitLost === "function" && derivedUnitLost(ctx, ctx.schedule, d, role, id)) return;
+                    out[letter] = id; who[id] = { name: (ctx.rosterById[id] || {}).name || id, code: (ctx.rosterById[id] || {}).code || "" };
+                  });
+                  days[d] = out;
+                }
+                return { days, who };
+              }, [isoPlus(LM1, -1), isoPlus(LM2, 7), todayCentral]);
+              if (heldWant.error) throw new Error("could not read the rules context: " + heldWant.error);
+              const hDays = Object.keys(heldWant.days).sort(), hLetters = (d) => (heldWant.days[d].P ? "P" : "") + (heldWant.days[d].B ? "B" : "");
+              const week = (m) => [0, 1, 2, 3, 4, 5, 6].map(k => isoPlus(m, k));
+              const nB = week(LM1).filter(d => heldWant.days[d].B).length, nP = week(LM2).filter(d => heldWant.days[d].P).length;
+              const hMonths = Array.from(new Set(hDays.map(d => d.slice(0, 7))));
+              // (1) the calendar, every month the two weeks touch
+              const calGot = {}; const legends = {};
+              for (const ym of hMonths) {
+                await showMonth(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1);
+                const cells = await page.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => ({ day: e.getAttribute("data-day"), held: e.getAttribute("data-held"), open: e.getAttribute("data-open") || "", title: e.getAttribute("title") || "",
+                  pills: Array.from(e.querySelectorAll(".cal-line")).map(l => { const p = l.querySelector("[data-testid=held-slot]"), r = l.querySelector(".cal-role"); if (!p) return null; const cs = getComputedStyle(p); return { role: r ? r.textContent.trim() : "", id: p.getAttribute("data-held"), name: (p.querySelector(".cal-name") || {}).textContent || "", code: (p.querySelector(".cal-code") || {}).textContent || "", title: p.getAttribute("title") || "", border: cs.borderTopStyle, bg: cs.backgroundColor }; }).filter(Boolean) })));
+                cells.forEach(c => { if (c.day && c.day.slice(0, 7) === ym && heldWant.days[c.day]) calGot[c.day] = c; });
+                if (ym === LM1.slice(0, 7)) await page.locator("[data-testid=cal-grid]").screenshot({ path: path.join(OUT, "calendar-held.png") }).catch(() => {});
+                legends[ym] = await page.$eval("[data-testid=legend-held]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+              }
+              const calBad = [];
+              hDays.forEach(d => {
+                const c = calGot[d], w = heldWant.days[d];
+                if (!c) { calBad.push(d + ": no cell read"); return; }
+                if (c.held !== hLetters(d)) { calBad.push(d + ": data-held '" + c.held + "', wanted '" + hLetters(d) + "'"); return; }
+                if (c.pills.length !== hLetters(d).length) { calBad.push(d + ": " + c.pills.length + " held pill(s), wanted " + hLetters(d).length); return; }
+                [["P", "primary"], ["B", "backup"]].forEach(([letter, role]) => {
+                  const id = w[letter]; if (!id) return;
+                  const p = c.pills.find(x => x.role === letter), me = heldWant.who[id];
+                  if (!p) calBad.push(d + " " + letter + ": no held pill on that line");
+                  else if (p.id !== id || p.name !== me.name || p.code !== me.code) calBad.push(d + " " + letter + ": the pill names " + JSON.stringify([p.id, p.name, p.code]) + ", wanted " + JSON.stringify([id, me.name, me.code]));
+                  else if (p.border !== "dotted" || !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(p.bg)) calBad.push(d + " " + letter + ": the pill should be hollow and dotted, saw border " + p.border + " / background " + p.bg);
+                  else if (p.title !== "Held for " + me.name + ": East week - Silvis " + role + " (derived from the Davenport feed), written as a lock at the next Generate") calBad.push(d + " " + letter + ": the scheduler's title reads '" + p.title + "'");
+                  else if (!c.open.includes(letter)) calBad.push(d + " " + letter + ": data-open '" + c.open + "' lost the slot - OPEN must stay the schedule's truth");
+                  else if (!c.title.includes(letter + " held for " + me.name)) calBad.push(d + " " + letter + ": the cell's hover title should say '" + letter + " held for " + me.name + "': " + c.title);
+                });
+              });
+              const legendBad = hMonths.filter(ym => { const any = hDays.some(d => d.slice(0, 7) === ym && hLetters(d)); return any ? !/ = held for the next schedule \(not published yet\)$/.test(legends[ym] || "") : legends[ym] !== null; });
+              // (2) the offer painter (the scheduler's own, from My schedule): the P / B line of the same days
+              await clickTab(page, "myschedule");
+              await page.click("[data-testid=paint-offers]");
+              await page.waitForSelector("[data-testid=ofp-sheet]", { timeout: 5000 });
+              const ofpGot = {};
+              const ofpMonth = () => page.$eval("[data-testid=ofp-sheet]", el => el.getAttribute("data-month"));
+              for (const ym of hMonths) {
+                for (let k = 0; k < 18 && (await ofpMonth()) < ym; k++) { await page.click("[data-testid=ofp-next]"); await page.waitForTimeout(120); }
+                if ((await ofpMonth()) !== ym) throw new Error("the painter did not reach " + ym + " (at " + (await ofpMonth()) + ")");
+                const rows = await page.$$eval("[data-testid=ofp-day]", els => els.map(e => ({ day: e.getAttribute("data-day"), held: e.getAttribute("data-held"), text: e.textContent.replace(/\s+/g, " "), spans: Array.from(e.querySelectorAll("[data-testid=ofp-held]")).map(s => ({ role: s.getAttribute("data-held-role"), id: s.getAttribute("data-held"), text: s.textContent.trim(), title: s.getAttribute("title") || "" })) })));
+                rows.forEach(r => { if (heldWant.days[r.day]) ofpGot[r.day] = r; });
+                if (ym === LM1.slice(0, 7)) { await page.locator(`[data-testid=ofp-day][data-day="${LM1}"]`).scrollIntoViewIfNeeded().catch(() => {}); await page.screenshot({ path: path.join(OUT, "painter-held.png") }).catch(() => {}); }
+              }
+              await page.click("[data-testid=ofp-close]");
+              await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 });
+              const ofpBad = [];
+              hDays.forEach(d => {
+                const r = ofpGot[d], w = heldWant.days[d];
+                if (!r) { ofpBad.push(d + ": no painter row read"); return; }
+                if (r.held !== hLetters(d) || r.spans.length !== hLetters(d).length) { ofpBad.push(d + ": data-held '" + r.held + "' with " + r.spans.length + " held name(s), wanted '" + hLetters(d) + "'"); return; }
+                [["P", "primary"], ["B", "backup"]].forEach(([letter, role]) => {
+                  const id = w[letter]; if (!id) return;
+                  const sp = r.spans.find(x => x.role === role), me = heldWant.who[id];
+                  if (!sp || sp.id !== id || sp.text !== me.name + " (held)") ofpBad.push(d + " " + letter + ": the line should read '" + me.name + " (held)': " + JSON.stringify(sp));
+                  else if (/East|Davenport/i.test(sp.title) || sp.title !== "Held for " + me.name + " - set when the next schedule is made") ofpBad.push(d + " " + letter + ": the painter's title names no feed: '" + sp.title + "'");
+                  else if (!r.text.includes(letter + " " + me.name + " (held)")) ofpBad.push(d + " " + letter + ": '" + letter + " " + me.name + " (held)' is not on the row: " + r.text.slice(0, 160));
+                });
+              });
+              // (the tables a display could wrongly touch - the app's own background check-ins, client_versions and the like, are not this check's)
+              const heldWrites = writes.slice(heldBefore).filter(w => w.method !== "GET" && /[/]rest[/]v1[/](schedule_days|call_offers|availability|time_off|call_schedule_data|east_feed|east_overrides|shift_trade_requests|rpc[/])/.test(w.path));
+              if (nB < 1 || nP < 1) fail(`Held initials (11/12): the listed weeks ${LM1} (backup) and ${LM2} (primary) derive ${nB} + ${nP} pending slot(s) in the page's rules context - the check would prove nothing`);
+              else if (calBad.length) fail(`Held initials (11/12, calendar): ${calBad.length} day(s) differ from the rules' pending derived slots - ${calBad.slice(0, 4).join("; ")}`);
+              else if (legendBad.length) fail(`Held initials (11/12, calendar): the legend line 'held for the next schedule (not published yet)' should show exactly in the months that draw a held pill - wrong in ${legendBad.join(", ")}: ${JSON.stringify(legends)}`);
+              else if (ofpBad.length) fail(`Held initials (11/12, painter): ${ofpBad.length} day(s) differ - ${ofpBad.slice(0, 4).join("; ")}`);
+              else if (heldWrites.length) fail(`Held initials (11/12): looking wrote something - ${heldWrites.map(w => w.method + " " + w.path).join(", ")}`);
+              else ok(`Held initials (11/12): with the listed weeks derived and no schedule row there, the calendar draws a hollow dotted pill '${heldWant.who[heldWant.days[LM1].B].name}' on the B line of ${nB} day(s) of the week of ${LM1} and on the P line of ${nP} day(s) of the week of ${LM2} (${hDays.length} days ${hDays[0]}..${hDays[hDays.length - 1]} compared with the rules' pending derived slots; data-open keeps the slot; the scheduler's title names the East week; the legend line shows in ${hMonths.filter(ym => legends[ym]).join(", ")}); the offer painter's P / B line reads '<name> (held)' on the same days with a title that names no feed; nothing written`);
+              await clickTab(page, "setup");
+              await openCard("setup_east");
+            } catch (e) {
+              fail("Held initials (11/12): " + errLine(e));
+              if (await page.$("[data-testid=ofp-sheet]")) { await page.click("[data-testid=ofp-close]").catch(() => {}); await page.waitForSelector("[data-testid=ofp-sheet]", { state: "detached", timeout: 3000 }).catch(() => {}); }
+              await clickTab(page, "setup").catch(() => {});
+              await openCard("setup_east").catch(() => {});
+            }
             // (b) the blob without the two keys: the cached lists are kept
             eastListsServed = { eastPrimary: [LM1, LM3], eastBackup: [LM2, LM3], readAt: OLD_READ };
             eastBlobLists = null;
