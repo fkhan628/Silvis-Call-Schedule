@@ -5595,8 +5595,9 @@ ok(s20code.includes('echo "   SKIP 20f/20g (supabase CLI not linked at $WORKDIR)
 {
   const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
   // widened 10/22 (the review of revision z's record step): section 22's anon checks (22c-22e) may follow 20i in the list; kept intent:
-  // the header names section 20, 20a-20d, 20h and 20i in that order, and 20e
-  ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d, 20h, 20i(, 22c-22e)?\)/.test(head) && /surgeon reads \([^)]*19f, 20e;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d, 20h, 20i - 20i since the deploy's record step) and 20e");
+  // the header names section 20, 20a-20d, 20h and 20i in that order, and 20e; widened 11/17 (revision ac): section 25's anon checks
+  // (25a-25e) may follow 22c-22e and its surgeon read 25f may follow 20e
+  ok(/East vacations anon checks and probe \(20\)/.test(head) && /anon checks \([^)]*19a-19e, 19i, 20a-20d, 20h, 20i(, 22c-22e)?(, 25a-25e)?\)/.test(head) && /surgeon reads \([^)]*19f, 20e(, 25f)?;/.test(head), "verify-rls.sh's header names section 20, its anon checks (20a-20d, 20h, 20i - 20i since the deploy's record step) and 20e");
   // pin moved deliberately 10/19 (the record step): the header no longer documents SILVIS_EAST_VACATIONS_APPLIED (strict is the default)
   ok(!/SILVIS_EAST_VACATIONS_APPLIED/.test(head), "verify-rls.sh's header no longer documents SILVIS_EAST_VACATIONS_APPLIED (the record step dropped it)");
   // pin moved deliberately 10/20 (the deploy's record step): the header no longer documents SILVIS_EAST_REFRESH_DEPLOYED (20i on every run)
