@@ -982,8 +982,9 @@ const payDb = {
 // no e-mails - the save function writes the one audit row. The table is authenticated-only (no anon policy, anon's
 // privileges revoked), so a read goes out only with a FRESH user token (dbAuthHeaders) - without one load() answers
 // { state: "skipped" } and nothing is requested. load() answers
-//   { state: "ok", rows, names }   rows = app_call_days (may be [] - no APP day yet), names = app_call_names() (display names
-//                                  of the holders, of the caller's own APP profile and - for the scheduler - of every APP)
+//   { state: "ok", rows, vacations, names }   rows = app_call_days (may be [] - no APP shift yet), vacations = app_time_off
+//                                  (may be []), names = app_call_names() (display names of the holders of a shift or a vacation,
+//                                  of the caller's own APP profile and - for the scheduler and the office - of every APP)
 //   { state: "unavailable" }       the table or a function does not exist yet (404 PGRST205 / PGRST202 / 42P01 -
 //                                  helpers.appDaysReadFailureState): "APP days are available after the next database
 //                                  update", no toast. Also what a rollback leaves behind.
@@ -999,6 +1000,13 @@ const payDb = {
 // (authFetch: the user's JWT; its single refresh-and-retry on a 401 never reached the function). Answers { ok: true, result }
 // (the function's jsonb: ok, profile_id, added, removed, kept, absent, replaced, source, audit) or { ok: false, status,
 // error } (error = the body text, the function's "APP_DAY_<TOKEN>: <text>" message inside - helpers.appDaysErrorWords).
+// Prompt 35 (revision ac, Faraz 11/17 - sql/migrations/2026-11-17-app-shifts.sql, report-first): the shifts are TYPED - load()
+// reads shift_type too (the key is day + shift_type + profile_id, so pages overlap on that key) and the APP vacations
+// (app_time_off, authenticated-only, paged by start_date + id; answered as vacations); save()'s lists are [{ day, type }] and
+// p_replace is the profile a scheduler's change takes the shift over from (null otherwise); saveVacations(profileId, add,
+// remove) is ONE POST to rpc/save_app_vacations with exactly p_profile / p_add ([{ start, end }]) / p_remove (ids) - a change is a
+// remove plus an add in one call. A database without revision ac answers the typed read 400 42703 (no such column) or 404: read
+// as "unavailable" (helpers.appDaysReadFailureState), never as an empty list.
 const APP_DAYS_PAGE = 1000;
 const APP_DAYS_MAX_PAGES = 200;
 const appDaysDb = {
@@ -1012,36 +1020,47 @@ const appDaysDb = {
     const failed = async (res) => { const body = await res.text().catch(() => ""); return { state: appDaysReadFailureState(res.status, body), error: `HTTP ${res.status} ${body.slice(0, 160)}` }; };
     try {
       const headers = dbAuthHeaders();
-      const rows = [];
-      let offset = 0, done = false;
-      for (let n = 0; n < APP_DAYS_MAX_PAGES; n++) {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/app_call_days?select=day,profile_id,source,created_at&order=day.asc&limit=${APP_DAYS_PAGE}&offset=${offset}`, { headers });
-        if (!res.ok) return await failed(res);
-        const page = await res.json();
-        if (!Array.isArray(page)) return { state: "failed", error: "unexpected response body (app_call_days)" };
-        if (page.length > APP_DAYS_PAGE) return { state: "failed", error: `app_call_days page ${n + 1} has ${page.length} rows (limit ${APP_DAYS_PAGE} ignored)` };
-        if (n === 0) { for (const r of page) rows.push(r); }
-        else {
-          const last = rows[rows.length - 1];
-          if (!page.length || !page[0] || !last || page[0].day !== last.day) return { state: "failed", error: `app_call_days page ${n + 1} does not start on the last day of page ${n} (the table changed during the read, or the server ignores offset) - read again` };
-          for (let i = 1; i < page.length; i++) rows.push(page[i]);
+      // one paged read per table: every page after the first starts ON the last row of the page before (its key compared), else
+      // "failed" - the table changed during the read, or the server ignores offset
+      const readAll = async (table, query, keyOf) => {
+        const out = [];
+        let offset = 0;
+        for (let n = 0; n < APP_DAYS_MAX_PAGES; n++) {
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}&limit=${APP_DAYS_PAGE}&offset=${offset}`, { headers });
+          if (!res.ok) return { res };
+          const page = await res.json();
+          if (!Array.isArray(page)) return { fail: `unexpected response body (${table})` };
+          if (page.length > APP_DAYS_PAGE) return { fail: `${table} page ${n + 1} has ${page.length} rows (limit ${APP_DAYS_PAGE} ignored)` };
+          if (n === 0) { for (const r of page) out.push(r); }
+          else {
+            const last = out[out.length - 1];
+            if (!page.length || !page[0] || !last || keyOf(page[0]) !== keyOf(last)) return { fail: `${table} page ${n + 1} does not start on the last row of page ${n} (the table changed during the read, or the server ignores offset) - read again` };
+            for (let i = 1; i < page.length; i++) out.push(page[i]);
+          }
+          if (page.length < APP_DAYS_PAGE) return { rows: out };
+          offset += APP_DAYS_PAGE - 1;
         }
-        if (page.length < APP_DAYS_PAGE) { done = true; break; }
-        offset += APP_DAYS_PAGE - 1;
-      }
-      if (!done) return { state: "failed", error: `app_call_days: more than ${APP_DAYS_MAX_PAGES} pages of ${APP_DAYS_PAGE} rows` };
+        return { fail: `${table}: more than ${APP_DAYS_MAX_PAGES} pages of ${APP_DAYS_PAGE} rows` };
+      };
+      const days = await readAll("app_call_days", "select=day,shift_type,profile_id,source,created_at&order=day.asc,shift_type.asc,profile_id.asc", (r) => r.day + "|" + r.shift_type + "|" + r.profile_id);
+      if (days.res) return await failed(days.res);
+      if (days.fail) return { state: "failed", error: days.fail };
+      const rows = days.rows;
+      const vac = await readAll("app_time_off", "select=id,profile_id,start_date,end_date,source,created_at&order=start_date.asc,id.asc", (r) => r.id);
+      if (vac.res) return await failed(vac.res);
+      if (vac.fail) return { state: "failed", error: vac.fail };
       // app_call_names() is stable: a GET (PostgREST runs it read-only), no body
       const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers });
       if (!nres.ok) return await failed(nres);
       const names = await nres.json();
       if (!Array.isArray(names)) return { state: "failed", error: "unexpected response body (app_call_names)" };
-      return { state: "ok", rows, names };
+      return { state: "ok", rows, vacations: vac.rows, names };
     } catch (e) {
       return { state: "failed", error: String((e && e.message) || e) };
     }
   },
   async save(profileId, add, clear, replace) {
-    const body = { p_profile: profileId || null, p_add: Array.isArray(add) ? add : [], p_clear: Array.isArray(clear) ? clear : [], p_replace: !!replace };
+    const body = { p_profile: profileId || null, p_add: Array.isArray(add) ? add : [], p_clear: Array.isArray(clear) ? clear : [], p_replace: typeof replace === "string" && replace ? replace : null };
     try {
       const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_days`, { method: "POST", body: JSON.stringify(body) });
       const text = await res.text().catch(() => "");
@@ -1049,6 +1068,20 @@ const appDaysDb = {
       let result = null;
       try { result = JSON.parse(text); } catch (e) { result = null; }
       if (!result || result.ok !== true) return { ok: false, status: res.status, error: "unexpected response from save_app_days: " + text.slice(0, 160) };
+      return { ok: true, result };
+    } catch (e) {
+      return { ok: false, status: 0, error: String((e && e.message) || e) };
+    }
+  },
+  async saveVacations(profileId, add, remove) {
+    const body = { p_profile: profileId || null, p_add: Array.isArray(add) ? add : [], p_remove: Array.isArray(remove) ? remove : [] };
+    try {
+      const res = await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_vacations`, { method: "POST", body: JSON.stringify(body) });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) return { ok: false, status: res.status, error: text || `HTTP ${res.status}` };
+      let result = null;
+      try { result = JSON.parse(text); } catch (e) { result = null; }
+      if (!result || result.ok !== true) return { ok: false, status: res.status, error: "unexpected response from save_app_vacations: " + text.slice(0, 160) };
       return { ok: true, result };
     } catch (e) {
       return { ok: false, status: 0, error: String((e && e.message) || e) };

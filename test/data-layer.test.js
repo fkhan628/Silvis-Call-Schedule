@@ -4757,7 +4757,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(src.includes('data-testid="cal-vac" data-vac-ids={vacHere.map(v => v.id).join(",")}'), "the bar, with its ids");
     assert.ok(src.includes("title={vacTitle} style={{background:T.vacBar,color:T.vacText}}>"), "the bar's colours are the theme's tokens (no literal)");
     assert.ok(src.includes('<div className={"cal-vac" + (vacJoin.l ? " cal-vac-l" : "") + (vacJoin.r ? " cal-vac-r" : "")} data-testid="cal-vac"'), "the bar's classes read vacJoin (l / r)");
-    assert.ok(src.includes('<span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>') && src.includes('{i ? " " : ""}<span className="cal-vac-who"') && src.includes('{i < vacHere.length - 1 ? "," : ""}</span></React.Fragment>'), "the icon glued to the first person; a comma ends each person but the last; a plain space between people (the bar wraps between people, never before a comma)");
+    // pin moved deliberately 11/17 (Prompt 35): an entry is an APP's (v.app - "A" + its short name) or a surgeon's, in one Fragment;
+    // kept intent - the icon glued to the first person, a comma ending each person but the last, a plain space between people
+    assert.ok(src.includes('<span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>') && src.includes('{i ? " " : ""}{v.app\n                          ? <span className="cal-vac-who" data-appvac={v.app.profileId}') && src.includes('                          : <span className="cal-vac-who" data-vac=') && (src.match(/\{i < vacHere\.length - 1 \? "," : ""\}<\/span>/g) || []).length === 2 && src.includes('{i < vacHere.length - 1 ? "," : ""}</span>}</React.Fragment>)}'), "the icon glued to the first person; a comma ends each person but the last (an APP's entry too); a plain space between people (the bar wraps between people, never before a comma)");
     assert.ok(src.includes("      .cal-vac-icon { display: none; }\n") && src.includes("border-top: 2px solid transparent; background-clip: padding-box; }"), "no icon on a phone; a 2 px gap above the bar");
     assert.ok(src.includes('data-vac={v.east ? undefined : v.id} data-eastvac={v.east ? v.id : undefined}'), "data-vac = a time_off / derived entry, data-eastvac = the scheduler's East entry");
     assert.ok(src.includes('<span className="cal-name">{nameOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span><span className="cal-code">{codeOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span>'), "names, codes on a phone; '?' only while unreviewed, in both");
@@ -4772,9 +4774,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(c0 > 0 && c1 > c0 && j0 > 0 && j1 > j0, "calVac / calVacKey and the cell's join lines are where the test expects them");
     const lifted = src.slice(j0, j1);
     assert.ok(lifted.includes("const col = gridDays.indexOf(d) % 7;") && lifted.includes("pvAt(dPrev) === isPreview") && lifted.includes("pvAt(dNext) === isPreview"), "the lifted lines carry the row column and the preview guard");
-    const mk = new Function("vacByDay", "eastVacByDay", "previewGen", "gridDays", "fmt", "addD", "parse",
+    // Prompt 35 (11/17): calVac reads appVacByDay too (the APPs on vacation, after the surgeons, keyed "app:<profile id>")
+    const mk = new Function("vacByDay", "eastVacByDay", "appVacByDay", "previewGen", "gridDays", "fmt", "addD", "parse",
       src.slice(c0, c1) + "\n  return (d) => { const dt = parse(d); const isPreview = !!(previewGen && previewGen.schedule && previewGen.schedule[d]);\n" + lifted + "\n  return { show: vacHere.map(v => v.id + (v.east === \"unreviewed\" ? \"?\" : \"\")).join(\",\"), l: vacJoin.l, r: vacJoin.r }; };");
-    const run = (opts) => { const g = H.monthGridDays(2026, 10, opts.ws || "sun"); const f = mk(opts.vac || {}, opts.east || {}, opts.pv ? { schedule: opts.pv } : null, g, H.fmt, H.addD, H.parse); const o = {}; g.forEach(d => { o[d] = f(d); }); return o; };
+    const run = (opts) => { const g = H.monthGridDays(2026, 10, opts.ws || "sun"); const f = mk(opts.vac || {}, opts.east || {}, opts.app || {}, opts.pv ? { schedule: opts.pv } : null, g, H.fmt, H.addD, H.parse); const o = {}; g.forEach(d => { o[d] = f(d); }); return o; };
     // Sunday-first November 2026: rows Sun 11/1..Sat 11/7, Sun 11/8..; Acton (s3) off Thu 11/5 - Mon 11/9 (crosses Sat|Sun)
     const vac = {}; ["2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"].forEach(d => { vac[d] = ["s3"]; });
     vac["2026-11-06"] = ["s3", "s4"];                                       // Philip too on Fri: the people change - two bars meet
@@ -4801,6 +4804,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     // a preview edge: the same people, but one day previewed and the next not - no join (a preview cell's bar sits higher)
     o = run({ vac: { "2026-11-24": ["s2"], "2026-11-25": ["s2"], "2026-11-26": ["s2"] }, pv: { "2026-11-25": {}, "2026-11-26": {} } });
     assert.ok(!o["2026-11-24"].r && !o["2026-11-25"].l && o["2026-11-25"].r && o["2026-11-26"].l, "no join across a preview edge; two preview days join");
+    // Prompt 35 (11/17): an APP on vacation joins the bar after the surgeons ("app:<profile id>"); the same APP on the next day joins,
+    // another APP (or the APP gone) splits it; a surgeon and an APP with the same days still join as one bar of both
+    const AV = (pid, name) => ({ profileId: pid, name, short: name });
+    o = run({ vac: { "2026-11-16": ["s2"], "2026-11-17": ["s2"] }, app: { "2026-11-16": [AV("p-a", "Appleton")], "2026-11-17": [AV("p-a", "Appleton")], "2026-11-18": [AV("p-b", "Bramble")] } });
+    assert.deepStrictEqual([o["2026-11-16"].show, o["2026-11-17"].show, o["2026-11-18"].show], ["s2,app:p-a", "s2,app:p-a", "app:p-b"], "the APP after the surgeon, keyed app:<profile id>");
+    assert.ok(o["2026-11-16"].r && o["2026-11-17"].l && !o["2026-11-17"].r && !o["2026-11-18"].l, "the same people join; another APP splits the bar");
     // gone: the dots, the diamonds, the NOTE tag, the Fri label - by what the grid draws, not only by a class name
     const gridAt = src.indexOf('<div className="cal-grid" data-testid="cal-grid"'), legendAt = src.indexOf("{/* Legend */}", gridAt);
     const noJsxComments = (x) => x.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/(^|[^:"'])\/\/[^\n]*/g, "$1");
@@ -7954,14 +7963,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!notif.includes("Emails go to your sign-in address. Choose"), "the old unconditional sentence is gone");
       assert.ok(notif.includes("Available once your account is linked to a roster entry."), "the unlinked line stays (R2 pin)");
     });
-    check("SD6/SD7: Setup is three quiet groups - 'Every cycle' (Setup issues, Generate, Vacations), 'Configuration' (Roster, Users, Rules, Availability, Holidays, Pay rates, East feed, Office contacts), 'Rarely used' (Import seed, Clear schedule); closed cards show a one-line summary from loaded state", () => {
+    check("SD6/SD7: Setup is three quiet groups - 'Every cycle' (Setup issues, Generate, Vacations), 'Configuration' (Roster, Users, APP shifts, Rules, Availability, Holidays, Pay rates, East feed, Office contacts), 'Rarely used' (Import seed, Clear schedule); closed cards show a one-line summary from loaded state", () => {
       assert.ok(uAt > 0 && uEnd > uAt, "the Setup view slice");
       const steps = ['groupHeading("setup-group", "cycle", "Every cycle", true)', 'ck="setup_issues"', 'ck="setup_generate"', 'ck="setup_vacations"',
-        'groupHeading("setup-group", "config", "Configuration", false)', 'ck="setup_roster"', 'ck="setup_users"', 'ck="setup_rules"', 'ck="setup_availability"', 'ck="setup_holidays"', 'ck="setup_pay"', 'ck="setup_east"', 'ck="setup_office"',
+        'groupHeading("setup-group", "config", "Configuration", false)', 'ck="setup_roster"', 'ck="setup_users"', 'ck="setup_app_shifts"', 'ck="setup_rules"', 'ck="setup_availability"', 'ck="setup_holidays"', 'ck="setup_pay"', 'ck="setup_east"', 'ck="setup_office"',
         'groupHeading("setup-group", "rare", "Rarely used", false)', 'ck="setup_import"', 'ck="setup_clear"'].map(k => setup.indexOf(k));
       steps.forEach((at, i) => assert.ok(at >= 0 && (i === 0 || at > steps[i - 1]), "Setup order broken at step " + i));
       // integration 9/27: the call pay tracker's Setup > Pay rates (setup_pay) is the thirteenth card, in Configuration
-      assert.strictEqual((setup.match(/<Collapsible css=\{css\} ck="setup_/g) || []).length, 13, "all thirteen cards stay (smoke SETUP_CARDS, setup_pay included)");
+      // pin moved deliberately 11/17 (Prompt 35): Setup > APP shifts (setup_app_shifts, the shift types) is the fourteenth, after Users
+      assert.strictEqual((setup.match(/<Collapsible css=\{css\} ck="setup_/g) || []).length, 14, "all fourteen cards stay (smoke SETUP_CARDS, setup_pay and setup_app_shifts included)");
       for (const t of ["Every cycle", "Configuration", "Rarely used"]) SMOKE_TEXT.forEach(x => assert.ok(!t.toLowerCase().includes(x), `heading '${t}' holds '${x}'`));
       for (const ck of ["setup_vacations", "setup_roster", "setup_rules", "setup_holidays", "setup_office"]) {
         const at = setup.indexOf(`ck="${ck}"`); const open = setup.slice(at, setup.indexOf("\n", setup.indexOf("\n", at) + 1) + 400);
@@ -10420,10 +10430,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // the compact sentence (the joined sentences ran to 300-500 characters on a phone for 4.5 s)
       // pin moved deliberately 10/2 (Prompt 29's merge with main): appDays - the APP-day read of a signed-in load - goes last
       assert.deepStrictEqual(H.LOAD_FAIL_ORDER, ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews", "appDays"]);
-      assert.strictEqual(H.LOAD_FAIL_SHORT.appDays, "the APP days");
-      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT }), "Couldn't load the APP days - the A lines on the calendar may be missing until they load.", "the APP-day read alone keeps its own sentence (every signed-in role sees the A lines)");
-      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT, timeOff: "T." }), "Couldn't load vacations and the APP days - check your connection and reload. What is shown may be incomplete.", "with another failure: one compact sentence, the APP days named last");
-      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT, blob: "B." }, { isScheduler: false }), "Couldn't load the shared setup and the APP days - check your connection and reload. What is shown may be incomplete.", "a viewer / APP: no Setup clause");
+      // pins moved deliberately 11/17 (Prompt 35): the one APP read brings the shifts and the vacations - its words name both
+      assert.strictEqual(H.LOAD_FAIL_SHORT.appDays, "the APP shifts and vacations");
+      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT }), "Couldn't load the APP shifts and vacations - the A lines on the calendar may be missing until they load.", "the APP read alone keeps its own sentence (every signed-in role sees the A lines)");
+      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT, timeOff: "T." }), "Couldn't load vacations and the APP shifts and vacations - check your connection and reload. What is shown may be incomplete.", "with another failure: one compact sentence, the APP read named last");
+      assert.strictEqual(H.combinedLoadToast({ appDays: H.APP_DAYS_LOAD_FAIL_TEXT, blob: "B." }, { isScheduler: false }), "Couldn't load the shared setup and the APP shifts and vacations - check your connection and reload. What is shown may be incomplete.", "a viewer / APP: no Setup clause");
       assert.strictEqual(H.combinedLoadToast({}), "");
       assert.strictEqual(H.combinedLoadToast(null), "");
       assert.strictEqual(H.combinedLoadToast({ timeOff: FAILMSG.time_off }), FAILMSG.time_off, "one failure reads exactly as the loader's own toast did");
@@ -12193,10 +12204,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
   })();
 
-  /* ---------------- P29. APP call days (Prompt 29, Faraz 10/1): the pure helpers, appDaysDb, the client pins ---------------- */
-  // Decided 10/1: any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log only.
-  // An APP = a viewer account the admin marks APP (user_profiles.is_app); the save function writes the audit row.
-  console.log("\n[P29] APP call days - helpers.js app* / userRole*, config.js appDaysDb (sandboxed), the client pins");
+  /* ---------------- P29. APP call days (Prompt 29, Faraz 10/1) - typed APP shifts and APP vacations since Prompt 35 (Faraz 11/17) ---------------- */
+  // Decided 10/1: everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log only. An APP = a viewer account
+  // the admin marks APP (user_profiles.is_app); the save functions write the audit rows.
+  // Prompt 35 (Faraz 11/17; revision ac, sql/migrations/2026-11-17-app-shifts.sql - report-first): the shifts are TYPED - shift types
+  // are Setup data (groupRules.appShiftTypes; absent = the one decided type, Inbox 07:00-17:00 Mon-Fri, not on the six holidays, one
+  // APP a day; perDay enforced by the database; no overlapping shifts; no shift on the APP's own vacation day) - and the APPs enter
+  // their own vacations (app_time_off: self-entered, no approval; the scheduler and the office for any APP; a vacation over the
+  // APP's own shift refused "remove the shift first"; the surgeons' vacation guard does not count APPs).
+  console.log("\n[P29] APP shifts and APP vacations (Prompt 29, typed since Prompt 35) - helpers.js app* / userRole*, config.js appDaysDb (sandboxed), the client pins, the cross pins against revision ac");
   await (async () => {
     const SRC = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n");
     const CFG = fs.readFileSync(path.join(ROOT, "config.js"), "utf8").replace(/\r\n/g, "\n");
@@ -12208,14 +12224,51 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const plain = (v) => JSON.parse(JSON.stringify(v));
     const PA = "00000000-0000-4000-8000-0000000a0001", PB = "00000000-0000-4000-8000-0000000a0002", PX = "00000000-0000-4000-8000-0000000a0003";
     const NAMES = [{ profile_id: PA, display_name: "Pat Appleton", is_app: true }, { profile_id: PB, display_name: "  Lee Bramble, PA-C ", is_app: true }, { profile_id: PX, display_name: null, is_app: false }];
-    const ROWS = [{ day: "2026-12-02", profile_id: PA, source: "app" }, { day: "2026-12-03", profile_id: PB, source: "scheduler" }, { day: "2026-12-05", profile_id: PX, source: "app" }, { day: "12/9/2026", profile_id: PA }, { day: "2026-12-10" }, null, "junk"];
-    const BY = H.appDaysByDay(ROWS, NAMES);
+    // the shift types the section reads: the decided Inbox, a night shift (crosses midnight, two APPs a day), a 24-hour weekend
+    // shift that runs on holidays, a retired type, a midday type that overlaps both - and the junk appShiftTypesOf skips
+    const RAW = [
+      { id: "inbox", label: "Inbox", start: "07:00", end: "17:00", weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 1 },
+      { id: "night", label: " Night ", start: "17:00", end: "07:00", weekdays: [5, 1, 2, 3, 4, 4], perDay: 2 },
+      { id: "wk24", label: "", start: "07:00", end: "07:00", weekdays: [0, 6], holidays: true, perDay: 2.5 },
+      { id: "old", label: "Old", start: "08:00", end: "12:30", weekdays: [1], retired: true, perDay: 21 },
+      { id: "half", label: "Half", start: "12:00", end: "20:00", weekdays: [1, 2, 3, 4, 5], perDay: 1 },
+      { id: "inbox", label: "dup", start: "01:00", end: "02:00", weekdays: [1] },
+      { id: "Bad", start: "07:00", end: "17:00", weekdays: [1] }, { id: "hrs", start: "7:00", end: "17:00", weekdays: [1] },
+      { id: "nodays", start: "07:00", end: "17:00", weekdays: [] }, { id: "day7", start: "07:00", end: "17:00", weekdays: [7] },
+      { id: "strday", start: "07:00", end: "17:00", weekdays: ["1"] }, "str", null, [1],
+    ];
+    const TYPES = H.appShiftTypesOf({ appShiftTypes: RAW });
+    const T = (id) => TYPES.find(t => t.id === id) || null;
+    const HOL = { "2026-12-24": "Christmas", "2026-12-25": "Christmas" };
+    const ROWS = [
+      { day: "2026-12-02", shift_type: "inbox", profile_id: PA, source: "app" },
+      { day: "2026-12-03", shift_type: "night", profile_id: PA, source: "app" },
+      { day: "2026-12-03", shift_type: "inbox", profile_id: PB, source: "scheduler" },
+      { day: "2026-12-05", shift_type: "wk24", profile_id: PX, source: "app" },
+      { day: "2026-12-07", shift_type: "zzz", profile_id: PA },
+      { day: "12/9/2026", shift_type: "inbox", profile_id: PA }, { day: "2026-12-10", profile_id: PA }, { day: "2026-12-10", shift_type: "inbox" }, null, "junk",
+    ];
+    const BY = H.appShiftDayMap(ROWS, NAMES, TYPES);
+    const VROWS = [
+      { id: "v2", profile_id: PB, start_date: "2026-12-14", end_date: "2026-12-18", source: "app" },
+      { id: "v1", profile_id: PA, start_date: "2026-12-14", end_date: "2026-12-15", source: "office" },
+      { id: "v3", profile_id: PA, start_date: "2026-12-28T00:00:00", end_date: "2027-01-02", source: "scheduler" },
+      { id: "", profile_id: PA, start_date: "2026-12-01", end_date: "2026-12-01" }, { id: "v4", profile_id: PA, start_date: "x", end_date: "2026-12-01" }, null,
+    ];
+    const VACS = H.appVacationRows(VROWS, NAMES);
     const TODAY = "2026-12-03";
+    const ctx = (o) => ({ byDay: BY, me: PA, today: TODAY, types: TYPES, holidayDays: HOL, myVacs: VACS.filter(v => v.profileId === PA), draft: {}, ...(o || {}) });
+    const cs = (d, t, o) => H.appShiftCellState(d, t, ctx(o));
 
-    check("P29 helpers: the constants - the unavailable sentence, the seven codes and tokens, the 400-day cap", () => {
-      assert.strictEqual(H.APP_DAYS_UNAVAILABLE_TEXT, "APP days are available after the next database update.");
-      assert.deepStrictEqual(plain(H.APP_DAY_CODES), { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE" });
-      assert.strictEqual(H.APP_DAYS_MAX_SAVE, 400);
+    check("P29/P35 helpers: the constants - the unavailable sentence, the ten AP codes and the eight AV codes, the caps (400 shifts, 50 vacations a save), the one decided type (frozen), perDay at most 20", () => {
+      assert.strictEqual(H.APP_DAYS_UNAVAILABLE_TEXT, "APP shifts and vacations are available after the next database update.");
+      assert.strictEqual(H.APP_DAYS_LOAD_FAIL_TEXT, "Couldn't load the APP shifts and vacations - the A lines on the calendar may be missing until they load.");
+      assert.deepStrictEqual(plain(H.APP_DAY_CODES), { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE", AP008: "APP_DAY_NO_SHIFT", AP009: "APP_DAY_OVERLAP", AP010: "APP_DAY_VACATION" });
+      assert.deepStrictEqual(plain(H.APP_VACATION_CODES), { AV001: "APP_VACATION_NOT_ALLOWED", AV002: "APP_VACATION_NOT_YOURS", AV003: "APP_VACATION_NOT_APP", AV004: "APP_VACATION_BAD_RANGE", AV005: "APP_VACATION_ON_SHIFT", AV006: "APP_VACATION_PAST", AV007: "APP_VACATION_STALE", AV008: "APP_VACATION_OVERLAP" });
+      assert.deepStrictEqual([H.APP_DAYS_MAX_SAVE, H.APP_VACATIONS_MAX_SAVE, H.APP_SHIFT_PER_DAY_MAX], [400, 50, 20]);
+      assert.deepStrictEqual(plain(H.APP_SHIFT_TYPES_DEFAULT), [{ id: "inbox", label: "Inbox", start: "07:00", end: "17:00", weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 1 }], "the decided type (Faraz 11/17)");
+      assert.ok(Object.isFrozen(H.APP_SHIFT_TYPES_DEFAULT) && Object.isFrozen(H.APP_SHIFT_TYPES_DEFAULT[0]) && Object.isFrozen(H.APP_SHIFT_TYPES_DEFAULT[0].weekdays), "frozen - no caller can change the default");
+      assert.deepStrictEqual([H.APP_SHIFT_ID_RE.source, H.APP_HHMM_RE.source], ["^[a-z][a-z0-9-]{0,23}$", "^([01][0-9]|2[0-3]):[0-5][0-9]$"]);
     });
     check("P29 helpers: appShortName - the last word before the first comma; 'APP' when there is none", () => {
       assert.strictEqual(H.appShortName("Pat Appleton"), "Appleton");
@@ -12236,156 +12289,229 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.appShortName("Ann Pa"), "Pa");
       assert.strictEqual(H.appShortName("NP"), "NP");
     });
-    check("P29 helpers: appDaysByDay - keyed by day; junk / non-ISO / profile-less rows skipped; name from the names rows (else 'APP'); a former APP reads isApp false; source kept", () => {
-      assert.deepStrictEqual(Object.keys(BY).sort(), ["2026-12-02", "2026-12-03", "2026-12-05"]);
-      assert.deepStrictEqual(plain(BY["2026-12-02"]), { day: "2026-12-02", profileId: PA, name: "Pat Appleton", short: "Appleton", isApp: true, source: "app" });
-      assert.deepStrictEqual(plain(BY["2026-12-03"]), { day: "2026-12-03", profileId: PB, name: "Lee Bramble, PA-C", short: "Bramble", isApp: true, source: "scheduler" });
-      assert.deepStrictEqual(plain(BY["2026-12-05"]), { day: "2026-12-05", profileId: PX, name: "APP", short: "APP", isApp: false, source: "app" }, "a former APP with no name");
-      const noNames = H.appDaysByDay([{ day: "2026-12-02", profile_id: PA }], []);
-      assert.strictEqual(noNames["2026-12-02"].name, "APP");
-      assert.strictEqual(noNames["2026-12-02"].isApp, true, "no names row: not known to be a former APP");
-      assert.strictEqual(noNames["2026-12-02"].source, null);
-      assert.deepStrictEqual(plain(H.appDaysByDay(null, null)), {});
-      assert.deepStrictEqual(plain(H.appDaysByDay("x", {})), {});
+    check("P35 helpers: appShiftTypesOf - absent / null / not a list = the decided Inbox; [] = none offered; a valid entry needs an id ^[a-z][a-z0-9-]{0,23}$, HH:MM hours and a non-empty list of whole weekdays 0-6; the first entry of an id wins; label trimmed of spaces (else the id); holidays / retired only when exactly true; perDay a whole number 1-20 (else 1); minutes from midnight; weekdays deduplicated and sorted", () => {
+      const INBOX = { id: "inbox", label: "Inbox", start: "07:00", end: "17:00", startMin: 420, endMin: 1020, weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 1, retired: false };
+      for (const g of [undefined, null, {}, { appShiftTypes: "inbox" }, { appShiftTypes: { id: "inbox" } }, "junk"]) assert.deepStrictEqual(plain(H.appShiftTypesOf(g)), [INBOX], JSON.stringify(g));
+      assert.deepStrictEqual(plain(H.appShiftTypesOf({ appShiftTypes: [] })), [], "an empty list offers no shift");
+      assert.deepStrictEqual(plain(TYPES), [
+        INBOX,
+        { id: "night", label: "Night", start: "17:00", end: "07:00", startMin: 1020, endMin: 420, weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 2, retired: false },
+        { id: "wk24", label: "wk24", start: "07:00", end: "07:00", startMin: 420, endMin: 420, weekdays: [0, 6], holidays: true, perDay: 1, retired: false },
+        { id: "old", label: "Old", start: "08:00", end: "12:30", startMin: 480, endMin: 750, weekdays: [1], holidays: false, perDay: 1, retired: true },
+        { id: "half", label: "Half", start: "12:00", end: "20:00", startMin: 720, endMin: 1200, weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 1, retired: false },
+      ], "the junk skipped (a second inbox, a capital id, 7:00, no weekdays, weekday 7, a string weekday, a string, null, an array); 2.5 / 21 a day read 1");
+      assert.strictEqual(H.appShiftTypesOf({ appShiftTypes: RAW })[0] !== H.APP_SHIFT_TYPES_DEFAULT[0], true, "a new object - the default is never handed out");
     });
-    check("P29 helpers: appDaysReadFailureState - 404 PGRST205 (table) / PGRST202 (function) / 42P01 = unavailable; a 500, a 401, a 403 42501, a 400 42703 = failed", () => {
+    check("P35 helpers: appHourLabel / appShiftHours / appShiftWeekdayWords - the calendar's short hours ('7a–5p', '5p–7a' crosses midnight, '7a–7a' is 24 hours) and weekday words", () => {
+      assert.deepStrictEqual([0, 420, 450, 720, 750, 1020, 1439, 1440, -60].map(H.appHourLabel), ["12a", "7a", "7:30a", "12p", "12:30p", "5p", "11:59p", "12a", "11p"]);
+      assert.deepStrictEqual(TYPES.map(H.appShiftHours), ["7a–5p", "5p–7a", "7a–7a", "8a–12:30p", "12p–8p"]);
+      assert.deepStrictEqual([H.appShiftHours(null), H.appShiftHours({ start: "07:00" })], ["", ""], "no type: no hours");
+      assert.deepStrictEqual([{ weekdays: [0, 1, 2, 3, 4, 5, 6] }, { weekdays: [1, 2, 3, 4, 5] }, { weekdays: [1, 2] }, { weekdays: [1, 3, 5] }, { weekdays: [2, 3, 4] }, { weekdays: [0, 6] }, { weekdays: [5, 6, 0] }, { weekdays: [0, 1] }, {}].map(H.appShiftWeekdayWords), ["every day", "Mon-Fri", "Mon, Tue", "Mon, Wed, Fri", "Tue-Thu", "Sat, Sun", "Fri-Sun", "Mon, Sun", ""], "Monday first (a weekend reads Sat, Sun - the Setup buttons' order)");
+    });
+    check("P35 helpers: appShiftSpan / appSpansOverlap / appVacationSpan - minutes on a day scale from 2000-01-01 (UTC arithmetic: a DST day is 1440 minutes too); a shift crossing midnight ends the next morning; end = start is 24 hours; an unknown type spans its calendar day; spans that only touch do not overlap", () => {
+      const D = H.appDayIndex("2026-12-02");
+      assert.deepStrictEqual([H.appDayIndex("2000-01-01"), D, H.appDayIndex("2026-03-09") - H.appDayIndex("2026-03-08"), H.appDayIndex("2026-11-02") - H.appDayIndex("2026-11-01")], [0, 9832, 1, 1]);
+      assert.deepStrictEqual(plain(H.appShiftSpan("2026-12-02", T("inbox"))), { s: D * 1440 + 420, e: D * 1440 + 1020 });
+      assert.deepStrictEqual(plain(H.appShiftSpan("2026-12-02", T("night"))), { s: D * 1440 + 1020, e: (D + 1) * 1440 + 420 }, "17:00 to 07:00 the next day");
+      assert.deepStrictEqual(plain(H.appShiftSpan("2026-12-02", T("wk24"))), { s: D * 1440 + 420, e: (D + 1) * 1440 + 420 }, "24 hours");
+      assert.deepStrictEqual(plain(H.appShiftSpan("2026-12-02", null)), { s: D * 1440, e: (D + 1) * 1440 }, "an unknown type: the whole calendar day (the database's reading)");
+      assert.deepStrictEqual(plain(H.appVacationSpan("2026-12-02", "2026-12-03")), { s: D * 1440, e: (D + 2) * 1440 }, "the first day's midnight to the midnight after the last day");
+      const night = H.appShiftSpan("2026-12-02", T("night")), inboxNext = H.appShiftSpan("2026-12-03", T("inbox")), half = H.appShiftSpan("2026-12-02", T("half")), inbox = H.appShiftSpan("2026-12-02", T("inbox"));
+      assert.deepStrictEqual([H.appSpansOverlap(night, inboxNext), H.appSpansOverlap(inbox, night), H.appSpansOverlap(half, inbox), H.appSpansOverlap(half, night), H.appSpansOverlap(null, half)], [false, false, true, true, false], "night then inbox (and inbox then night) touch at 07:00 / 17:00 - not an overlap; the midday type overlaps both");
+      assert.ok(H.appSpansOverlap(night, H.appVacationSpan("2026-12-03", "2026-12-03")) && !H.appSpansOverlap(inbox, H.appVacationSpan("2026-12-03", "2026-12-03")), "a night shift reaches the next day's vacation; a day shift does not");
+    });
+    check("P35 helpers: appShiftRunsOn - unknown / retired / the weekday / a holiday (a type that runs on holidays is offered on one)", () => {
+      assert.deepStrictEqual(plain([["inbox", "2026-12-02"], ["inbox", "2026-12-05"], ["inbox", "2026-12-24"], ["wk24", "2026-12-05"], ["wk24", "2026-12-26"], ["old", "2026-12-07"], ["night", "2026-12-25"]].map(([id, d]) => H.appShiftRunsOn(T(id), d, HOL))),
+        [{ ok: true }, { ok: false, why: "weekday" }, { ok: false, why: "holiday" }, { ok: true }, { ok: true }, { ok: false, why: "retired" }, { ok: false, why: "holiday" }]);
+      assert.deepStrictEqual(plain([H.appShiftRunsOn(null, "2026-12-02", HOL), H.appShiftRunsOn(T("inbox"), "12/2/2026", HOL), H.appShiftRunsOn(T("inbox"), "2026-12-24", null)]), [{ ok: false, why: "unknown" }, { ok: false, why: "weekday" }, { ok: true }], "no holiday map: no holiday");
+    });
+    check("P35 helpers: appShiftDayMap - a list per day in the types' order (an unknown type last, its id as the label, no hours), then by name; junk / non-ISO / type-less / profile-less rows skipped; a former APP reads isApp false; no names row = 'APP'", () => {
+      assert.deepStrictEqual(Object.keys(BY).sort(), ["2026-12-02", "2026-12-03", "2026-12-05", "2026-12-07"]);
+      assert.deepStrictEqual(plain(BY["2026-12-02"]), [{ day: "2026-12-02", type: "inbox", label: "Inbox", hours: "7a–5p", known: true, profileId: PA, name: "Pat Appleton", short: "Appleton", isApp: true, source: "app" }]);
+      assert.deepStrictEqual(plain(BY["2026-12-03"].map(e => [e.type, e.profileId, e.name, e.source])), [["inbox", PB, "Lee Bramble, PA-C", "scheduler"], ["night", PA, "Pat Appleton", "app"]], "the types' order: inbox before night");
+      assert.deepStrictEqual(plain(BY["2026-12-05"][0]), { day: "2026-12-05", type: "wk24", label: "wk24", hours: "7a–7a", known: true, profileId: PX, name: "APP", short: "APP", isApp: false, source: "app" }, "a former APP with no name");
+      assert.deepStrictEqual(plain(BY["2026-12-07"][0]), { day: "2026-12-07", type: "zzz", label: "zzz", hours: "", known: false, profileId: PA, name: "Pat Appleton", short: "Appleton", isApp: true, source: null }, "a type no longer listed: its id, no hours");
+      const two = H.appShiftDayMap([{ day: "2026-12-08", shift_type: "night", profile_id: PB }, { day: "2026-12-08", shift_type: "zzz", profile_id: PA }, { day: "2026-12-08", shift_type: "night", profile_id: PA }, { day: "2026-12-08", shift_type: "inbox", profile_id: PB }], NAMES, TYPES);
+      assert.deepStrictEqual(plain(two["2026-12-08"].map(e => e.type + ":" + e.short)), ["inbox:Bramble", "night:Bramble", "night:Appleton", "zzz:Appleton"], "types' order, then the name ('Lee ...' before 'Pat ...'), the unknown last");
+      const noNames = H.appShiftDayMap([{ day: "2026-12-02", shift_type: "inbox", profile_id: PA }], [], TYPES);
+      assert.deepStrictEqual([noNames["2026-12-02"][0].name, noNames["2026-12-02"][0].isApp, noNames["2026-12-02"][0].source], ["APP", true, null], "no names row: not known to be a former APP");
+      assert.deepStrictEqual(plain(H.appShiftDayMap(null, null, null)), {});
+      assert.deepStrictEqual(plain(H.appShiftDayMap("x", {}, "y")), {});
+      assert.strictEqual(H.appShiftDayMap([{ day: "2026-12-02", shift_type: "inbox", profile_id: PA }], NAMES, null)["2026-12-02"][0].known, false, "no types: every row unknown (its day)");
+    });
+    check("P35 helpers: appVacationRows / appVacationMap / appVacationsOn / appVacRange - rows by start, end, name; the surgeons' vacation-map shape; one entry per APP on a day, in name order; the database's M/D range words", () => {
+      assert.deepStrictEqual(plain(VACS), [
+        { id: "v1", profileId: PA, start: "2026-12-14", end: "2026-12-15", name: "Pat Appleton", short: "Appleton", isApp: true, source: "office" },
+        { id: "v2", profileId: PB, start: "2026-12-14", end: "2026-12-18", name: "Lee Bramble, PA-C", short: "Bramble", isApp: true, source: "app" },
+        { id: "v3", profileId: PA, start: "2026-12-28", end: "2027-01-02", name: "Pat Appleton", short: "Appleton", isApp: true, source: "scheduler" },
+      ], "an id-less row and a non-ISO day skipped; a timestamp read as its day");
+      assert.deepStrictEqual(plain(H.appVacationMap(VACS)), { [PA]: [["2026-12-14", "2026-12-15", "v1", null], ["2026-12-28", "2027-01-02", "v3", null]], [PB]: [["2026-12-14", "2026-12-18", "v2", null]] });
+      assert.deepStrictEqual([H.appVacationsOn(VACS, "2026-12-14").map(v => v.id), H.appVacationsOn(VACS, "2026-12-16").map(v => v.id), H.appVacationsOn(VACS, "2026-12-20").length, H.appVacationsOn(null, "2026-12-14").length], [["v2", "v1"], ["v2"], 0, 0]);
+      assert.deepStrictEqual([H.appVacRange("2026-12-14", "2026-12-18"), H.appVacRange("2026-12-14", "2026-12-14"), H.appVacRange("2026-12-28", "2027-01-02")], ["12/14-12/18", "12/14", "12/28-1/2"]);
+      assert.deepStrictEqual([plain(H.appVacationRows(null, null)), plain(H.appVacationMap(null))], [[], {}]);
+    });
+    check("P29 helpers: appDaysReadFailureState - 404 PGRST205 (table) / PGRST202 (function) / 42P01 = unavailable; Prompt 35: a 400 / 404 42703 (no shift_type column - revision ac rolled back) = unavailable too; a 500, a 401, a 403 42501 = failed", () => {
       assert.strictEqual(H.appDaysReadFailureState(404, '{"code":"PGRST205","message":"Could not find the table \'public.x\' in the schema cache"}'), "unavailable");
       assert.strictEqual(H.appDaysReadFailureState(404, '{"code":"PGRST202","message":"Could not find the function public.x without parameters in the schema cache"}'), "unavailable");
       assert.strictEqual(H.appDaysReadFailureState(404, "PGRST202 not json"), "unavailable");
       assert.strictEqual(H.appDaysReadFailureState(400, '{"code":"42P01","message":"relation does not exist"}'), "unavailable");
+      // pin moved deliberately 11/17 (Prompt 35): the typed read names shift_type - a database without revision ac answers 42703
+      assert.strictEqual(H.appDaysReadFailureState(400, '{"code":"42703","message":"column app_call_days.shift_type does not exist"}'), "unavailable");
+      assert.strictEqual(H.appDaysReadFailureState(404, '{"code":"42703"}'), "unavailable");
+      assert.strictEqual(H.appDaysReadFailureState(400, "42703 not json"), "unavailable");
+      assert.strictEqual(H.appDaysReadFailureState(500, '{"code":"42703"}'), "failed", "a 5xx is never 'not applied yet'");
       assert.strictEqual(H.appDaysReadFailureState(500, "boom"), "failed");
       assert.strictEqual(H.appDaysReadFailureState(401, '{"code":"PGRST301","message":"JWT expired"}'), "failed");
       assert.strictEqual(H.appDaysReadFailureState(403, '{"code":"42501","message":"permission denied for table x"}'), "failed");
-      assert.strictEqual(H.appDaysReadFailureState(400, '{"code":"42703","message":"column does not exist"}'), "failed", "a missing COLUMN is a real failure");
       assert.strictEqual(H.appDaysReadFailureState(404, '{"code":"PGRST202"}'.replace("202", "999")), "failed");
     });
-    check("P29 helpers: appDaysCellState - past / past-mine before today (Central), taken, mine, add, remove, free; today itself is not past", () => {
-      const ctx = (draft) => ({ byDay: BY, me: PA, draft, today: TODAY });
-      assert.strictEqual(H.appDaysCellState("2026-12-02", ctx({})), "past-mine", "his own day before today");
-      assert.strictEqual(H.appDaysCellState("2026-12-01", ctx({})), "past");
-      assert.strictEqual(H.appDaysCellState("2026-12-01", ctx({ "2026-12-01": true })), "past", "a drafted past day stays past");
-      assert.strictEqual(H.appDaysCellState("2026-12-03", ctx({})), "taken", "today, held by another APP");
-      assert.strictEqual(H.appDaysCellState("2026-12-05", ctx({ "2026-12-05": true })), "taken", "a draft never makes a taken day his");
-      assert.strictEqual(H.appDaysCellState("2026-12-04", ctx({})), "free");
-      assert.strictEqual(H.appDaysCellState("2026-12-04", ctx({ "2026-12-04": true })), "add");
-      const mine = { ...BY, "2026-12-08": { day: "2026-12-08", profileId: PA, name: "Pat Appleton", short: "Appleton", isApp: true } };
-      assert.strictEqual(H.appDaysCellState("2026-12-08", { byDay: mine, me: PA, draft: {}, today: TODAY }), "mine");
-      assert.strictEqual(H.appDaysCellState("2026-12-08", { byDay: mine, me: PA, draft: { "2026-12-08": false }, today: TODAY }), "remove");
-      assert.strictEqual(H.appDaysCellState("2026-12-08", { byDay: mine, me: PB, draft: {}, today: TODAY }), "taken", "the same day seen by the other APP");
-      assert.strictEqual(H.appDaysCellState("2026-12-03", { byDay: BY, me: PB, today: TODAY }), "mine", "today is not past - the APP may still take it off");
-      assert.strictEqual(H.appDaysCellState("2026-12-04", {}) === "free" || H.appDaysCellState("2026-12-04", {}) === "past", true, "no ctx: never throws (today = todayCentral)");
+    check("P35 helpers: appShiftCellState - past / past-mine (Central), mine / remove, add, off (weekday, holiday, retired, unknown), taken (perDay), away (the shift reaches my vacation - a night or 24-hour shift the day before too), clash (another shift of mine, saved or drafted; a removal drafted frees it), free; shifts that only touch never clash", () => {
+      assert.deepStrictEqual([cs("2026-12-02", "inbox"), cs("2026-12-01", "inbox"), cs("2026-12-01", "inbox", { draft: { "2026-12-01|inbox": true } })], ["past-mine", "past", "past"], "a drafted past day stays past");
+      assert.deepStrictEqual([cs("2026-12-03", "inbox"), cs("2026-12-03", "night"), cs("2026-12-03", "night", { draft: { "2026-12-03|night": false } })], ["taken", "mine", "remove"], "today is not past: another APP's inbox, my night, my night drafted off");
+      assert.deepStrictEqual([cs("2026-12-05", "inbox"), cs("2026-12-24", "inbox"), cs("2026-12-07", "old"), cs("2026-12-08", "nope")], ["off", "off", "off", "off"], "Saturday, a holiday, retired, unknown");
+      assert.strictEqual(cs("2026-12-05", "wk24"), "taken", "a 24-hour Saturday held by the former APP (2.5 a day read as 1)");
+      assert.deepStrictEqual([cs("2026-12-08", "inbox"), cs("2026-12-08", "inbox", { draft: { "2026-12-08|inbox": true } })], ["free", "add"]);
+      assert.deepStrictEqual([cs("2026-12-14", "inbox"), cs("2026-12-15", "night"), cs("2026-12-13", "wk24"), cs("2026-12-11", "night")], ["away", "away", "away", "free"], "on a vacation day; a night from the last vacation day; a Sunday 24-hour shift ending on the vacation's first morning; a Friday night far from it");
+      assert.strictEqual(cs("2026-12-04", "inbox"), "free", "my night of 12/3 ends at 07:00 12/4 - the inbox starting then only touches it");
+      assert.deepStrictEqual([cs("2026-12-03", "half"), cs("2026-12-03", "half", { draft: { "2026-12-03|night": false } }), cs("2026-12-09", "half", { draft: { "2026-12-09|inbox": true } }), cs("2026-12-07", "inbox")], ["clash", "free", "clash", "clash"], "my saved night, freed by its drafted removal; a drafted inbox; an unknown-type row (its whole day)");
+      assert.deepStrictEqual([H.appShiftCellState("2026-12-03", "inbox", { ...ctx(), me: PB }), H.appShiftCellState("2026-12-03", "night", { ...ctx(), me: PB })], ["mine", "free"], "the same day seen by the other APP: its own inbox; one place left on the night (2 a day), touching its inbox");
+      const full = { ...BY, "2026-12-08": [{ day: "2026-12-08", type: "night", profileId: PB, name: "Lee Bramble, PA-C" }, { day: "2026-12-08", type: "night", profileId: PX, name: "APP" }] };
+      assert.strictEqual(cs("2026-12-08", "night", { byDay: full }), "taken", "two APPs fill a two-a-day night");
+      assert.strictEqual(H.appShiftCellState("2026-12-04", "inbox", {}), "off", "no ctx: never throws (no types - nothing runs)");
     });
-    check("P29 helpers: appDaysToggle - free -> add -> free, mine -> remove -> mine; a past or taken day returns the SAME draft object", () => {
-      const byDay = { ...BY, "2026-12-08": { day: "2026-12-08", profileId: PA, name: "Pat Appleton", short: "Appleton", isApp: true } };
-      const ctx = { byDay, me: PA, today: TODAY };
-      const d0 = {};
-      const d1 = H.appDaysToggle(d0, "2026-12-04", ctx);
-      assert.deepStrictEqual(plain(d1), { "2026-12-04": true });
-      assert.notStrictEqual(d1, d0, "a new object");
-      assert.deepStrictEqual(plain(H.appDaysToggle(d1, "2026-12-04", ctx)), {}, "add -> free");
-      const d2 = H.appDaysToggle(d1, "2026-12-08", ctx);
-      assert.deepStrictEqual(plain(d2), { "2026-12-04": true, "2026-12-08": false }, "mine -> remove");
-      assert.deepStrictEqual(plain(H.appDaysToggle(d2, "2026-12-08", ctx)), { "2026-12-04": true }, "remove -> mine");
-      assert.strictEqual(H.appDaysToggle(d2, "2026-12-03", ctx), d2, "taken: unchanged, the same object");
-      assert.strictEqual(H.appDaysToggle(d2, "2026-12-01", ctx), d2, "past: unchanged");
-      assert.strictEqual(H.appDaysToggle(d2, "2026-12-02", ctx), d2, "past-mine: unchanged (a past day stays as it was)");
-      assert.deepStrictEqual(plain(H.appDaysToggle(null, "2026-12-04", ctx)), { "2026-12-04": true }, "no draft yet");
+    check("P35 helpers: appShiftToggle - free -> add -> free, mine -> remove -> mine (keys 'day|type'); a past, taken, off, away or clashing cell returns the SAME draft object", () => {
+      const c0 = ctx();
+      const d1 = H.appShiftToggle({}, "2026-12-08", "inbox", c0);
+      assert.deepStrictEqual(plain(d1), { "2026-12-08|inbox": true });
+      assert.deepStrictEqual(plain(H.appShiftToggle(d1, "2026-12-08", "inbox", c0)), {}, "add -> free");
+      const d2 = H.appShiftToggle(d1, "2026-12-03", "night", c0);
+      assert.deepStrictEqual(plain(d2), { "2026-12-08|inbox": true, "2026-12-03|night": false }, "mine -> remove");
+      assert.deepStrictEqual(plain(H.appShiftToggle(d2, "2026-12-03", "night", c0)), { "2026-12-08|inbox": true }, "remove -> mine");
+      for (const [d, t, what] of [["2026-12-03", "inbox", "taken"], ["2026-12-05", "inbox", "off"], ["2026-12-02", "inbox", "past-mine"], ["2026-12-14", "inbox", "away"], ["2026-12-07", "inbox", "clash"]]) assert.strictEqual(H.appShiftToggle(d2, d, t, c0), d2, what + ": unchanged, the same object");
+      assert.notStrictEqual(H.appShiftToggle(d2, "2026-12-03", "half", c0), d2, "the night drafted off frees the midday shift it overlapped");
+      assert.deepStrictEqual(plain(H.appShiftToggle(null, "2026-12-08", "inbox", c0)), { "2026-12-08|inbox": true }, "no draft yet");
     });
-    check("P29 helpers: appDaysPlan - Range / Paste keep the free days (sorted, deduplicated, ISO only) and name each skip in plain words", () => {
-      const byDay = { ...BY, "2026-12-08": { day: "2026-12-08", profileId: PA, name: "Pat Appleton", short: "Appleton", isApp: true } };
-      const p = H.appDaysPlan(["2026-12-09", "2026-12-01", "2026-12-03", "2026-12-08", "2026-12-04", "2026-12-04", "bad", null, "2026-12-05"], { byDay, me: PA, today: TODAY });
-      assert.deepStrictEqual(plain(p.go), ["2026-12-04", "2026-12-09"]);
+    check("P35 helpers: appShiftCellWords - the hint a cell that cannot change shows (who holds it, the type's days, a retired type, my vacation, an overlap)", () => {
+      assert.strictEqual(H.appShiftCellWords("past", "2026-12-01", [], T("inbox")), "12/1 is past - a past day stays as it was (ask the scheduler).");
+      assert.strictEqual(H.appShiftCellWords("taken", "2026-12-03", BY["2026-12-03"].filter(e => e.type === "inbox"), T("inbox")), "12/3 Inbox already has Lee Bramble, PA-C.");
+      assert.strictEqual(H.appShiftCellWords("taken", "2026-12-08", [{ name: "Lee Bramble, PA-C" }, { name: "APP" }], T("night")), "12/8 Night already has Lee Bramble, PA-C and APP (2 a day).");
+      assert.strictEqual(H.appShiftCellWords("off", "2026-12-05", [], T("inbox")), "12/5 has no Inbox shift (Mon-Fri, not on holidays).");
+      assert.strictEqual(H.appShiftCellWords("off", "2026-12-07", [], T("old")), "The Old shift is retired.");
+      assert.strictEqual(H.appShiftCellWords("off", "2026-12-07", [], T("wk24")), "12/7 has no wk24 shift (Sat, Sun).", "a type that runs on holidays says no 'not on holidays'");
+      assert.strictEqual(H.appShiftCellWords("off", "2026-12-07", [], null), "12/7 has no such shift (it is not offered).");
+      assert.strictEqual(H.appShiftCellWords("away", "2026-12-14", [], T("inbox")), "12/14 is on your vacation - change the vacation first.");
+      assert.strictEqual(H.appShiftCellWords("clash", "2026-12-03", [], T("half")), "12/3 Half overlaps another shift of yours - one shift at a time.");
+      assert.strictEqual(H.appShiftCellWords("free", "2026-12-04", [], T("inbox")), "");
+    });
+    check("P35 helpers: appShiftPlan - Range / Paste keep the days the type can take (sorted, deduplicated, ISO only - each one counted against the next) and name each skip in plain words", () => {
+      const p = H.appShiftPlan(["2026-12-11", "2026-12-01", "2026-12-03", "2026-12-04", "2026-12-05", "2026-12-08", "2026-12-08", "bad", null, "2026-12-09", "2026-12-14", "2026-12-24"], "inbox", ctx({ draft: { "2026-12-09|inbox": true } }));
+      assert.deepStrictEqual(plain(p.go), ["2026-12-04", "2026-12-08", "2026-12-11"]);
       assert.deepStrictEqual(plain(p.skipped), [
-        { day: "2026-12-01", why: "12/1 is past" },
-        { day: "2026-12-03", why: "12/3 already has Lee Bramble, PA-C" },
-        { day: "2026-12-05", why: "12/5 already has APP" },
-        { day: "2026-12-08", why: "12/8 is already yours" },
+        { day: "2026-12-01", why: "12/1 is past - a past day stays as it was (ask the scheduler)" },
+        { day: "2026-12-03", why: "12/3 Inbox already has Lee Bramble, PA-C" },
+        { day: "2026-12-05", why: "12/5 has no Inbox shift (Mon-Fri, not on holidays)" },
+        { day: "2026-12-09", why: "12/9 is already yours" },
+        { day: "2026-12-14", why: "12/14 is on your vacation - change the vacation first" },
+        { day: "2026-12-24", why: "12/24 has no Inbox shift (Mon-Fri, not on holidays)" },
       ]);
-      assert.deepStrictEqual(plain(H.appDaysPlan(null, {})), { go: [], skipped: [] });
+      assert.deepStrictEqual(plain(H.appShiftPlan(["2026-12-08", "2026-12-09", "2026-12-10"], "night", ctx())), { go: ["2026-12-08", "2026-12-09", "2026-12-10"], skipped: [] }, "nights back to back only touch");
+      assert.deepStrictEqual(plain(H.appShiftPlan(["2026-12-09"], "half", ctx({ draft: { "2026-12-09|inbox": true } })).skipped), [{ day: "2026-12-09", why: "12/9 Half overlaps another shift of yours - one shift at a time" }], "a drafted shift counts");
+      assert.deepStrictEqual(plain(H.appShiftPlan(null, "inbox", {})), { go: [], skipped: [] });
     });
-    check("P29 helpers: appDaysDraftDiff - add = drafted-true days he does not hold, clear = drafted-false days he holds, both sorted; a no-op entry counts nothing", () => {
-      const byDay = { ...BY, "2026-12-08": { day: "2026-12-08", profileId: PA }, "2026-12-11": { day: "2026-12-11", profileId: PA } };
-      const d = { "2026-12-12": true, "2026-12-09": true, "2026-12-11": false, "2026-12-08": true, "2026-12-04": false, "junk": true };
-      const r = H.appDaysDraftDiff(d, byDay, PA);
-      assert.deepStrictEqual(plain(r), { add: ["2026-12-09", "2026-12-12"], clear: ["2026-12-11"], count: 3 }, "12/8 already his (no add), 12/4 not his (no clear), junk ignored");
-      assert.deepStrictEqual(plain(H.appDaysDraftDiff({}, byDay, PA)), { add: [], clear: [], count: 0 });
-      assert.deepStrictEqual(plain(H.appDaysDraftDiff(null, null, null)), { add: [], clear: [], count: 0 });
-      assert.deepStrictEqual(plain(H.appDaysDraftDiff({ "2026-12-03": true }, BY, PA)), { add: ["2026-12-03"], clear: [], count: 1 }, "a day another APP holds stays in add - the server refuses it with its own words (AP005)");
-      // review 10/2: with today, a drafted day before it never counts (it became past while the card was open); today itself counts
-      assert.deepStrictEqual(plain(H.appDaysDraftDiff(d, byDay, PA, "2026-12-10")), { add: ["2026-12-12"], clear: ["2026-12-11"], count: 2 }, "12/9 (now past) dropped from add");
-      assert.deepStrictEqual(plain(H.appDaysDraftDiff({ "2026-12-11": false, "2026-12-08": false }, byDay, PA, "2026-12-11")), { add: [], clear: ["2026-12-11"], count: 1 }, "a removal of a now-past day of his is dropped; today stays");
-      assert.deepStrictEqual(plain(H.appDaysDraftDiff(d, byDay, PA, "junk")), { add: ["2026-12-09", "2026-12-12"], clear: ["2026-12-11"], count: 3 }, "a non-ISO today = no date filter");
+    check("P35 helpers: appShiftDraftDiff - add = drafted-true shifts I do not hold, clear = drafted-false shifts I hold, both [{ day, type }] in key order; a drafted day before today never counts; junk keys ignored", () => {
+      const dd = { "2026-12-12|inbox": true, "2026-12-09|inbox": true, "2026-12-03|night": false, "2026-12-02|inbox": true, "2026-12-04|inbox": false, "junk": true, "2026-12-10|": true };
+      assert.deepStrictEqual(plain(H.appShiftDraftDiff(dd, BY, PA)), { add: [{ day: "2026-12-09", type: "inbox" }, { day: "2026-12-12", type: "inbox" }], clear: [{ day: "2026-12-03", type: "night" }], count: 3 }, "12/2 inbox already mine (no add), 12/4 not mine (no clear)");
+      assert.deepStrictEqual(plain(H.appShiftDraftDiff(dd, BY, PA, "2026-12-10")), { add: [{ day: "2026-12-12", type: "inbox" }], clear: [], count: 1 }, "today 12/10: the earlier days drop out");
+      assert.deepStrictEqual(plain(H.appShiftDraftDiff({ "2026-12-03|inbox": true }, BY, PA)), { add: [{ day: "2026-12-03", type: "inbox" }], clear: [], count: 1 }, "a shift another APP fills stays in add - the server refuses it with its own words (AP005)");
+      assert.deepStrictEqual(plain(H.appShiftDraftDiff(null, null, null)), { add: [], clear: [], count: 0 });
     });
-    check("P29 helpers: appDaysDraftPrune - after a reload, an add on a held day and a removal of a day no longer his drop out; nothing to drop = the SAME object", () => {
-      const byDay = { ...BY, "2026-12-08": { day: "2026-12-08", profileId: PA } };
-      const d = { "2026-12-03": true, "2026-12-09": true, "2026-12-08": false, "2026-12-11": false };
-      assert.deepStrictEqual(plain(H.appDaysDraftPrune(d, byDay, PA)), { "2026-12-09": true, "2026-12-08": false });
-      const keep = { "2026-12-09": true, "2026-12-08": false };
-      assert.strictEqual(H.appDaysDraftPrune(keep, byDay, PA), keep);
-      // review 10/2: with today, the days before it go too (midnight Central passed while the card was open); today stays
-      assert.deepStrictEqual(plain(H.appDaysDraftPrune(keep, byDay, PA, "2026-12-09")), { "2026-12-09": true }, "12/8 (his, drafted off) is past now");
-      assert.strictEqual(H.appDaysDraftPrune(keep, byDay, PA, "2026-12-08"), keep, "nothing past: the SAME object");
+    check("P35 helpers: appShiftDraftPrune - after a reload (or midnight), an add on a full / no-longer-running / unknown shift, a removal of a shift no longer mine, an add of a shift now mine and a day before today drop out; nothing to drop = the SAME object", () => {
+      const pd = { "2026-12-03|inbox": true, "2026-12-08|inbox": true, "2026-12-03|night": false, "2026-12-04|inbox": false, "2026-12-05|inbox": true, "2026-12-08|zzz": true, "2026-12-01|inbox": true, "2026-12-02|inbox": true };
+      assert.deepStrictEqual(plain(H.appShiftDraftPrune(pd, ctx())), { "2026-12-08|inbox": true, "2026-12-03|night": false });
+      const keep = { "2026-12-08|inbox": true, "2026-12-03|night": false };
+      assert.strictEqual(H.appShiftDraftPrune(keep, ctx()), keep, "nothing to drop: the SAME object");
+      assert.deepStrictEqual(plain(H.appShiftDraftPrune(keep, ctx({ today: "2026-12-04" }))), { "2026-12-08|inbox": true }, "12/3 is past now");
     });
-    check("P29 helpers: appDaysErrorWords - the function's own sentence after the token; unavailable / permission / session / network / other words; appDaysErrorCode reads AP00n from the code or the token", () => {
+    check("P35 helpers: appShiftSummary / appShiftSavedNote / appVacSavedNote - the database's audit wording ('inbox 11/18, 11/19; removed inbox 11/25', 'vacation 12/1-12/5')", () => {
+      assert.strictEqual(H.appShiftSummary([{ day: "2026-12-09", type: "inbox" }, { day: "2026-12-03", type: "night" }, { day: "2026-12-04", type: "inbox" }, { day: "bad", type: "inbox" }, null]), "night 12/3; inbox 12/4, 12/9", "types by their first day, days in order");
+      assert.strictEqual(H.appShiftSavedNote([{ day: "2026-11-19", type: "inbox" }, { day: "2026-11-18", type: "inbox" }], [{ day: "2026-11-25", type: "inbox" }]), "Saved: inbox 11/18, 11/19; removed inbox 11/25");
+      assert.strictEqual(H.appShiftSavedNote(null, [{ day: "2026-11-25", type: "inbox" }]), "Saved: removed inbox 11/25");
+      assert.strictEqual(H.appShiftSavedNote([], []), "Saved: nothing changed");
+      assert.strictEqual(H.appVacSavedNote([{ start: "2026-12-01", end: "2026-12-05" }], [{ start: "2026-12-02", end: "2026-12-04" }]), "Saved: vacation 12/1-12/5; removed vacation 12/2-12/4");
+      assert.strictEqual(H.appVacSavedNote([{ start: "2026-12-01", end: "2026-12-01" }], []), "Saved: vacation 12/1");
+      assert.strictEqual(H.appVacSavedNote(null, null), "Saved: nothing changed");
+    });
+    check("P35 helpers: appVacationEditable - the scheduler always; the office and the APP itself (its own) only before the vacation starts (Central) - the surgeons' Time off rule, the database's AV006; nobody else", () => {
+      const ed = (v, o) => H.appVacationEditable(v, { today: TODAY, me: PA, ...(o || {}) });
+      const vFut = { id: "f", profileId: PA, start: "2026-12-04", end: "2026-12-05" }, vNow = { id: "n", profileId: PA, start: "2026-12-03", end: "2026-12-05" }, vB = { id: "b", profileId: PB, start: "2026-12-20", end: "2026-12-21" };
+      assert.deepStrictEqual([ed(vNow, { isScheduler: true }), ed(vFut, { isCoordinator: true }), ed(vNow, { isCoordinator: true }), ed(vFut, { isApp: true }), ed(vNow, { isApp: true }), ed(vB, { isApp: true }), ed(vFut, {}), ed({ profileId: PA, start: "2026-12-09" }, { isScheduler: true }), ed(null, { isScheduler: true })],
+        [true, true, false, true, false, false, false, false, false]);
+    });
+    check("P35 helpers: appVacationCheck - the client's first look before a vacation save (the database checks again): the range, another vacation of that APP (an identical one is a re-send), a shift of that APP the vacation reaches (a night from the day before too; an unknown type = its day)", () => {
+      const vc = (pid, s, e, o) => H.appVacationCheck(pid, s, e, { vacs: VACS, byDay: BY, types: TYPES, name: "Pat Appleton", ...(o || {}) });
+      assert.strictEqual(vc(PA, "", "2026-12-01"), "Pick a first and a last day.");
+      assert.strictEqual(vc(PA, "2026-12-05", "2026-12-01"), "12/5-12/1 ends before it starts.");
+      assert.strictEqual(vc(PA, "2026-01-01", "2027-01-02"), "1/1-1/2 is longer than a year.");
+      assert.strictEqual(vc(PA, "2026-01-01", "2027-01-01"), "Pat Appleton is already away 12/14-12/15, 12/28-1/2 - change that vacation instead.", "365 days is allowed - then the overlaps");
+      assert.strictEqual(vc(PA, "2026-12-14", "2026-12-15"), null, "the same range again: a re-sent Save (the database keeps it)");
+      assert.strictEqual(vc(PA, "2026-12-15", "2026-12-16"), "Pat Appleton is already away 12/14-12/15 - change that vacation instead.");
+      assert.strictEqual(vc(PA, "2026-12-15", "2026-12-16", { excludeId: "v1" }), null, "a change of v1 replaces it");
+      assert.strictEqual(vc(PA, "2026-12-02", "2026-12-02"), "Pat Appleton holds 12/2 inbox - remove the shift first.");
+      assert.strictEqual(vc(PA, "2026-12-04", "2026-12-04"), "Pat Appleton holds 12/3 night - remove the shift first.", "the night of 12/3 runs into 12/4");
+      assert.strictEqual(vc(PA, "2026-12-07", "2026-12-07"), "Pat Appleton holds 12/7 zzz - remove the shift first.", "an unknown type: its day");
+      assert.strictEqual(vc(PA, "2026-12-02", "2026-12-03"), "Pat Appleton holds 12/2 inbox, 12/3 night - remove the shift first.");
+      assert.strictEqual(vc(PA, "2026-12-08", "2026-12-10"), null);
+      assert.strictEqual(vc(PB, "2026-12-02", "2026-12-02"), null, "another APP's shift is not this APP's");
+      assert.strictEqual(H.appVacationCheck(PA, "2026-12-02", "2026-12-02", { vacs: [], byDay: BY, types: TYPES }), "This APP holds 12/2 inbox - remove the shift first.", "no name given");
+      // the smoke agent's report (11/17): on the APP's own card (self) the words address it - never "You holds" / "You is"
+      assert.strictEqual(vc(PA, "2026-12-02", "2026-12-02", { self: true }), "You hold 12/2 inbox - remove the shift first.", "the APP's own card");
+      assert.strictEqual(vc(PA, "2026-12-15", "2026-12-16", { self: true }), "You are already away 12/14-12/15 - change that vacation instead.", "the APP's own card");
+    });
+    check("P29/P35 helpers: appDaysErrorWords - the function's own sentence after the token (APP_DAY_ or APP_VACATION_); unavailable / permission / session / network / other words (shifts, or opts.kind 'vacation'); appDaysErrorCode reads AP0nn / AV00n from the code or the token", () => {
       const pg = (code, message) => JSON.stringify({ code, details: null, hint: null, message });
-      assert.strictEqual(H.appDaysErrorWords(pg("AP005", "APP_DAY_TAKEN: 12/10 already has Pat Appleton - nothing was saved")), "12/10 already has Pat Appleton - nothing was saved");
+      assert.strictEqual(H.appDaysErrorWords(pg("AP005", "APP_DAY_TAKEN: 12/10 inbox already has Pat Appleton - nothing was saved")), "12/10 inbox already has Pat Appleton - nothing was saved");
       assert.strictEqual(H.appDaysErrorWords(pg("AP006", "APP_DAY_PAST: 5/4 is before today (12/3) in Central time - a past day stays as it was")), "5/4 is before today (12/3) in Central time - a past day stays as it was");
-      assert.strictEqual(H.appDaysErrorWords("APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day"), "only an APP account or the scheduler can put an APP on a call day", "a plain text body");
+      assert.strictEqual(H.appDaysErrorWords(pg("AV005", "APP_VACATION_ON_SHIFT: Pat Appleton holds 12/2 inbox - remove the shift first (nothing was saved)"), 400, { kind: "vacation" }), "Pat Appleton holds 12/2 inbox - remove the shift first (nothing was saved)");
+      assert.strictEqual(H.appDaysErrorWords("APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift"), "only an APP account or the scheduler can put an APP on a shift", "a plain text body");
       assert.strictEqual(H.appDaysErrorWords(pg("PGRST202", "Could not find the function public.x in the schema cache"), 404), H.APP_DAYS_UNAVAILABLE_TEXT);
       assert.strictEqual(H.appDaysErrorWords(pg("PGRST205", "Could not find the table")), H.APP_DAYS_UNAVAILABLE_TEXT);
-      assert.strictEqual(H.appDaysErrorWords(pg("42501", "permission denied for function x"), 403), "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.");
+      assert.strictEqual(H.appDaysErrorWords(pg("42501", "permission denied for function x"), 403), "Not allowed - only an APP account or the scheduler can change APP shifts. Nothing was saved.");
+      assert.strictEqual(H.appDaysErrorWords(pg("42501", "permission denied for function x"), 403, { kind: "vacation" }), "Not allowed - only an APP account, the scheduler or the office can change APP vacations. Nothing was saved.");
       assert.strictEqual(H.appDaysErrorWords(pg("PGRST301", "JWT expired"), 401), "Your session expired - sign in again. Nothing was saved.");
       assert.strictEqual(H.appDaysErrorWords("", 401), "Your session expired - sign in again. Nothing was saved.");
       // the merge with main (10/2, Do first 7): opts.sessionExpired false - the session is not known dead
       assert.strictEqual(H.appDaysErrorWords(pg("PGRST301", "JWT expired"), 401, { sessionExpired: false }), "Your session couldn't be refreshed - nothing was saved. Try again in a moment.");
-      assert.strictEqual(H.appDaysErrorWords("", 401, { sessionExpired: false }), "Your session couldn't be refreshed - nothing was saved. Try again in a moment.");
       assert.strictEqual(H.appDaysErrorWords("", 401, { sessionExpired: true }), "Your session expired - sign in again. Nothing was saved.");
-      assert.strictEqual(H.appDaysErrorWords(pg("AP005", "APP_DAY_TAKEN: 12/10 already has Pat Appleton - nothing was saved"), 400, { sessionExpired: false }), "12/10 already has Pat Appleton - nothing was saved", "the flag changes the 401 words only");
-      assert.strictEqual(H.appDaysErrorWords("TypeError: Failed to fetch", 0), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).");
-      assert.strictEqual(H.appDaysErrorWords({ message: "Failed to fetch" }), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).", "an Error-like object");
-      assert.strictEqual(H.appDaysErrorWords(pg("XX000", "x".repeat(300)), 500), "Couldn't save the APP days: " + "x".repeat(160));
-      // review 10/2: an HTTP error whose body is no PostgREST JSON (a gateway's HTML page) shows the status, never the page
-      // pin moved deliberately 10/2 (re-check): a 5xx gateway page leaves the outcome unknown; a 4xx page still means nothing was saved
-      // pins moved deliberately 10/2 (ship review): nothing reloaded "My APP days" on a 5xx, and the scheduler has no such card - the
-      // words now say whether the caller's reload landed (opts.reloaded) and the day editor gets its own (opts.where "editor")
+      assert.strictEqual(H.appDaysErrorWords(pg("AP005", "APP_DAY_TAKEN: 12/10 inbox already has Pat Appleton - nothing was saved"), 400, { sessionExpired: false }), "12/10 inbox already has Pat Appleton - nothing was saved", "the flag changes the 401 words only");
+      const NET = "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same shifts twice is safe).";
+      assert.strictEqual(H.appDaysErrorWords("TypeError: Failed to fetch", 0), NET);
+      assert.strictEqual(H.appDaysErrorWords({ message: "Failed to fetch" }), NET, "an Error-like object");
+      assert.strictEqual(H.appDaysErrorWords("The user aborted a request.", 0), NET, "status 0 whatever the thrown text");
+      assert.strictEqual(H.appDaysErrorWords("Failed to fetch", 0, { kind: "vacation" }), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same vacation twice is safe).");
+      assert.strictEqual(H.appDaysErrorWords(pg("XX000", "x".repeat(300)), 500), "Couldn't save the APP shifts: " + "x".repeat(160));
+      assert.strictEqual(H.appDaysErrorWords(pg("XX000", "boom"), 500, { kind: "vacation" }), "Couldn't save the APP vacation: boom");
+      // a 5xx without a PostgREST code: the outcome is unknown - the words say whether the caller's reload landed (ship review 10/2)
       const UNK = (s) => "Couldn't confirm the save (HTTP " + s + ") - it may or may not have gone through. ";
-      assert.strictEqual(H.appDaysErrorWords("<html><body>Bad gateway</body></html>", 502), UNK(502) + "Check your days after the next refresh, then save again if a day is missing.");
-      assert.strictEqual(H.appDaysErrorWords("<html><body>Too large</body></html>", 413), "Couldn't save the APP days (HTTP 413) - nothing was saved. Try again.");
-      assert.strictEqual(H.appDaysErrorWords("", 503), UNK(503) + "Check your days after the next refresh, then save again if a day is missing.");
-      assert.strictEqual(H.appDaysErrorWords("", 503, { reloaded: true }), UNK(503) + "The calendar was reloaded - save again if a day is missing.");
-      assert.strictEqual(H.appDaysErrorWords("", 503, { reloaded: false }), UNK(503) + "Check your days after the next refresh, then save again if a day is missing.");
-      assert.strictEqual(H.appDaysErrorWords("", 503, { where: "editor", reloaded: true }), UNK(503) + "The APP line was reloaded - set it again if it is wrong.");
-      assert.strictEqual(H.appDaysErrorWords("<html>503</html>", 503, { where: "editor", reloaded: false, sessionExpired: false }), UNK(503) + "Check this day's APP after the next refresh, then set it again if it is wrong.");
-      for (const o of [undefined, {}, { reloaded: true }, { where: "editor" }, { where: "editor", reloaded: true }]) assert.ok(!/My APP days/.test(H.appDaysErrorWords("", 504, o)), "no 5xx words send anyone to a 'My APP days' reload (" + JSON.stringify(o) + ")");
-      // ship review 10/2: a 5xx JSON body WITHOUT a PostgREST code (a gateway's own JSON) is outcome-unknown too; with a code
-      // (the function's transaction failed) it still says nothing was saved
-      assert.strictEqual(H.appDaysErrorWords('{"message":"upstream connect error"}', 503, { sessionExpired: false }), UNK(503) + "Check your days after the next refresh, then save again if a day is missing.");
-      assert.strictEqual(H.appDaysErrorWords({ message: "upstream request timeout" }, 504), UNK(504) + "Check your days after the next refresh, then save again if a day is missing.", "an object body without a code");
-      assert.strictEqual(H.appDaysErrorWords(pg("XX000", "boom"), 500, { reloaded: true }), "Couldn't save the APP days: boom", "a coded 5xx: the transaction failed - nothing was saved");
-      // ship review 10/2: status 0 (appDaysDb.save's thrown fetch) is "couldn't reach" whatever the thrown text (an AbortError too)
-      assert.strictEqual(H.appDaysErrorWords("The user aborted a request.", 0), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).");
-      assert.strictEqual(H.appDaysErrorWords("AbortError", 0, { where: "editor", reloaded: false }), "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).");
-      // appDaysSaveUnsure: the refusals whose outcome is unknown (My APP days reloads after them)
-      assert.strictEqual(H.appDaysSaveUnsure("The user aborted a request.", 0), true, "status 0");
-      assert.strictEqual(H.appDaysSaveUnsure("<html>503</html>", 503), true, "a 5xx gateway page");
-      assert.strictEqual(H.appDaysSaveUnsure('{"message":"upstream connect error"}', 502), true, "a 5xx JSON without a code");
-      assert.strictEqual(H.appDaysSaveUnsure(pg("XX000", "boom"), 500), false, "a coded 5xx: nothing was saved");
-      assert.strictEqual(H.appDaysSaveUnsure(pg("AP005", "APP_DAY_TAKEN: x"), 400), false, "a refusal");
-      assert.strictEqual(H.appDaysSaveUnsure(pg("PGRST301", "JWT expired"), 401), false, "a 401");
-      assert.strictEqual(H.appDaysSaveUnsure("<html>Too large</html>", 413), false, "a 4xx page: nothing was saved");
-      assert.strictEqual(H.appDaysErrorWords("unexpected response from save_app_days: {}", 200), "Couldn't save the APP days: unexpected response from save_app_days: {}", "a 2xx with an unexpected body keeps its words");
-      assert.strictEqual(H.appDaysErrorCode(pg("AP005", "APP_DAY_TAKEN: ...")), "AP005");
-      assert.strictEqual(H.appDaysErrorCode("APP_DAY_STALE: 12/2 is Lee's day - reload the calendar (nothing was saved)"), "AP007", "from the token");
-      assert.strictEqual(H.appDaysErrorCode("APP_DAY_NOT_ALLOWED: x"), "AP001", "NOT_ALLOWED is not NOT_APP");
-      assert.strictEqual(H.appDaysErrorCode("APP_DAY_NOT_APP: x"), "AP003");
-      assert.strictEqual(H.appDaysErrorCode(pg("23505", "duplicate")), null);
-      assert.strictEqual(H.appDaysErrorCode(null), null);
+      assert.strictEqual(H.appDaysErrorWords("<html><body>Bad gateway</body></html>", 502), UNK(502) + "Check your shifts after the next refresh, then save again if one is missing.");
+      assert.strictEqual(H.appDaysErrorWords("", 503, { reloaded: true }), UNK(503) + "The calendar was reloaded - save again if a shift is missing.");
+      assert.strictEqual(H.appDaysErrorWords("", 503, { where: "editor", reloaded: true }), UNK(503) + "The APP lines were reloaded - set them again if one is wrong.");
+      assert.strictEqual(H.appDaysErrorWords("<html>503</html>", 503, { where: "editor", reloaded: false, sessionExpired: false }), UNK(503) + "Check this day's APPs after the next refresh, then set them again if one is wrong.");
+      assert.strictEqual(H.appDaysErrorWords("", 503, { kind: "vacation" }), UNK(503) + "Check the vacations after the next refresh, then save again if one is missing.");
+      assert.strictEqual(H.appDaysErrorWords("", 503, { kind: "vacation", reloaded: true }), UNK(503) + "The list was reloaded - save again if a vacation is missing.");
+      assert.strictEqual(H.appDaysErrorWords('{"message":"upstream connect error"}', 503, { sessionExpired: false }), UNK(503) + "Check your shifts after the next refresh, then save again if one is missing.", "a 5xx JSON without a code");
+      assert.strictEqual(H.appDaysErrorWords(pg("XX000", "boom"), 500, { reloaded: true }), "Couldn't save the APP shifts: boom", "a coded 5xx: the transaction failed - nothing was saved");
+      assert.strictEqual(H.appDaysErrorWords("<html><body>Too large</body></html>", 413), "Couldn't save the APP shifts (HTTP 413) - nothing was saved. Try again.");
+      assert.strictEqual(H.appDaysErrorWords("<html><body>Too large</body></html>", 413, { kind: "vacation" }), "Couldn't save the APP vacation (HTTP 413) - nothing was saved. Try again.");
+      for (const o of [undefined, {}, { reloaded: true }, { where: "editor" }, { where: "editor", reloaded: true }, { kind: "vacation" }]) assert.ok(!/My APP/.test(H.appDaysErrorWords("", 504, o)), "no 5xx words send anyone to a 'My APP ...' card (" + JSON.stringify(o) + ")");
+      assert.strictEqual(H.appDaysErrorWords("unexpected response from save_app_days: {}", 200), "Couldn't save the APP shifts: unexpected response from save_app_days: {}", "a 2xx with an unexpected body keeps its words");
+      // appDaysSaveUnsure: the refusals whose outcome is unknown (the cards reload after them)
+      assert.deepStrictEqual([H.appDaysSaveUnsure("The user aborted a request.", 0), H.appDaysSaveUnsure("<html>503</html>", 503), H.appDaysSaveUnsure('{"message":"upstream connect error"}', 502), H.appDaysSaveUnsure(pg("XX000", "boom"), 500), H.appDaysSaveUnsure(pg("AP005", "APP_DAY_TAKEN: x"), 400), H.appDaysSaveUnsure(pg("PGRST301", "JWT expired"), 401), H.appDaysSaveUnsure("<html>Too large</html>", 413)],
+        [true, true, true, false, false, false, false]);
+      assert.deepStrictEqual([H.appDaysErrorCode(pg("AP005", "APP_DAY_TAKEN: ...")), H.appDaysErrorCode("APP_DAY_STALE: 12/2 inbox is Lee's shift - reload"), H.appDaysErrorCode("APP_DAY_NOT_ALLOWED: x"), H.appDaysErrorCode("APP_DAY_NOT_APP: x"), H.appDaysErrorCode("APP_DAY_VACATION: x"), H.appDaysErrorCode(pg("AP009", "x"))], ["AP005", "AP007", "AP001", "AP003", "AP010", "AP009"]);
+      assert.deepStrictEqual([H.appDaysErrorCode(pg("AV008", "APP_VACATION_OVERLAP: x")), H.appDaysErrorCode("APP_VACATION_STALE: x"), H.appDaysErrorCode("APP_VACATION_NOT_ALLOWED: x"), H.appDaysErrorCode("APP_VACATION_NOT_APP: x")], ["AV008", "AV007", "AV001", "AV003"], "NOT_ALLOWED is not NOT_APP");
+      assert.deepStrictEqual([H.appDaysErrorCode(pg("23505", "duplicate")), H.appDaysErrorCode(null)], [null, null]);
     });
-    check("P29 helpers: appSavedNote / appPickList / appColumnState", () => {
-      assert.strictEqual(H.appSavedNote(["2026-12-03", "2026-12-02"], ["2026-12-11"]), "Saved: on call 12/2, 12/3; removed 12/11");
-      assert.strictEqual(H.appSavedNote(["2026-12-02"], []), "Saved: on call 12/2");
-      assert.strictEqual(H.appSavedNote([], ["2026-12-11"]), "Saved: removed 12/11");
-      assert.strictEqual(H.appSavedNote(null, undefined), "Saved: nothing changed");
+    check("P29 helpers: appPickList / appColumnState", () => {
       assert.deepStrictEqual(plain(H.appPickList(NAMES.concat([{ profile_id: "", display_name: "x", is_app: true }, null, { profile_id: "z", display_name: "Aaron Zed", is_app: true }]))), [
         { profileId: "z", name: "Aaron Zed" }, { profileId: PB, name: "Lee Bramble, PA-C" }, { profileId: PA, name: "Pat Appleton" },
       ], "current APPs only (a former APP is not offered), sorted by name");
@@ -12418,8 +12544,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     check("P29 helpers: profilePollMerge - is_app counts as moved only when its truth changes (a missing key and false are one value); PROFILE_POLL_KEYS unchanged", () => {
       const base = { id: "u1", person_id: null, role: "viewer", display_name: "Pat Appleton" };
       assert.deepStrictEqual(plain(H.PROFILE_POLL_KEYS), ["person_id", "role", "display_name"]);
-      const same = { ...base };
-      assert.strictEqual(H.profilePollMerge(same, { ...base, is_app: false }).changed, false, "missing -> false: unchanged");
+      assert.strictEqual(H.profilePollMerge({ ...base }, { ...base, is_app: false }).changed, false, "missing -> false: unchanged");
       assert.strictEqual(H.profilePollMerge({ ...base, is_app: false }, { ...base }).changed, false, "false -> missing: unchanged");
       const on = H.profilePollMerge({ ...base, is_app: false }, { ...base, is_app: true });
       assert.strictEqual(on.changed, true);
@@ -12427,6 +12552,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(on.next.is_app, true);
       assert.deepStrictEqual(plain(H.profilePollMerge({ ...base, is_app: true }, { ...base }).moved), ["is_app"], "true -> missing (a rollback): moved");
       assert.strictEqual(H.profilePollMerge({ ...base, is_app: true }, { ...base, is_app: true }).changed, false);
+    });
+    check("P35 helpers: appGridLabels reads appShiftDayMap's lists (every holder of every shift; one label per APP across the month) and appDaysLeaveWords names My APP shifts", () => {
+      assert.deepStrictEqual(plain(H.appGridLabels(BY)), { [PA]: "Appl", [PB]: "Bram", [PX]: "APP" });
+      assert.deepStrictEqual(plain(H.appGridLabels({ "2026-12-08": [{ profileId: "p1", name: "Pat Appleton" }, { profileId: "p2", name: "Jo Applegate" }] })), { p1: "P.App", p2: "J.App" }, "two APPs on one day's list start alike");
+      assert.strictEqual(H.appDaysLeaveWords(2), "Discard 2 unsaved APP shift changes and leave Mine?\n\nCancel stays on My APP shifts - tap Save to keep them.");
+      assert.strictEqual(H.appDaysLeaveWords(1, "signin"), "Discard 1 unsaved APP shift change and sign in again?\n\nCancel keeps them on My APP shifts (note the days, then sign in again).");
     });
 
     // ---- config.js appDaysDb in the [D] sandbox (config.js + helpers.js) ----
@@ -12438,7 +12569,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const calls = [];
     const serve = (fn) => { calls.length = 0; sandbox.__fetch = async (url, init) => { calls.push({ url: String(url), init: init || {} }); return fn(String(url), init || {}); }; };
     const savedLs = sandbox.localStorage._m;
-    await acheckP("P29 appDaysDb.load: no token / a stale token -> 'skipped' and NO request (never an anon read of the APP table)", async () => {
+    await acheckP("P29 appDaysDb.load: no token / a stale token -> 'skipped' and NO request (never an anon read of the APP tables)", async () => {
       serve(() => res(200, []));
       sandbox.localStorage._m = {};
       assert.strictEqual((await appDaysDb.load()).state, "skipped");
@@ -12446,128 +12577,177 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual((await appDaysDb.load()).state, "skipped");
       assert.strictEqual(calls.length, 0);
     });
-    // ship review 10/2: the table's rows by day (its primary key) - row i is the day i days after 2027-01-01
+    // the shift table's rows by its key (day, shift_type, profile_id): row i is the inbox of the day i days after 2027-01-01
     const apDay = (i) => new Date(Date.UTC(2027, 0, 1 + i)).toISOString().slice(0, 10);
-    const apRows = (from, n) => Array.from({ length: n }, (_, i) => ({ day: apDay(from + i), profile_id: PA, source: "app", created_at: "x" + (from + i) }));
+    const apRows = (from, n) => Array.from({ length: n }, (_, i) => ({ day: apDay(from + i), shift_type: "inbox", profile_id: PA, source: "app", created_at: "x" + (from + i) }));
+    const avRows = (from, n) => Array.from({ length: n }, (_, i) => ({ id: "v" + String(from + i).padStart(5, "0"), profile_id: PA, start_date: apDay(from + i), end_date: apDay(from + i), source: "app", created_at: "y" }));
     const apOffset = (url) => Number((/[?&]offset=(\d+)/.exec(url) || [0, 0])[1]);
-    // pin moved deliberately 10/2 (ship review): page 2 starts ON the last day of page 1 (offset 999, db.queryAll's overlap) - it was offset=1000
-    await acheckP("P29 appDaysDb.load: ok across two pages (1000 rows, then the overlap page at offset=999 that starts on day 1000 and adds day 1001), then ONE names GET with the user's JWT", async () => {
+    const isVac = (url) => /\/rest\/v1\/app_time_off\?/.test(url), isNames = (url) => /rpc\/app_call_names/.test(url);
+    // pin moved deliberately 11/17 (Prompt 35): the typed read pages app_call_days on its key, then app_time_off on its id, then the names
+    await acheckP("P35 appDaysDb.load: ok - app_call_days across two pages (1000 rows, then the overlap page at offset=999 starting on row 1000's key), app_time_off (one page), then ONE names GET, all with the user's JWT; the answer carries rows, vacations and names", async () => {
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
-      serve((url) => /rpc\/app_call_names/.test(url) ? res(200, NAMES) : res(200, apRows(apOffset(url), apOffset(url) === 0 ? 1000 : 2)));
+      serve((url) => isNames(url) ? res(200, NAMES) : isVac(url) ? res(200, avRows(0, 3)) : res(200, apRows(apOffset(url), apOffset(url) === 0 ? 1000 : 2)));
       const r = await appDaysDb.load();
       assert.strictEqual(r.state, "ok");
       assert.strictEqual(r.rows.length, 1001);
-      assert.deepStrictEqual(plain(r.rows.map(x => x.day)), Array.from({ length: 1001 }, (_, i) => apDay(i)), "every day once, in order - the overlap row is not doubled");
+      assert.deepStrictEqual(plain(r.rows.map(x => x.day)), Array.from({ length: 1001 }, (_, i) => apDay(i)), "every row once, in order - the overlap row is not doubled");
+      assert.deepStrictEqual(plain(r.vacations.map(v => v.id)), ["v00000", "v00001", "v00002"]);
       assert.strictEqual(r.names.length, 3);
-      assert.strictEqual(calls.length, 3);
-      assert.match(calls[0].url, /\/rest\/v1\/app_call_days\?select=day,profile_id,source,created_at&order=day\.asc&limit=1000&offset=0$/);
+      assert.strictEqual(calls.length, 4);
+      assert.match(calls[0].url, /\/rest\/v1\/app_call_days\?select=day,shift_type,profile_id,source,created_at&order=day\.asc,shift_type\.asc,profile_id\.asc&limit=1000&offset=0$/);
       assert.match(calls[1].url, /\/rest\/v1\/app_call_days\?.*&limit=1000&offset=999$/);
-      assert.match(calls[2].url, /\/rest\/v1\/rpc\/app_call_names$/);
-      assert.strictEqual((calls[2].init.method || "GET"), "GET", "the names function is called with GET (stable - PostgREST runs it read-only)");
-      assert.ok(!calls[2].init.body, "no body");
+      assert.match(calls[2].url, /\/rest\/v1\/app_time_off\?select=id,profile_id,start_date,end_date,source,created_at&order=start_date\.asc,id\.asc&limit=1000&offset=0$/);
+      assert.match(calls[3].url, /\/rest\/v1\/rpc\/app_call_names$/);
+      assert.strictEqual((calls[3].init.method || "GET"), "GET", "the names function is called with GET (stable - PostgREST runs it read-only)");
+      assert.ok(!calls[3].init.body, "no body");
       calls.forEach(c => assert.strictEqual(c.init.headers.Authorization, "Bearer " + FRESH));
-      serve((url) => res(200, []));
+      serve(() => res(200, []));
       const e = await appDaysDb.load();
-      assert.strictEqual(e.state, "ok", "a real empty answer");
-      assert.strictEqual(e.rows.length + e.names.length, 0);
+      assert.deepStrictEqual([e.state, e.rows.length, e.vacations.length, e.names.length], ["ok", 0, 0, 0], "a real empty answer");
+      // the vacation table pages the same way: a full page, then the overlap page that starts on its last id
+      serve((url) => isNames(url) ? res(200, []) : isVac(url) ? res(200, avRows(apOffset(url), apOffset(url) === 0 ? 1000 : 4)) : res(200, []));
+      const v = await appDaysDb.load();
+      assert.deepStrictEqual([v.state, v.vacations.length, calls.length], ["ok", 1003, 4]);
+      assert.match(calls[2].url, /\/rest\/v1\/app_time_off\?.*&limit=1000&offset=999$/);
     });
-    await acheckP("P29 appDaysDb.load: unavailable on the table's 404 PGRST205 (and NO names request after it) and on the function's 404 PGRST202 - never an empty ok", async () => {
+    await acheckP("P35 appDaysDb.load: unavailable on app_call_days' 404 PGRST205 and its 400 42703 (no shift_type - revision ac not applied or rolled back), on app_time_off's 404 PGRST205 and on the names function's 404 PGRST202 - never an empty ok; it stops at the first non-2xx", async () => {
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
       serve(() => res(404, '{"code":"PGRST205","details":null,"hint":null,"message":"Could not find the table \'public.app_call_days\' in the schema cache"}'));
-      assert.strictEqual((await appDaysDb.load()).state, "unavailable");
-      assert.strictEqual(calls.length, 1, "it stops at the first non-2xx");
-      serve((url) => /rpc\/app_call_names/.test(url) ? res(404, '{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.app_call_names without parameters in the schema cache"}') : res(200, []));
-      assert.strictEqual((await appDaysDb.load()).state, "unavailable");
-      assert.strictEqual(calls.length, 2);
+      assert.deepStrictEqual([(await appDaysDb.load()).state, calls.length], ["unavailable", 1]);
+      serve(() => res(400, '{"code":"42703","details":null,"hint":null,"message":"column app_call_days.shift_type does not exist"}'));
+      assert.deepStrictEqual([(await appDaysDb.load()).state, calls.length], ["unavailable", 1], "a database without revision ac");
+      serve((url) => isVac(url) ? res(404, '{"code":"PGRST205","details":null,"hint":null,"message":"Could not find the table \'public.app_time_off\' in the schema cache"}') : res(200, []));
+      assert.deepStrictEqual([(await appDaysDb.load()).state, calls.length], ["unavailable", 2], "no vacation table: no names call after it");
+      serve((url) => isNames(url) ? res(404, '{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.app_call_names without parameters in the schema cache"}') : res(200, []));
+      assert.deepStrictEqual([(await appDaysDb.load()).state, calls.length], ["unavailable", 3]);
     });
-    await acheckP("P29 appDaysDb.load: failed on a 500, a 403, a non-array body (table or names), a failing later page, a network error", async () => {
+    await acheckP("P35 appDaysDb.load: failed on a 500, a 403, a non-array body (either table or the names), a failing later page, a failing vacation read, a network error", async () => {
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
       serve(() => res(500, "boom"));
-      assert.strictEqual((await appDaysDb.load()).state, "failed");
-      assert.strictEqual(calls.length, 1);
+      assert.deepStrictEqual([(await appDaysDb.load()).state, calls.length], ["failed", 1]);
       serve(() => res(403, '{"code":"42501","message":"permission denied for table app_call_days"}'));
       assert.strictEqual((await appDaysDb.load()).state, "failed");
       serve(() => res(200, { message: "not a list" }));
       assert.strictEqual((await appDaysDb.load()).state, "failed");
-      serve((url) => /rpc\//.test(url) ? res(200, { not: "a list" }) : res(200, []));
+      serve((url) => isVac(url) ? res(200, { not: "a list" }) : res(200, []));
+      assert.strictEqual((await appDaysDb.load()).state, "failed", "a non-array vacation body");
+      serve((url) => isNames(url) ? res(200, { not: "a list" }) : res(200, []));
       assert.strictEqual((await appDaysDb.load()).state, "failed", "a non-array names body");
+      serve((url) => isVac(url) ? res(500, "boom") : res(200, []));
+      const fv = await appDaysDb.load();
+      assert.deepStrictEqual([fv.state, calls.length], ["failed", 2], "a failing vacation read: no names call");
       serve((url) => apOffset(url) > 0 ? res(500, "boom") : res(200, apRows(0, 1000)));
-      assert.strictEqual((await appDaysDb.load()).state, "failed", "never a truncated ok");
-      assert.strictEqual(calls.length, 2, "it stopped at the failing second page");
+      assert.deepStrictEqual([(await appDaysDb.load()).state, calls.length], ["failed", 2], "never a truncated ok - it stopped at the failing second page");
       serve(() => { throw new Error("offline"); });
       const n = await appDaysDb.load();
       assert.strictEqual(n.state, "failed");
       assert.match(n.error, /offline/);
     });
-    // ship review 10/2: db.queryAll's D15 guards, for the APP table (its loader pages on its own - the user's token, never anon)
-    await acheckP("P29 appDaysDb.load (ship review 10/2, D15's guards): a page longer than APP_DAYS_PAGE is 'failed'; a server that ignores offset is 'failed' on the SECOND request; a table that moved between pages (a row deleted / inserted before the boundary) is 'failed'; an endless table stops at APP_DAYS_MAX_PAGES requests - never a loop, never a partial ok, never a names call; ONE set of headers per read", async () => {
+    // ship review 10/2: db.queryAll's D15 guards, for the APP tables (the loader pages on its own - the user's token, never anon)
+    await acheckP("P29 appDaysDb.load (ship review 10/2, D15's guards; per table since Prompt 35): a page longer than APP_DAYS_PAGE is 'failed'; a server that ignores offset is 'failed' on the SECOND request; a table that moved between pages is 'failed'; an endless table stops at APP_DAYS_MAX_PAGES requests - never a loop, never a partial ok, never a names call; ONE set of headers per read", async () => {
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
       const PAGE = vm.runInContext("APP_DAYS_PAGE", sandbox), MAXP = vm.runInContext("APP_DAYS_MAX_PAGES", sandbox);
       assert.deepStrictEqual([PAGE, MAXP], [1000, 200]);
       serve(() => res(200, apRows(0, PAGE + 1)));
       let r = await appDaysDb.load();
       assert.deepStrictEqual([r.state, calls.length], ["failed", 1], "the limit ignored");
-      assert.match(r.error, /page 1 has 1001 rows \(limit 1000 ignored\)/);
-      serve((url) => /rpc\//.test(url) ? res(200, NAMES) : res(200, apRows(0, PAGE)));
+      assert.match(r.error, /app_call_days page 1 has 1001 rows \(limit 1000 ignored\)/);
+      serve((url) => isNames(url) ? res(200, NAMES) : isVac(url) ? res(200, []) : res(200, apRows(0, PAGE)));
       r = await appDaysDb.load();
       assert.deepStrictEqual([r.state, calls.length], ["failed", 2], "the same full page again: caught on the second request");
-      assert.match(r.error, /page 2 does not start on the last day of page 1/);
-      // a row deleted before the boundary between the two requests: page 2 (offset 999) now starts on day 1000, not day 999
-      serve((url) => /rpc\//.test(url) ? res(200, NAMES) : res(200, apOffset(url) === 0 ? apRows(0, PAGE) : apRows(apOffset(url) + 1, 5)));
+      assert.match(r.error, /app_call_days page 2 does not start on the last row of page 1/);
+      // a row deleted before the boundary between the two requests: page 2 (offset 999) now starts on row 1000, not row 999
+      serve((url) => isNames(url) ? res(200, NAMES) : isVac(url) ? res(200, []) : res(200, apOffset(url) === 0 ? apRows(0, PAGE) : apRows(apOffset(url) + 1, 5)));
       r = await appDaysDb.load();
       assert.deepStrictEqual([r.state, calls.length], ["failed", 2], "a table that moved between pages");
+      // the same rows but another shift type on the boundary row: the key compares the type too
+      serve((url) => isNames(url) ? res(200, NAMES) : isVac(url) ? res(200, []) : res(200, apOffset(url) === 0 ? apRows(0, PAGE) : apRows(apOffset(url), 3).map((x, i) => i === 0 ? { ...x, shift_type: "night" } : x)));
+      r = await appDaysDb.load();
+      assert.deepStrictEqual([r.state, calls.length], ["failed", 2], "the key is day + shift_type + profile_id");
+      serve((url) => isNames(url) ? res(200, NAMES) : isVac(url) ? res(200, apOffset(url) === 0 ? avRows(0, PAGE) : avRows(apOffset(url) + 1, 2)) : res(200, []));
+      r = await appDaysDb.load();
+      assert.deepStrictEqual([r.state, calls.length], ["failed", 3], "the vacation table moved between pages");
+      assert.match(r.error, /app_time_off page 2 does not start on the last row of page 1/);
       // an endless table: every page full and overlapping right - the backstop answers failed, no names call
-      serve((url) => /rpc\//.test(url) ? res(200, NAMES) : res(200, apRows(apOffset(url), PAGE)));
+      serve((url) => isNames(url) ? res(200, NAMES) : res(200, apRows(apOffset(url), PAGE)));
       r = await appDaysDb.load();
       assert.strictEqual(r.state, "failed");
-      assert.match(r.error, /more than 200 pages of 1000 rows/);
+      assert.match(r.error, /app_call_days: more than 200 pages of 1000 rows/);
       assert.strictEqual(calls.length, MAXP, "exactly APP_DAYS_MAX_PAGES requests");
-      assert.ok(!calls.some(c => /rpc\//.test(c.url)), "no names call after a failed table read");
+      assert.ok(!calls.some(c => isNames(c.url) || isVac(c.url)), "no vacation or names call after a failed shift read");
       // ONE identity per read: the token changes after page 1 - every request still carries the first one
       const FRESH2 = "h." + b64({ sub: PA, exp: Math.floor(Date.now() / 1000) + 7200 }) + ".s2";
-      serve((url) => { sandbox.localStorage._m = { "silvis-auth-token": FRESH2 }; return /rpc\//.test(url) ? res(200, NAMES) : res(200, apRows(apOffset(url), apOffset(url) === 0 ? PAGE : 3)); });
+      serve((url) => { sandbox.localStorage._m = { "silvis-auth-token": FRESH2 }; return isNames(url) ? res(200, NAMES) : isVac(url) ? res(200, []) : res(200, apRows(apOffset(url), apOffset(url) === 0 ? PAGE : 3)); });
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
       r = await appDaysDb.load();
-      assert.deepStrictEqual([r.state, r.rows.length, calls.length], ["ok", 1002, 3]);
+      assert.deepStrictEqual([r.state, r.rows.length, calls.length], ["ok", 1002, 4]);
       calls.forEach(c => assert.strictEqual(c.init.headers.Authorization, "Bearer " + FRESH, "one identity per read"));
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
     });
-    await acheckP("P29 appDaysDb.save: exactly ONE POST to rpc/save_app_days with exactly p_profile / p_add / p_clear / p_replace; ok needs ok:true; a refusal keeps the status and the body text; a throw = status 0", async () => {
+    await acheckP("P35 appDaysDb.save: exactly ONE POST to rpc/save_app_days with exactly p_profile / p_add / p_clear / p_replace - typed shifts [{ day, type }], p_replace the profile a change takes over from (a uuid string) or null; ok needs ok:true; a refusal keeps the status and the body text; a throw = status 0", async () => {
       sandbox.localStorage._m = { "silvis-auth-token": FRESH };
       serve(() => res(200, { ok: true, profile_id: PA, added: 2, removed: 0, kept: 0, absent: 0, replaced: 0, source: "app", audit: true }));
-      const r = await appDaysDb.save(PA, ["2026-12-10", "2026-12-11"], [], false);
+      const ADD = [{ day: "2026-12-10", type: "inbox" }, { day: "2026-12-11", type: "inbox" }];
+      const r = await appDaysDb.save(PA, ADD, [], null);
       assert.strictEqual(calls.length, 1);
       assert.match(calls[0].url, /\/rest\/v1\/rpc\/save_app_days$/);
       assert.strictEqual(calls[0].init.method, "POST");
       const body = JSON.parse(calls[0].init.body);
       assert.deepStrictEqual(Object.keys(body), ["p_profile", "p_add", "p_clear", "p_replace"]);
-      assert.deepStrictEqual(body, { p_profile: PA, p_add: ["2026-12-10", "2026-12-11"], p_clear: [], p_replace: false });
+      assert.deepStrictEqual(body, { p_profile: PA, p_add: ADD, p_clear: [], p_replace: null });
       assert.strictEqual(calls[0].init.headers.Authorization, "Bearer " + FRESH, "the user's JWT (authFetch)");
-      assert.strictEqual(r.ok, true);
-      assert.strictEqual(r.result.added, 2);
+      assert.deepStrictEqual([r.ok, r.result.added], [true, 2]);
       serve(() => res(200, { ok: true }));
-      await appDaysDb.save(null, null, ["2026-12-11"], 1);
-      assert.deepStrictEqual(JSON.parse(calls[0].init.body), { p_profile: null, p_add: [], p_clear: ["2026-12-11"], p_replace: true }, "lists default to [], replace to a boolean");
-      const AP5 = '{"code":"AP005","details":null,"hint":null,"message":"APP_DAY_TAKEN: 12/10 already has Pat Appleton - nothing was saved"}';
+      await appDaysDb.save(PB, ADD.slice(0, 1), [], PA);
+      assert.deepStrictEqual(JSON.parse(calls[0].init.body), { p_profile: PB, p_add: ADD.slice(0, 1), p_clear: [], p_replace: PA }, "a change names the APP it takes over from");
+      for (const rep of [false, true, 1, "", undefined]) { await appDaysDb.save(null, null, [{ day: "2026-12-11", type: "inbox" }], rep); assert.deepStrictEqual(JSON.parse(calls[calls.length - 1].init.body), { p_profile: null, p_add: [], p_clear: [{ day: "2026-12-11", type: "inbox" }], p_replace: null }, "lists default to [], replace to null (" + JSON.stringify(rep) + ")"); }
+      const AP5 = '{"code":"AP005","details":null,"hint":null,"message":"APP_DAY_TAKEN: 12/10 inbox already has Pat Appleton - nothing was saved"}';
       serve(() => res(400, AP5));
-      const no = await appDaysDb.save(PB, ["2026-12-10"], [], false);
+      const no = await appDaysDb.save(PB, ADD.slice(0, 1), [], null);
       assert.deepStrictEqual(plain(no), { ok: false, status: 400, error: AP5 });
       assert.strictEqual(calls.length, 1, "a refusal is not retried");
       serve(() => res(200, { something: "else" }));
-      const odd = await appDaysDb.save(PA, ["2026-12-10"], [], false);
+      const odd = await appDaysDb.save(PA, ADD, [], null);
       assert.strictEqual(odd.ok, false);
-      assert.match(odd.error, /^unexpected response/);
+      assert.match(odd.error, /^unexpected response from save_app_days/);
       serve(() => { throw new Error("Failed to fetch"); });
-      const net = await appDaysDb.save(PA, ["2026-12-10"], [], false);
-      assert.deepStrictEqual(plain(net), { ok: false, status: 0, error: "Failed to fetch" });
+      assert.deepStrictEqual(plain(await appDaysDb.save(PA, ADD, [], null)), { ok: false, status: 0, error: "Failed to fetch" });
+    });
+    await acheckP("P35 appDaysDb.saveVacations: exactly ONE POST to rpc/save_app_vacations with exactly p_profile / p_add ([{ start, end }]) / p_remove (ids); ok needs ok:true; a refusal keeps the status and the body text; a throw = status 0", async () => {
+      sandbox.localStorage._m = { "silvis-auth-token": FRESH };
+      serve(() => res(200, { ok: true, profile_id: PA, added: 1, removed: 1, kept: 0, source: "app", audit: true }));
+      const r = await appDaysDb.saveVacations(PA, [{ start: "2026-12-14", end: "2026-12-18" }], ["v1"]);
+      assert.strictEqual(calls.length, 1);
+      assert.match(calls[0].url, /\/rest\/v1\/rpc\/save_app_vacations$/);
+      assert.strictEqual(calls[0].init.method, "POST");
+      const body = JSON.parse(calls[0].init.body);
+      assert.deepStrictEqual(Object.keys(body), ["p_profile", "p_add", "p_remove"]);
+      assert.deepStrictEqual(body, { p_profile: PA, p_add: [{ start: "2026-12-14", end: "2026-12-18" }], p_remove: ["v1"] });
+      assert.strictEqual(calls[0].init.headers.Authorization, "Bearer " + FRESH);
+      assert.deepStrictEqual([r.ok, r.result.removed], [true, 1]);
+      serve(() => res(200, { ok: true }));
+      await appDaysDb.saveVacations(null, null, undefined);
+      assert.deepStrictEqual(JSON.parse(calls[0].init.body), { p_profile: null, p_add: [], p_remove: [] }, "lists default to []");
+      const AV5 = '{"code":"AV005","details":null,"hint":null,"message":"APP_VACATION_ON_SHIFT: Pat Appleton holds 12/14 inbox - remove the shift first (nothing was saved)"}';
+      serve(() => res(400, AV5));
+      assert.deepStrictEqual(plain(await appDaysDb.saveVacations(PA, [{ start: "2026-12-14", end: "2026-12-14" }], [])), { ok: false, status: 400, error: AV5 });
+      assert.strictEqual(calls.length, 1, "a refusal is not retried");
+      serve(() => res(200, "[]"));
+      const odd = await appDaysDb.saveVacations(PA, [], ["v1"]);
+      assert.ok(!odd.ok && /^unexpected response from save_app_vacations/.test(odd.error));
+      serve(() => { throw new Error("Failed to fetch"); });
+      assert.deepStrictEqual(plain(await appDaysDb.saveVacations(PA, [], ["v1"])), { ok: false, status: 0, error: "Failed to fetch" });
     });
     sandbox.localStorage._m = savedLs;
 
-    // ---- the client (index-source.html): the gates, the one write path, no audit / notification / e-mail from the client ----
+    // ---- the client (index-source.html): the gates, the write paths, no audit / notification / e-mail from the client ----
     const loadSrc = between(SRC, "  const loadAppDays = async (explicit) => {", "\n  };\n");
     const saveMineSrc = between(SRC, "  const saveMyAppDays = async (add, clear) => {", "\n  };\n");
-    const saveEdSrc = between(SRC, "  const saveAppDayFromEditor = async (day, mode, profileId, holderId) => {", "\n  };\n");
+    const saveVacSrc = between(SRC, "  const saveAppVacation = async (profileId, add, remove) => {", "\n  };\n");
+    const saveEdSrc = between(SRC, "  const saveAppDayFromEditor = async (day, typeId, mode, profileId, holderId) => {", "\n  };\n");
     const cardSrc = between(SRC, "function AppDaysCard(", "\n}\n");
+    const vacCardSrc = between(SRC, "function AppVacationsCard(", "\n}\n");
+    const typesCardSrc = between(SRC, "function AppShiftTypesCard(", "\n}\n");
     const edSrc = between(SRC, "function DayEditor(props) {", "\n}\n");
     const appBlockSrc = between(SRC, "  // APP CALL DAYS (Prompt 29", "  // audit_log is authenticated-read only");
     const lift = (src, name, ctx) => vm.runInNewContext("(" + src.replace("  const " + name + " = ", "").replace(/;\n$/, "") + ")", ctx);
@@ -12578,124 +12758,110 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(SRC.indexOf("  const isApp = ") < SRC.indexOf("  const loadAppDays = "), "declared before the loader");
       assert.strictEqual(cnt(SRC, "appDaysAllowedRef.current = appDaysAllowed;"), 1, "the ref is mirrored every render");
     });
-    await acheckP("P29 behaviour: loadAppDays (lifted verbatim) - no request unless appDaysAllowedRef.current; ok sets rows + names; unavailable clears them, no toast; failed keeps them, toasts only when explicit (review 10/2: the mount / poll stay quiet); skipped marks an unread state only; a stale answer is dropped", async () => {
+    const mkLoadCtx = (st, answer, allowed, extra) => {
+      const ctx = {
+        console: { warn() {}, log() {} },
+        appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 7 }, appFlightRef: { current: null }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
+        appDaysDb: { load: async () => { st.loads++; return typeof answer === "function" ? answer(ctx) : answer; } },
+        setAppDayRows: (v) => { st.rows = v; }, setAppVacRows: (v) => { st.vacs = v; }, setAppNameRows: (v) => { st.names = v; }, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
+        showToast: (m, k) => { st.toasts.push(m + "|" + k); },
+        ...(extra || {}),
+      };
+      return ctx;
+    };
+    await acheckP("P29/P35 behaviour: loadAppDays (lifted verbatim) - no request unless appDaysAllowedRef.current; ok sets the shifts, the vacations (a missing list = []) and the names; unavailable clears all three, no toast; failed keeps them, toasts only when explicit; skipped marks an unread state only; a stale answer is dropped", async () => {
       const mk = (answer, allowed) => {
-        const st = { rows: ["old"], names: ["oldn"], state: "ok", toasts: [], loads: 0 };
-        const ctx = {
-          console: { warn() {}, log() {} },
-          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 0 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 7 }, appFlightRef: { current: null }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
-          appDaysDb: { load: async () => { st.loads++; return typeof answer === "function" ? answer(ctx) : answer; } },
-          setAppDayRows: (v) => { st.rows = v; }, setAppNameRows: (v) => { st.names = v; }, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
-          showToast: (m, k) => { st.toasts.push(m + "|" + k); },
-        };
+        const st = { rows: ["old"], vacs: ["oldv"], names: ["oldn"], state: "ok", toasts: [], loads: 0 };
+        const ctx = mkLoadCtx(st, answer, allowed);
         return { st, ctx, fn: lift(loadSrc, "loadAppDays", ctx) };
       };
-      let t = mk({ state: "ok", rows: [1], names: [2] }, false);
+      let t = mk({ state: "ok", rows: [1], vacations: [5], names: [2] }, false);
       await t.fn(false);
       assert.strictEqual(t.st.loads, 0, "?public=1 / signed out: no request at all");
       assert.strictEqual(t.ctx.appReadOwedRef.current, 7, "a call that reads nothing pays no owed read (the merge with main, 10/2)");
-      t = mk({ state: "ok", rows: [1], names: [2] }, true);
+      t = mk({ state: "ok", rows: [1], vacations: [5], names: [2] }, true);
       const pr = t.fn(false);
-      assert.strictEqual(t.ctx.appReadOwedRef.current, 0, "a read pays the owed read synchronously, before its first await - the reset effect's timer then reads nothing (one read per sign-in)");
+      assert.strictEqual(t.ctx.appReadOwedRef.current, 0, "a read pays the owed read synchronously, before its first await");
       await pr;
+      assert.deepStrictEqual([t.st.loads, t.st.rows, t.st.vacs, t.st.names, t.st.state], [1, [1], [5], [2], "ok"]);
+      t = mk({ state: "ok", rows: [1], names: [2] }, true);
+      await t.fn(false);
+      assert.deepStrictEqual(plain(t.st.vacs), [], "no vacations list in the answer: none, never the previous account's");
       // Do first 4 (the merge with main, 10/2): the mount load's collector takes the sentence - no toast of its own
       t = mk({ state: "failed", error: "HTTP 500" }, true);
       const said = [];
       await t.fn((m) => said.push(m));
-      assert.deepStrictEqual([said, t.st.toasts, t.st.state, t.st.rows], [[H.APP_DAYS_LOAD_FAIL_TEXT], [], "failed", ["old"]], "a signed-in load's failed read: the sentence to the collector, no toast, the rows kept");
-      t = mk({ state: "ok", rows: [3], names: [] }, true);
-      const said2 = [];
-      await t.fn((m) => said2.push(m));
-      assert.deepStrictEqual([said2, t.st.rows], [[], [3]], "a read that lands says nothing");
-      t = mk({ state: "ok", rows: [1], names: [2] }, true);
-      await t.fn(false);
-      assert.deepStrictEqual([t.st.loads, t.st.rows, t.st.names, t.st.state], [1, [1], [2], "ok"]);
+      assert.deepStrictEqual([said, t.st.toasts, t.st.state, t.st.rows, t.st.vacs], [[H.APP_DAYS_LOAD_FAIL_TEXT], [], "failed", ["old"], ["oldv"]], "a signed-in load's failed read: the sentence to the collector, no toast, the rows kept");
       t = mk({ state: "unavailable" }, true);
       await t.fn(false);
-      assert.deepStrictEqual(plain([t.st.rows, t.st.names, t.st.state, t.st.toasts.length]), [[], [], "unavailable", 0]);
+      assert.deepStrictEqual(plain([t.st.rows, t.st.vacs, t.st.names, t.st.state, t.st.toasts.length]), [[], [], [], "unavailable", 0]);
       t = mk({ state: "failed", error: "HTTP 500" }, true);
       await t.fn(false); await t.fn(false);
-      assert.deepStrictEqual([t.st.rows, t.st.names, t.st.state], [["old"], ["oldn"], "failed"], "the last loaded rows are kept");
-      assert.deepStrictEqual(t.st.toasts, [], "no toast for two passive failures (the mount, the 60 s poll) - every role shares the poll");
+      assert.deepStrictEqual([t.st.rows, t.st.vacs, t.st.names, t.st.state, t.st.toasts], [["old"], ["oldv"], ["oldn"], "failed", []], "the last loaded rows are kept; no toast for passive failures (the mount, the 60 s poll)");
       await t.fn(true);
-      assert.deepStrictEqual(t.st.toasts, ["Couldn't load the APP days - the last loaded days are kept.|error"], "an explicit reload (Retry, a Save, the editor, a Users switch) toasts");
-      await t.fn(true);
-      assert.strictEqual(t.st.toasts.length, 2, "... every time");
+      assert.deepStrictEqual(t.st.toasts, ["Couldn't load the APP shifts and vacations - the last loaded ones are kept.|error"], "an explicit reload (Retry, a Save, the editor, a Users switch) toasts");
       assert.ok(!/appToastShownRef/.test(SRC), "no once-per-session toast flag is left");
       t = mk({ state: "skipped" }, true);
       await t.fn(false);
       assert.deepStrictEqual([t.st.rows, t.st.state, t.st.toasts.length], [["old"], "ok", 0]);
       t = mk({ state: "skipped" }, true); t.st.state = "unread";
       await t.fn(false);
-      assert.strictEqual(t.st.state, "skipped", "a first read with no fresh token says so (My APP days' 'Sign in again' line), instead of 'Loading' until the next poll");
+      assert.strictEqual(t.st.state, "skipped", "a first read with no fresh token says so (My APP shifts' 'Sign in again' line)");
       t = mk({ state: "skipped" }, true); t.st.state = "failed";
       await t.fn(false);
       assert.strictEqual(t.st.state, "failed", "skipped never hides a failure");
-      t = mk((ctx) => { ctx.appGenRef.current++; return { state: "ok", rows: [9], names: [] }; }, true);
+      t = mk((ctx) => { ctx.appGenRef.current++; return { state: "ok", rows: [9], vacations: [9], names: [] }; }, true);
       await t.fn(false);
-      assert.deepStrictEqual(t.st.rows, ["old"], "an answer for the previous account (appGenRef moved) is dropped");
+      assert.deepStrictEqual([t.st.rows, t.st.vacs], [["old"], ["oldv"]], "an answer for the previous account (appGenRef moved) is dropped");
     });
-    await acheckP("P29 x Do first 4 (the merge with main, 10/2): the reset effect and loadAppDays (both lifted verbatim) - a sign-in's load re-run pays the owed read synchronously, so its timer reads nothing (one read per sign-in, said in the load's toast); with no load run the owed read runs a tick later, quietly; not allowed / a cleanup before the tick reads nothing", async () => {
+    await acheckP("P29 x Do first 4 (the merge with main, 10/2): the reset effect (lifted verbatim) clears the shifts, the vacations and the names; a sign-in's load re-run pays the owed read synchronously, so its timer reads nothing; with no load run the owed read runs a tick later, quietly; not allowed / a cleanup before the tick reads nothing", async () => {
       const fxSrc = between(SRC, "  useEffect(() => {\n    appGenRef.current++;", "  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line");
       const fxFn = fxSrc.replace(/^  useEffect\(/, "").replace(/, \[appDaysAllowed, authUser && authUser\.id\]\); \/\/ eslint-disable-line$/, "");
+      assert.ok(fxFn.includes("setAppDayRows([]); setAppVacRows([]); setAppNameRows([]); setAppDaysState(\"unread\");"), "another account: nothing of the previous one shows - its vacations too");
       const mk = (allowed, answer) => {
-        const st = { loads: 0, toasts: [], timers: [], state: "ok" };
-        const ctx = {
-          console: { warn() {}, log() {} }, appDaysAllowed: allowed,
-          appDaysAllowedRef: { current: allowed }, appGenRef: { current: 3 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 0 }, appFlightRef: { current: null }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
-          appDaysDb: { load: async () => { st.loads++; return answer || { state: "ok", rows: [], names: [] }; } },
-          setAppDayRows() {}, setAppNameRows() {}, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
-          showToast: (m, k) => { st.toasts.push(m + "|" + k); },
+        const st = { loads: 0, toasts: [], timers: [], state: "ok", rows: ["old"], vacs: ["oldv"], names: ["oldn"] };
+        const ctx = mkLoadCtx(st, answer || { state: "ok", rows: [], vacations: [], names: [] }, allowed, {
+          appDaysAllowed: allowed, appGenRef: { current: 3 }, appReadOwedRef: { current: 0 },
           setTimeout: (f) => { st.timers.push(f); return st.timers.length; }, clearTimeout: (i) => { st.timers[i - 1] = null; },
-        };
+        });
         ctx.loadAppDays = lift(loadSrc, "loadAppDays", ctx);
         const effect = vm.runInNewContext("(" + fxFn + ")", ctx);
         const runTimers = async () => { const ts = st.timers.slice(); st.timers.length = 0; for (const f of ts) if (f) await f(); await new Promise(r => setImmediate(r)); };
         return { st, ctx, effect, runTimers };
       };
       assert.ok(fxFn.startsWith("() => {\n    appGenRef.current++;") && fxFn.endsWith("\n  }"), "the effect's callback was lifted whole");
-      // a sign-in: the effect, then (same commit) the mount load's batch calls the loader with its collector, then the tick
       let t = mk(true, { state: "failed", error: "HTTP 500" });
       t.effect();
+      assert.deepStrictEqual(plain([t.st.rows, t.st.vacs, t.st.names, t.st.state]), [[], [], [], "unread"], "cleared at once");
       assert.strictEqual(t.ctx.appReadOwedRef.current, t.ctx.appGenRef.current, "the effect owes the first read of the account");
       const said = [];
       const pr = t.ctx.loadAppDays((m) => said.push(m));
       await t.runTimers(); await pr;
       assert.deepStrictEqual([t.st.loads, said, t.st.toasts], [1, [H.APP_DAYS_LOAD_FAIL_TEXT], []], "ONE read; its failure went to the load's collector, no toast of its own");
-      // no load run takes it (a profile read the poll recovered): the owed read runs a tick later, quietly
       t = mk(true, { state: "failed", error: "HTTP 500" });
       t.effect();
       await t.runTimers();
-      assert.deepStrictEqual([t.st.loads, t.st.toasts, t.st.state], [1, [], "failed"], "the owed read ran once, quietly (the legend / summary say it in place)");
-      // not allowed (?public=1, signed out, a failed profile read): nothing owed, nothing read
+      assert.deepStrictEqual([t.st.loads, t.st.toasts, t.st.state], [1, [], "failed"], "the owed read ran once, quietly");
       t = mk(false);
       t.effect();
       await t.runTimers();
       assert.deepStrictEqual([t.st.loads, t.ctx.appReadOwedRef.current, t.st.timers.length], [0, 0, 0]);
-      // the account changed again before the tick: the cleanup cancels the owed read
       t = mk(true);
       const cleanup = t.effect();
       cleanup();
       await t.runTimers();
-      assert.strictEqual(t.st.loads, 0, "a cleanup before the tick reads nothing (the next run owes its own read)");
+      assert.strictEqual(t.st.loads, 0, "a cleanup before the tick reads nothing");
     });
-    await acheckP("P29 ship review 10/2: loadAppDays (lifted verbatim) - ONE read of an account in flight: a quiet read (a Realtime SUBSCRIBED refreshAll, the poll) started while the load's collector read is out joins it - one request, and its failure still reaches the collector (the load's one toast), no toast of its own; a collector joining a quiet read out takes the sentence and settles only after it; an explicit reload always reads anew; another account, or a read out for 30 s, is not joined; the answer is the adopted state", async () => {
+    await acheckP("P29 ship review 10/2: loadAppDays (lifted verbatim) - ONE read of an account in flight: a quiet read joins a read out (its failure still reaches the collector); a collector joining a quiet read out takes the sentence; an explicit reload always reads anew; another account, or a read out for 30 s, is not joined; the answer is the adopted state", async () => {
       const mk = () => {
-        const st = { loads: 0, toasts: [], state: "ok", rows: ["old"], pending: [] };
+        const st = { loads: 0, toasts: [], state: "ok", rows: ["old"], vacs: [], names: [], pending: [] };
         const clock = { now: 1000 };
-        const ctx = {
-          console: { warn() {}, log() {} },
-          appDaysAllowedRef: { current: true }, appGenRef: { current: 1 }, appSeqRef: { current: 0 }, appReadOwedRef: { current: 0 }, appFlightRef: { current: null }, APP_DAYS_LOAD_FAIL_TEXT: H.APP_DAYS_LOAD_FAIL_TEXT,
-          appDaysDb: { load: () => { st.loads++; return new Promise(res => st.pending.push(res)); } },
-          setAppDayRows: (v) => { st.rows = v; }, setAppNameRows() {}, setAppDaysState: (v) => { st.state = typeof v === "function" ? v(st.state) : v; },
-          showToast: (m, k) => { st.toasts.push(m + "|" + k); },
-          Date: { now: () => clock.now },
-        };
+        const ctx = mkLoadCtx(st, null, true, { appGenRef: { current: 1 }, appReadOwedRef: { current: 0 }, Date: { now: () => clock.now } });
+        ctx.appDaysDb = { load: () => { st.loads++; return new Promise(r => st.pending.push(r)); } };
         return { st, ctx, clock, fn: lift(loadSrc, "loadAppDays", ctx) };
       };
       const FAIL = { state: "failed", error: "HTTP 500" };
       const tick = () => new Promise(r => setImmediate(r));
-      // (a) the finding: the load's collector read is out, then the re-run's channel answers SUBSCRIBED -> refreshAll's quiet read
       let t = mk();
       const said = [];
       const pc = t.fn((m) => said.push(m));
@@ -12704,7 +12870,6 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       t.st.pending[0](FAIL);
       const both = await Promise.all([pc, pq]);
       assert.deepStrictEqual([said, t.st.toasts, t.st.state, both], [[H.APP_DAYS_LOAD_FAIL_TEXT], [], "failed", ["failed", "failed"]], "its failure reached the collector (the load's one toast) - never dropped by the quiet read");
-      // (b) a quiet read is out (the owed read of the in-place sign-in card), then the load's collector joins it
       t = mk();
       const said2 = [];
       const pq2 = t.fn(false);
@@ -12712,149 +12877,168 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const pc2 = t.fn((m) => said2.push(m)).then((v) => { settled = true; return v; });
       assert.strictEqual(t.st.loads, 1, "the collector joined the quiet read out");
       await tick();
-      assert.strictEqual(settled, false, "the joined call settles only after the read out answered (the load's allSettled waits for the sentence)");
+      assert.strictEqual(settled, false, "the joined call settles only after the read out answered");
       t.st.pending[0](FAIL);
       await Promise.all([pq2, pc2]);
-      assert.deepStrictEqual([said2, t.st.toasts], [[H.APP_DAYS_LOAD_FAIL_TEXT], []], "the joined collector took the sentence");
-      // (c) an explicit reload (a Save, Retry, the editor) always reads anew - and the read it overtook is dropped
+      assert.deepStrictEqual([said2, t.st.toasts], [[H.APP_DAYS_LOAD_FAIL_TEXT], []]);
       t = mk();
-      const pq3 = t.fn(false);
-      const pe3 = t.fn(true);
+      const pq3 = t.fn(false), pe3 = t.fn(true);
       assert.strictEqual(t.st.loads, 2, "explicit: a new request");
-      t.st.pending[1]({ state: "ok", rows: [5], names: [] });
-      t.st.pending[0]({ state: "ok", rows: [4], names: [] });
+      t.st.pending[1]({ state: "ok", rows: [5], vacations: [], names: [] });
+      t.st.pending[0]({ state: "ok", rows: [4], vacations: [], names: [] });
       assert.deepStrictEqual([await pq3, await pe3, t.st.rows], ["dropped", "ok", [5]], "the newest request's answer lands");
-      // (d) a quiet read joins an explicit read out: one request, one toast (the explicit read's)
       t = mk();
-      const pe4 = t.fn(true);
-      const pq4 = t.fn(false);
+      const pe4 = t.fn(true), pq4 = t.fn(false);
       assert.strictEqual(t.st.loads, 1);
       t.st.pending[0](FAIL);
       await Promise.all([pe4, pq4]);
-      assert.deepStrictEqual(t.st.toasts, ["Couldn't load the APP days - the last loaded days are kept.|error"]);
-      // (e) another account (appGenRef moved) is never joined
+      assert.deepStrictEqual(t.st.toasts, ["Couldn't load the APP shifts and vacations - the last loaded ones are kept.|error"]);
       t = mk();
       const p5 = t.fn(false);
       t.ctx.appGenRef.current++;
       const p5b = t.fn(false);
       assert.strictEqual(t.st.loads, 2, "a read out for the previous account is not joined");
-      t.st.pending.forEach(r => r({ state: "ok", rows: [], names: [] }));
+      t.st.pending.forEach(r => r({ state: "ok", rows: [], vacations: [], names: [] }));
       assert.deepStrictEqual([await p5, await p5b], ["dropped", "ok"]);
-      // (f) a read out for 30 s or more (a hung request) is not joined - the poll is never stalled by it
       t = mk();
       const p6 = t.fn(false);
       t.clock.now += 30000;
       const p6b = t.fn(false);
       assert.strictEqual(t.st.loads, 2, "a hung read is not joined");
-      t.st.pending.forEach(r => r({ state: "ok", rows: [], names: [] }));
+      t.st.pending.forEach(r => r({ state: "ok", rows: [], vacations: [], names: [] }));
       await Promise.all([p6, p6b]);
-      // (g) nothing out once a read answered: the next quiet read is a new request; a flight is cleared when it answers
       t = mk();
       const p7 = t.fn(false);
-      t.st.pending[0]({ state: "ok", rows: [1], names: [] });
+      t.st.pending[0]({ state: "ok", rows: [1], vacations: [], names: [] });
       assert.strictEqual(await p7, "ok");
       assert.strictEqual(t.ctx.appFlightRef.current, null, "the flight is cleared once it answered");
-      const p7b = t.fn(false);
-      assert.strictEqual(t.st.loads, 2, "nothing out: a new request");
-      t.st.pending[1]({ state: "skipped" });
-      assert.strictEqual(await p7b, "skipped");
       t.ctx.appDaysAllowedRef.current = false;
       assert.strictEqual(await t.fn(false), "none", "not allowed: no request, 'none'");
-      assert.strictEqual(t.st.loads, 2);
     });
-    await acheckP("P29 behaviour: saveMyAppDays (lifted verbatim) - only an APP; > 400 days refused with no request; ONE save for its own profile (p_replace false); ok reloads and answers the note; AP002 / AP005 / AP006 / AP007 reload, AP003 / AP004 do not; no audit, no notification", async () => {
+    await acheckP("P35 behaviour: saveMyAppDays (lifted verbatim) - only an APP; > 400 shifts refused with no request; nothing to send = no request; ONE save for its own profile (typed shifts, p_replace null); ok reloads and answers the note; AP002 / AP005-AP010 reload, AP001 / AP003 / AP004 do not; an unknown outcome reloads; a refusal off Mine is toasted; no audit, no notification", async () => {
       const mk = (answer, isApp) => {
         const st = { saves: [], loads: 0, busy: [], toasts: [] };
         const ctx = {
           console: { warn() {}, log() {} }, isApp, authUser: { id: PA }, APP_DAYS_MAX_SAVE: H.APP_DAYS_MAX_SAVE, auth: { sessionExpired: !!mk.expired },
           viewRef: { current: mk.view || "myschedule" }, showToast: (m, tone) => { st.toasts.push([m, tone]); },
-          appSavedNote: H.appSavedNote, appDaysErrorCode: H.appDaysErrorCode, appDaysErrorWords: H.appDaysErrorWords, appDaysSaveUnsure: H.appDaysSaveUnsure,
+          appShiftSavedNote: H.appShiftSavedNote, appDaysErrorCode: H.appDaysErrorCode, appDaysErrorWords: H.appDaysErrorWords, appDaysSaveUnsure: H.appDaysSaveUnsure,
           appDaysDb: { save: async (...a) => { st.saves.push(a); return answer; } },
           loadAppDays: async (explicit) => { st.loads++; st.lastExplicit = explicit; return mk.reload || "ok"; },
-          setAppDaysBusy: (v) => { st.busy.push(v); },
-          Array,
+          setAppDaysBusy: (v) => { st.busy.push(v); }, Array,
         };
         return { st, fn: lift(saveMineSrc, "saveMyAppDays", ctx) };
       };
+      const ONE = [{ day: "2026-12-10", type: "inbox" }];
       let t = mk({ ok: true, result: { ok: true } }, false);
-      let r = await t.fn(["2026-12-10"], []);
-      assert.strictEqual(r.ok, false); assert.strictEqual(t.st.saves.length, 0, "not an APP: nothing is sent");
-      // Do first 7 (the merge with main, 10/2): a 401 while the session is not known dead (the refresh hit an auth 5xx - never a
-      // sign-out) says it couldn't be refreshed; once the session IS dead (the banner) it says sign in again
+      let r = await t.fn(ONE, []);
+      assert.deepStrictEqual([plain(r), t.st.saves.length], [{ ok: false, words: "Only an APP account adds or removes its own APP shifts." }, 0], "not an APP: nothing is sent");
       t = mk({ ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) }, true);
-      r = await t.fn(["2026-12-10"], []);
-      assert.deepStrictEqual(plain(r), { ok: false, words: "Your session couldn't be refreshed - nothing was saved. Try again in a moment." }, "a 401, the session not known dead");
+      r = await t.fn(ONE, []);
+      assert.deepStrictEqual([plain(r), t.st.loads], [{ ok: false, words: "Your session couldn't be refreshed - nothing was saved. Try again in a moment." }, 0], "a 401, the session not known dead - no reload");
       mk.expired = true;
       t = mk({ ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) }, true);
-      r = await t.fn(["2026-12-10"], []);
+      r = await t.fn(ONE, []);
       mk.expired = false;
       assert.deepStrictEqual(plain(r), { ok: false, words: "Your session expired - sign in again. Nothing was saved." }, "a 401 with the session dead");
-      // pin moved deliberately 10/2 (ship review): an unknown outcome (a 5xx gateway page, no connection) now reloads the picture -
-      // nothing else did, though the words sent the APP to reload - and the words say whether that reload landed
       t = mk({ ok: false, status: 503, error: "<html>Service Unavailable</html>" }, true);
-      r = await t.fn(["2026-12-10"], []);
-      assert.deepStrictEqual([r.words, t.st.loads, t.st.lastExplicit], ["Couldn't confirm the save (HTTP 503) - it may or may not have gone through. The calendar was reloaded - save again if a day is missing.", 1, true], "a 5xx gateway page: the outcome is unknown, ONE explicit reload that landed (and no sign-out - nothing here touches the session)");
+      r = await t.fn(ONE, []);
+      assert.deepStrictEqual([r.words, t.st.loads, t.st.lastExplicit], ["Couldn't confirm the save (HTTP 503) - it may or may not have gone through. The calendar was reloaded - save again if a shift is missing.", 1, true], "a 5xx gateway page: ONE explicit reload that landed");
       mk.reload = "failed";
       t = mk({ ok: false, status: 502, error: '{"message":"upstream connect error"}' }, true);
-      r = await t.fn(["2026-12-10"], []);
+      r = await t.fn(ONE, []);
       mk.reload = null;
-      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't confirm the save (HTTP 502) - it may or may not have gone through. Check your days after the next refresh, then save again if a day is missing.", 1], "a 5xx JSON without a code whose reload failed: never 'reloaded'");
+      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't confirm the save (HTTP 502) - it may or may not have gone through. Check your shifts after the next refresh, then save again if one is missing.", 1], "a reload that failed: never 'reloaded'");
       t = mk({ ok: false, status: 0, error: "Failed to fetch" }, true);
-      r = await t.fn(["2026-12-10"], []);
-      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).", 1], "no connection: reloaded too");
+      r = await t.fn(ONE, []);
+      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same shifts twice is safe).", 1], "no connection: reloaded too");
       t = mk({ ok: false, status: 500, error: JSON.stringify({ code: "XX000", message: "boom" }) }, true);
-      r = await t.fn(["2026-12-10"], []);
-      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't save the APP days: boom", 0], "a coded 5xx: nothing was saved - no reload");
-      t = mk({ ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) }, true);
-      r = await t.fn(["2026-12-10"], []);
-      assert.strictEqual(t.st.loads, 0, "a 401: nothing was saved - no reload");
+      r = await t.fn(ONE, []);
+      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't save the APP shifts: boom", 0], "a coded 5xx: nothing was saved - no reload");
       t = mk({ ok: true, result: { ok: true } }, true);
-      r = await t.fn(Array.from({ length: 401 }, (_, i) => "2027-01-01"), []);
-      assert.deepStrictEqual(plain(r), { ok: false, words: "at most 400 days in one save - nothing was saved" });
-      assert.strictEqual(t.st.saves.length, 0, "the cap is checked before any request");
-      r = await t.fn(["2026-12-10", "2026-12-11"], ["2026-12-04"]);
-      assert.deepStrictEqual(plain(t.st.saves), [[PA, ["2026-12-10", "2026-12-11"], ["2026-12-04"], false]], "one request, his own profile, never a replace");
-      assert.deepStrictEqual(plain(r), { ok: true, note: "Saved: on call 12/10, 12/11; removed 12/4" });
-      assert.strictEqual(t.st.loads, 1); assert.strictEqual(t.st.lastExplicit, true);
-      assert.deepStrictEqual(t.st.busy, [true, false]);
-      for (const [code, reload] of [["AP002", 1], ["AP005", 1], ["AP006", 1], ["AP007", 1], ["AP003", 0], ["AP004", 0], ["AP001", 0]]) {
-        const tk = H.APP_DAY_CODES[code];
-        t = mk({ ok: false, status: 400, error: JSON.stringify({ code, message: tk + ": the words - nothing was saved" }) }, true);
-        r = await t.fn(["2026-12-10"], []);
+      r = await t.fn(Array.from({ length: 401 }, () => ({ day: "2027-01-01", type: "inbox" })), []);
+      assert.deepStrictEqual([plain(r), t.st.saves.length], [{ ok: false, words: "at most 400 shifts in one save - nothing was saved" }, 0], "the cap is checked before any request");
+      r = await t.fn([], []);
+      assert.deepStrictEqual([plain(r), t.st.saves.length, t.st.loads], [{ ok: true, note: "Saved: nothing changed" }, 0, 0], "nothing to send: no request");
+      r = await t.fn([{ day: "2026-12-10", type: "inbox" }, { day: "2026-12-11", type: "inbox" }], [{ day: "2026-12-04", type: "inbox" }]);
+      assert.deepStrictEqual(plain(t.st.saves), [[PA, [{ day: "2026-12-10", type: "inbox" }, { day: "2026-12-11", type: "inbox" }], [{ day: "2026-12-04", type: "inbox" }], null]], "one request, its own profile, never a replace");
+      assert.deepStrictEqual(plain(r), { ok: true, note: "Saved: inbox 12/10, 12/11; removed inbox 12/4" });
+      assert.deepStrictEqual([t.st.loads, t.st.lastExplicit, t.st.busy], [1, true, [true, false]]);
+      for (const [code, reload] of [["AP002", 1], ["AP005", 1], ["AP006", 1], ["AP007", 1], ["AP008", 1], ["AP009", 1], ["AP010", 1], ["AP003", 0], ["AP004", 0], ["AP001", 0]]) {
+        t = mk({ ok: false, status: 400, error: JSON.stringify({ code, message: H.APP_DAY_CODES[code] + ": the words - nothing was saved" }) }, true);
+        r = await t.fn(ONE, []);
         assert.deepStrictEqual(plain(r), { ok: false, words: "the words - nothing was saved" }, code);
         assert.strictEqual(t.st.loads, reload, code + (reload ? " reloads the stale picture" : " does not reload"));
         assert.deepStrictEqual(t.st.toasts, [], code + ": on Mine the card shows the refusal - no toast");
       }
-      // review of fix/painter-dark-mode (spec F): the APP left Mine while the save ran (the card is gone) - the refusal is toasted;
-      // a save that lands off Mine toasts nothing (the calendar shows it)
       mk.view = "calendar";
-      t = mk({ ok: false, status: 400, error: JSON.stringify({ code: "AP005", message: H.APP_DAY_CODES.AP005 + ": 12/10 already has Jo Applegate - nothing was saved" }) }, true);
-      r = await t.fn(["2026-12-10"], []);
-      assert.deepStrictEqual(plain(t.st.toasts), [["My APP days: 12/10 already has Jo Applegate - nothing was saved", "error"]], "a refusal off Mine is toasted");
+      t = mk({ ok: false, status: 400, error: JSON.stringify({ code: "AP005", message: H.APP_DAY_CODES.AP005 + ": 12/10 inbox already has Jo Applegate - nothing was saved" }) }, true);
+      await t.fn(ONE, []);
+      assert.deepStrictEqual(plain(t.st.toasts), [["My APP shifts: 12/10 inbox already has Jo Applegate - nothing was saved", "error"]], "a refusal off Mine is toasted");
       t = mk({ ok: true, result: { ok: true } }, true);
-      r = await t.fn(["2026-12-10"], []);
+      r = await t.fn(ONE, []);
       mk.view = null;
       assert.deepStrictEqual([r.ok, t.st.toasts.length], [true, 0], "a landed save off Mine toasts nothing");
       assert.ok(!/logAudit|addNotif|sendEmailNotif|notifications|snapshot/.test(saveMineSrc), "the client writes no audit row, notification, e-mail or snapshot for an APP save");
     });
-    check("P29 pins: saveAppDayFromEditor - the scheduler only (never ?public=1); set = save(profile, [day], [], false), change = p_replace true, clear = save(holder, [], [day], false); the picture is reloaded; a toast names the APP; no audit / notification from the client", () => {
-      assert.ok(saveEdSrc.includes('if (!isScheduler || isPublicMode) return { ok: false, words: "Only the scheduler sets the APP of a day." };'));
-      assert.ok(saveEdSrc.includes('const r = mode === "clear" ? await appDaysDb.save(holderId, [], [day], false) : await appDaysDb.save(profileId, [day], [], mode === "change");'));
-      assert.ok(saveEdSrc.indexOf("await loadAppDays(true);") > saveEdSrc.indexOf("const r = mode"), "reload after the save, refused or not");
-      assert.ok(saveEdSrc.includes('"APP cleared for " + fmtMD(day)') && saveEdSrc.includes('"APP for " + fmtMD(day) + ": " + appNameOf(profileId)'));
-      assert.ok(!/logAudit|addNotif|sendEmailNotif|notifications|snapshot/.test(saveEdSrc));
-      assert.ok(!/logAudit\([^)]*appdays/i.test(SRC), "no logAudit(\"appdays...\") anywhere in the client - the save function writes the audit row");
-      assert.ok(!/addNotif|sendEmailNotif|notifications|logAudit|snapshots\./.test(appBlockSrc.replace(/\/\/[^\n]*/g, "")), "the APP block's code names no notification, e-mail, audit or snapshot path");
-      // ship review 10/2: the refusal's words - the session flag (Do first 7), the editor's own wording, whether the reload landed
-      assert.ok(saveEdSrc.includes("const reload = await loadAppDays(true);"), "the reload's answer is kept");
-      assert.ok(saveEdSrc.includes('appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, where: "editor", reloaded: reload === "ok" })'), "the words get the session flag, where: editor and the reload's outcome");
+    await acheckP("P35 behaviour: saveAppVacation (lifted verbatim) - the APP (its own only), the scheduler and the office (any APP); never ?public=1 or another role; > 50 refused with no request; ONE saveVacations request (a change = remove + add); ok reloads, the note names the removed range; AV002 / AV005-AV008 and an unknown outcome reload, AV001 / AV003 / AV004 do not; the vacation words", async () => {
+      const VR = [{ id: "v1", profileId: PA, start: "2026-12-14", end: "2026-12-15" }, { id: "v2", profileId: PB, start: "2026-12-14", end: "2026-12-18" }];
+      const mk = (answer, role) => {
+        const st = { saves: [], loads: 0, busy: [] };
+        const ctx = {
+          console: { warn() {}, log() {} }, isPublicMode: role === "public", authUser: role === "anon" ? null : { id: PA }, isApp: role === "app", isScheduler: role === "sched", isCoordinator: role === "office",
+          APP_VACATIONS_MAX_SAVE: H.APP_VACATIONS_MAX_SAVE, appVacSavedNote: H.appVacSavedNote, appVacs: VR, auth: { sessionExpired: false },
+          appDaysErrorCode: H.appDaysErrorCode, appDaysErrorWords: H.appDaysErrorWords, appDaysSaveUnsure: H.appDaysSaveUnsure,
+          appDaysDb: { saveVacations: async (...a) => { st.saves.push(a); return answer; } },
+          loadAppDays: async (explicit) => { st.loads++; st.lastExplicit = explicit; return "ok"; },
+          setAppDaysBusy: (v) => { st.busy.push(v); }, Array,
+        };
+        return { st, fn: lift(saveVacSrc, "saveAppVacation", ctx) };
+      };
+      const OK = { ok: true, result: { ok: true } }, ADD = [{ start: "2026-12-21", end: "2026-12-23" }];
+      for (const role of ["viewer", "public", "anon"]) {
+        const t = mk(OK, role);
+        assert.deepStrictEqual([plain(await t.fn(PA, ADD, [])), t.st.saves.length], [{ ok: false, words: "Only an APP account (its own), the scheduler or the office enters APP vacations." }, 0], role);
+      }
+      let t = mk(OK, "app");
+      assert.deepStrictEqual([plain(await t.fn(PB, ADD, [])), t.st.saves.length], [{ ok: false, words: "An APP enters, changes or removes only their own vacations - ask the scheduler or the office." }, 0], "an APP for another APP");
+      assert.deepStrictEqual(plain(await t.fn(PA, Array.from({ length: 51 }, () => ADD[0]), [])), { ok: false, words: "at most 50 vacations in one save - nothing was saved" });
+      assert.deepStrictEqual([plain(await t.fn(PA, [], [])), t.st.saves.length], [{ ok: true, note: "Saved: nothing changed" }, 0]);
+      let r = await t.fn(PA, ADD, []);
+      assert.deepStrictEqual([plain(r), plain(t.st.saves), t.st.loads, t.st.lastExplicit, t.st.busy], [{ ok: true, note: "Saved: vacation 12/21-12/23" }, [[PA, ADD, []]], 1, true, [true, false]], "the APP's own: one request, a reload");
+      for (const role of ["sched", "office"]) {
+        t = mk(OK, role);
+        r = await t.fn(PB, [{ start: "2026-12-15", end: "2026-12-19" }], ["v2"]);
+        assert.deepStrictEqual([plain(r), plain(t.st.saves)], [{ ok: true, note: "Saved: vacation 12/15-12/19; removed vacation 12/14-12/18" }, [[PB, [{ start: "2026-12-15", end: "2026-12-19" }], ["v2"]]]], role + ": a change of another APP's vacation - one request");
+      }
+      for (const [code, reload] of [["AV002", 1], ["AV005", 1], ["AV006", 1], ["AV007", 1], ["AV008", 1], ["AV001", 0], ["AV003", 0], ["AV004", 0]]) {
+        t = mk({ ok: false, status: 400, error: JSON.stringify({ code, message: H.APP_VACATION_CODES[code] + ": the words (nothing was saved)" }) }, "app");
+        r = await t.fn(PA, ADD, []);
+        assert.deepStrictEqual([plain(r), t.st.loads], [{ ok: false, words: "the words (nothing was saved)" }, reload], code);
+      }
+      t = mk({ ok: false, status: 0, error: "Failed to fetch" }, "office");
+      r = await t.fn(PB, ADD, []);
+      assert.deepStrictEqual([r.words, t.st.loads], ["Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same vacation twice is safe).", 1]);
+      t = mk({ ok: false, status: 503, error: "<html>503</html>" }, "sched");
+      r = await t.fn(PB, ADD, []);
+      assert.strictEqual(r.words, "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. The list was reloaded - save again if a vacation is missing.");
+      assert.ok(!/logAudit|addNotif|sendEmailNotif|notifications|snapshot/.test(saveVacSrc), "the client writes no audit row, notification, e-mail or snapshot for an APP vacation");
     });
-    await acheckP("P29 ship review 10/2: saveAppDayFromEditor (lifted verbatim) - a refused save answers the editor's words: a 401 with the session not known dead (the refresh unreachable: the reload is skipped) says it couldn't be refreshed, a dead session says sign in again, also when the reload failed; a 503 gateway page / no connection say the outcome is unknown and whether the reload landed - never 'My APP days'; AP005 the function's sentence; every save reloads (explicit); a landed save toasts the APP", async () => {
+    check("P35 pins: saveAppDayFromEditor - the scheduler only (never ?public=1); set = save(profile, [{ day, type }], [], null), change = p_replace the holder, clear = save(holder, [], [{ day, type }], null); the picture is reloaded; a toast names the shift and the APP; no audit / notification from the client", () => {
+      assert.ok(saveEdSrc.includes('if (!isScheduler || isPublicMode) return { ok: false, words: "Only the scheduler sets the APPs of a day." };'));
+      assert.ok(saveEdSrc.includes("const item = [{ day, type: typeId }];"));
+      assert.ok(saveEdSrc.includes('const r = mode === "clear" ? await appDaysDb.save(holderId, [], item, null) : await appDaysDb.save(profileId, item, [], mode === "change" ? holderId : null);'));
+      assert.ok(saveEdSrc.indexOf("const reload = await loadAppDays(true);") > saveEdSrc.indexOf("const r = mode"), "reload after the save, refused or not");
+      assert.ok(saveEdSrc.includes('appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, where: "editor", reloaded: reload === "ok" })'), "the words get the session flag, where: editor and the reload's outcome");
+      assert.ok(!/logAudit|addNotif|sendEmailNotif|notifications|snapshot/.test(saveEdSrc));
+      assert.ok(!/logAudit\([^)]*app(days|vac)/i.test(SRC), "no logAudit(\"appdays...\" / \"appvac...\") anywhere in the client - the save functions write the audit rows");
+      assert.ok(!/addNotif|sendEmailNotif|notifications|logAudit|snapshots\./.test(appBlockSrc.replace(/\/\/[^\n]*/g, "")), "the APP block's code names no notification, e-mail, audit or snapshot path");
+    });
+    await acheckP("P35 behaviour: saveAppDayFromEditor (lifted verbatim) - a refused save answers the editor's words (a 401, a 503 page, no connection, AP005), every save reloads (explicit); set / change / clear send the typed shift; a landed save toasts the shift and the APP", async () => {
       const mk = (answer, reload, expired) => {
         const st = { saves: [], loads: [], toasts: [], busy: [] };
         const ctx = {
           console: { warn() {}, log() {} }, isScheduler: true, isPublicMode: false, auth: { sessionExpired: !!expired },
-          appDaysErrorWords: H.appDaysErrorWords, fmtMD: H.fmtMD, appNameOf: () => "Pat Appleton",
+          appDaysErrorWords: H.appDaysErrorWords, fmtMD: H.fmtMD, appNameOf: (p) => p === "p-b" ? "Lee Bramble" : "Pat Appleton", appTypes: TYPES,
           appDaysDb: { save: async (...a) => { st.saves.push(a); return answer; } },
           loadAppDays: async (explicit) => { st.loads.push(explicit); return reload; },
           showToast: (m, k) => { st.toasts.push(m + "|" + k); }, setAppDaysBusy: (v) => { st.busy.push(v); },
@@ -12863,109 +13047,154 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       };
       const J401 = { ok: false, status: 401, error: JSON.stringify({ code: "PGRST301", message: "JWT expired" }) };
       const UNK = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. ";
-      const NET = "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).";
       const cases = [
-        ["a 401, the refresh unreachable (the reload is skipped: the token is still stale)", J401, "skipped", false, "Your session couldn't be refreshed - nothing was saved. Try again in a moment."],
+        ["a 401, the refresh unreachable", J401, "skipped", false, "Your session couldn't be refreshed - nothing was saved. Try again in a moment."],
         ["a 401, the session dead", J401, "skipped", true, "Your session expired - sign in again. Nothing was saved."],
-        ["a 401 whose reload failed (the client thought the token fresh)", J401, "failed", false, "Your session couldn't be refreshed - nothing was saved. Try again in a moment."],
-        ["a 503 gateway page, the reload failed", { ok: false, status: 503, error: "<html><body>503 Service Unavailable</body></html>" }, "failed", false, UNK + "Check this day's APP after the next refresh, then set it again if it is wrong."],
-        ["a 503 gateway page, the reload landed", { ok: false, status: 503, error: "<html><body>503 Service Unavailable</body></html>" }, "ok", false, UNK + "The APP line was reloaded - set it again if it is wrong."],
-        ["no connection, the reload failed", { ok: false, status: 0, error: "Failed to fetch" }, "failed", false, NET],
-        ["AP005", { ok: false, status: 400, error: JSON.stringify({ code: "AP005", message: H.APP_DAY_CODES.AP005 + ": 12/10 already has Lee Bramble - nothing was saved" }) }, "ok", false, "12/10 already has Lee Bramble - nothing was saved"],
+        ["a 503 gateway page, the reload failed", { ok: false, status: 503, error: "<html><body>503</body></html>" }, "failed", false, UNK + "Check this day's APPs after the next refresh, then set them again if one is wrong."],
+        ["a 503 gateway page, the reload landed", { ok: false, status: 503, error: "<html><body>503</body></html>" }, "ok", false, UNK + "The APP lines were reloaded - set them again if one is wrong."],
+        ["no connection", { ok: false, status: 0, error: "Failed to fetch" }, "failed", false, "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same shifts twice is safe)."],
+        ["AP005", { ok: false, status: 400, error: JSON.stringify({ code: "AP005", message: H.APP_DAY_CODES.AP005 + ": 12/10 inbox already has Lee Bramble - nothing was saved" }) }, "ok", false, "12/10 inbox already has Lee Bramble - nothing was saved"],
       ];
       for (const [label, answer, reload, expired, words] of cases) {
         const t = mk(answer, reload, expired);
-        const r = await t.fn("2026-12-10", "set", "p-a", "");
+        const r = await t.fn("2026-12-10", "inbox", "set", "p-a", "");
         assert.deepStrictEqual(plain([r, t.st.loads, t.st.toasts, t.st.busy]), [{ ok: false, words }, [true], [], [true, false]], label);
-        assert.ok(!/My APP days/.test(r.words), label + ": no 'My APP days' in the scheduler's words");
+        assert.ok(!/My APP/.test(r.words), label + ": no 'My APP ...' in the scheduler's words");
       }
-      const t = mk({ ok: true, result: { ok: true } }, "ok", false);
-      const r = await t.fn("2026-12-10", "change", "p-a", "p-b");
-      assert.deepStrictEqual(plain([r, t.st.saves, t.st.loads, t.st.toasts]), [{ ok: true, words: "APP for 12/10: Pat Appleton" }, [["p-a", ["2026-12-10"], [], true]], [true], ["APP for 12/10: Pat Appleton|success"]]);
+      const OK = { ok: true, result: { ok: true } };
+      let t = mk(OK, "ok", false);
+      let r = await t.fn("2026-12-10", "inbox", "set", "p-a", "");
+      assert.deepStrictEqual(plain([r, t.st.saves, t.st.toasts]), [{ ok: true, words: "Inbox 12/10: Pat Appleton" }, [["p-a", [{ day: "2026-12-10", type: "inbox" }], [], null]], ["Inbox 12/10: Pat Appleton|success"]]);
+      t = mk(OK, "ok", false);
+      r = await t.fn("2026-12-10", "night", "change", "p-a", "p-b");
+      assert.deepStrictEqual(plain([r, t.st.saves]), [{ ok: true, words: "Night 12/10: Pat Appleton" }, [["p-a", [{ day: "2026-12-10", type: "night" }], [], "p-b"]]], "change: p_replace = the holder");
+      t = mk(OK, "ok", false);
+      r = await t.fn("2026-12-10", "zzz", "clear", "", "p-b");
+      assert.deepStrictEqual(plain([r, t.st.saves, t.st.loads]), [{ ok: true, words: "zzz cleared for 12/10 (Lee Bramble)" }, [["p-b", [], [{ day: "2026-12-10", type: "zzz" }], null]], [true]], "clear: the holder's own shift (an unknown type reads its id)");
     });
-    check("P29 pins: every APP REST path is named in config.js only (\\b-bounded); index-source.html sends no bare RPC fetch; appDaysDb is the client's only door", () => {
-      for (const [label, rx] of [["app_call_days", /\bapp_call_days\b/g], ["rpc/app_call_names", /rpc\/app_call_names\b/g], ["rpc/save_app_days", /rpc\/save_app_days\b/g]]) {
+    check("P29/P35 pins: every APP REST path is named in config.js only (\\b-bounded); index-source.html sends no bare RPC fetch; appDaysDb is the client's only door", () => {
+      for (const [label, rx] of [["app_call_days", /\bapp_call_days\b/g], ["app_time_off", /\bapp_time_off\b/g], ["rpc/app_call_names", /rpc\/app_call_names\b/g], ["rpc/save_app_days", /rpc\/save_app_days\b/g], ["rpc/save_app_vacations", /rpc\/save_app_vacations\b/g]]) {
         assert.strictEqual(rxCount(SRC, rx), 0, "index-source.html names " + label);
         assert.strictEqual(rxCount(HLP, rx), 0, "helpers.js names " + label);
         assert.ok(rxCount(CFG, rx) >= 1, "config.js names " + label);
       }
       assert.strictEqual(cnt(SRC, "fetch(`${SUPABASE_URL}/rest/v1/rpc/"), 0, "a bare fetch of an RPC");
-      assert.strictEqual(cnt(CFG, "authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_days`, { method: \"POST\""), 1, "the one write: authFetch POST");
+      assert.strictEqual(cnt(CFG, "authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_days`, { method: \"POST\""), 1, "the shift write: authFetch POST");
+      assert.strictEqual(cnt(CFG, "authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_vacations`, { method: \"POST\""), 1, "the vacation write: authFetch POST");
       assert.strictEqual(rxCount(SRC, /appDaysDb\.save\(/g), 3, "saveMyAppDays (1) + saveAppDayFromEditor (2: clear / set-change)");
+      assert.strictEqual(rxCount(SRC, /appDaysDb\.saveVacations\(/g), 1, "saveAppVacation only");
       assert.strictEqual(rxCount(SRC, /appDaysDb\.load\(/g), 1, "loadAppDays only");
     });
-    check("P29 pins: refreshAll reads the APP days through the ref (quiet); the mount load's batch reads them with its collector (the merge with main, 10/2); the account-change effect resets and owes the first read; no realtime subscription for the APP table", () => {
+    check("P29 pins: refreshAll reads the APP picture through the ref (quiet); the mount load's batch reads it with its collector; the account-change effect resets and owes the first read; no realtime subscription for the APP tables", () => {
       assert.strictEqual(cnt(SRC, "        loadAppDaysRef.current(false), // Prompt 29"), 1, "inside refreshAll's allSettled list");
       const mountBatch = between(SRC, "      await Promise.allSettled([\n        legA(), legB(),", "\n      ]);");
-      assert.ok(mountBatch.includes("        loadAppDaysRef.current(sayLoadFail(\"appDays\")), // Prompt 29"), "the mount load's batch reads the APP days with the collector (key appDays)");
+      assert.ok(mountBatch.includes("        loadAppDaysRef.current(sayLoadFail(\"appDays\")), // Prompt 29"), "the mount load's batch reads the APP picture with the collector (key appDays)");
       const fx = between(SRC, "  useEffect(() => {\n    appGenRef.current++;", "  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line");
-      assert.ok(!/loadAppDays\((true|false)?\);\n/.test(fx.split("setTimeout(")[0]), "the reset effect never reads at once (the mount load's re-run takes the account's first read)");
-      assert.ok(fx.includes("const t = setTimeout(() => { if (appReadOwedRef.current === gen && appGenRef.current === gen) loadAppDays(false); }, 0);") && fx.includes("return () => clearTimeout(t);"), "the owed read runs a tick later, quietly, only when no read paid it");
-      assert.ok(SRC.indexOf("  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line") < SRC.indexOf("  // --- Supabase: Load on mount + real-time sync ---"), "the reset effect is declared before the mount load (its effect runs first in a commit)");
+      assert.ok(!/loadAppDays\((true|false)?\);\n/.test(fx.split("setTimeout(")[0]), "the reset effect never reads at once");
+      assert.ok(fx.includes("const t = setTimeout(() => { if (appReadOwedRef.current === gen && appGenRef.current === gen) loadAppDays(false); }, 0);") && fx.includes("return () => clearTimeout(t);"));
+      assert.ok(SRC.indexOf("  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line") < SRC.indexOf("  // --- Supabase: Load on mount + real-time sync ---"), "the reset effect is declared before the mount load");
       const ra = between(SRC, "    const refreshAll = async () => {", "\n    };\n");
       assert.ok(ra.includes("loadAppDaysRef.current(false)"), "the poll");
-      assert.ok(SRC.includes("  }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line"), "the reset effect's deps");
       const rtList = between(SRC, '        rtChannel = rtClient.channel("silvis-schedule-sync")', ".subscribe(");
-      assert.ok(!/app_?call|appDays/i.test(rtList), "no realtime channel row for the APP table");
+      assert.ok(!/app_?call|appDays|app_time_off|appVac/i.test(rtList), "no realtime channel row for the APP tables");
     });
-    check("P29 pins: the grid's third line, its hover bit and the legend - signed-in only (appByDay is {} on ?public=1), THEME tokens", () => {
-      assert.strictEqual(cnt(SRC, "  const appByDay = useMemo(() => isPublicMode ? {} : appDaysByDay(appDayRows, appNameRows), [isPublicMode, appDayRows, appNameRows]);"), 1);
-      assert.strictEqual(cnt(SRC, "const appE = !isPublicMode ? appByDay[d] || null : null;"), 1);
-      assert.strictEqual(cnt(SRC, 'if (appE) titleBits.push("APP " + appE.name);'), 1);
-      // pin moved deliberately 10/3 (fix/painter-dark-mode, spec H): the line also carries the phone label (cal-app-code,
-      // helpers.appGridLabels); kept intent: the A tag, the short name, the title and the appText colour.
-      assert.strictEqual(cnt(SRC, '{appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[appE.profileId] || appE.short}</span></div>}'), 1);
-      // pin moved deliberately 11/12 (held initials): the B line carries held={heldB}; kept intent - the APP line right after B
-      const cellB = SRC.indexOf('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)} held={heldB}/>'), cellA = SRC.indexOf('data-testid="cal-app"');
-      assert.ok(cellB > 0 && cellA > cellB && cellA - cellB < 400, "the APP line is the third line, right after B");
-      // the merge with main (10/2): a failed read is said in place - the legend for every signed-in role, the summary for all but the scheduler
+    check("P35 pins: the calendar - the shift types, the day's shifts, the APP vacations and the holiday days are read once (all {} / [] on ?public=1); one A line per shift with its hours (cal-app-hours) right after B; the hover names the shift; the vacation bar's APP entries; the legend lines (failed / not loaded / the A line with this month's hours / an APP on vacation); THEME tokens", () => {
+      for (const line of [
+        "  const appTypes = useMemo(() => appShiftTypesOf(groupRules), [groupRules]);",
+        "  const appByDay = useMemo(() => isPublicMode ? {} : appShiftDayMap(appDayRows, appNameRows, appTypes), [isPublicMode, appDayRows, appNameRows, appTypes]);",
+        "  const appVacs = useMemo(() => isPublicMode ? [] : appVacationRows(appVacRows, appNameRows), [isPublicMode, appVacRows, appNameRows]);",
+        "  const appHolidayDays = useMemo(() => holidayNameByDay(holidays), [holidays]);",
+        "                const appEs = !isPublicMode ? appByDay[d] || [] : [];",
+        '                if (appEs.length) titleBits.push(appEs.map(e => "APP " + e.label + (e.hours ? " " + e.hours : "") + ": " + e.name).join(", "));',
+        "    (appVacByDay[d] || []).forEach(v => out.push({ id: \"app:\" + v.profileId, east: null, app: v }));",
+        "    gridDays.forEach(d => { const on = appVacationsOn(appVacs, d); if (on.length) map[d] = on; });",
+      ]) assert.strictEqual(cnt(SRC, line), 1, line.trim().slice(0, 90));
+      const aLine = '{appEs.map(e => <div key={e.type + "|" + e.profileId} className="cal-line cal-app" data-testid="cal-app" data-app-profile={e.profileId} data-app-type={e.type} data-app-day={d} title={"APP " + e.label + (e.hours ? " " + e.hours : "") + ": " + e.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{e.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[e.profileId] || e.short}</span>{e.hours && <span className="cal-app-hours" data-testid="cal-app-hours">{e.hours}</span>}</div>)}';
+      assert.strictEqual(cnt(SRC, aLine), 1, "the A line: tag, short name, the phone label, the hours");
+      const cellB = SRC.indexOf('<SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)} held={heldB}/>'), cellA = SRC.indexOf(aLine);
+      assert.ok(cellB > 0 && cellA > cellB && cellA - cellB < 500, "the A lines come right after B");
+      assert.ok(SRC.includes('? <span className="cal-vac-who" data-appvac={v.app.profileId} title={"APP " + v.app.name + " on vacation"}><span className="cal-vac-app-tag">A</span><span className="cal-name">{v.app.short}</span><span className="cal-code">{appGridLabel[v.app.profileId] || v.app.short}</span>'), "an APP in the bar: 'A' + its short name (its phone label on a phone)");
+      assert.ok(SRC.includes('(appVacByDay[d] || []).length ? "APP on vacation: " + appVacByDay[d].map(v => v.name).join(", ") : ""'), "the bar's hover names the APPs");
       assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn\'t be loaded - the A lines may be missing</span>}'), 1, "the legend's failed line");
-      // pin moved deliberately 10/2 (ship review): the summary's line covers a skipped first read too (its own words)
-      assert.ok(edSrc.includes("  ) : (!canEdit && !isPublicMode && (appState === \"failed\" || appState === \"skipped\")) ? (") && edSrc.includes('<div data-testid="editor-app-summary-failed" data-state={appState}') && edSrc.includes('{appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"}</span>'), "the day summary's failed / not-loaded line");
-      // ship review 10/2: a first read with no fresh token ("skipped") is said in the legend too - never the look of "no APP days"
       assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP days not loaded yet - the A lines may be missing</span>}'), 1, "the legend's not-loaded line");
-      // pin moved deliberately 10/30 (Faraz: less in the legend): shorter words, the same gate
-      assert.ok(SRC.includes('{!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = APP on call</span>}'));
+      assert.ok(SRC.includes('{!isPublicMode && gridDays.some(gd => (appByDay[gd] || []).length > 0) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name {legendAppHours.join(" / ") || "hours"} = APP shift (its hours)</span>}'));
+      assert.ok(SRC.includes('{!isPublicMode && legendAppVac && <span data-testid="legend-appvac">') && SRC.includes("const legendAppVac = gridDays.some(gd => (appVacByDay[gd] || []).length > 0);") && SRC.includes("const legendVac = gridDays.some(gd => calVac(gd).some(v => !v.app));"), "the APP vacation legend line - the surgeons' line counts surgeons only");
       assert.ok(SRC.includes('<span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>'), "the phone legend line is unchanged");
-      for (const css of [".cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }", ".cal-app-tag { font-style: normal; font-weight: 800; margin-right: 3px; flex-shrink: 0; }", ".cal-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }", ".cal-app { font-size: 9px; }"]) assert.strictEqual(cnt(SRC, css), 1, css);
-      const T = require(path.join(ROOT, "app-styles.js")).THEME;
-      assert.deepStrictEqual([T.light.appText, T.light.appTint, T.dark.appText, T.dark.appTint], ["#86506A", "#F6EAF0", "#DDAFC2", "#3A2232"]);
+      for (const css of [".cal-app { font-style: italic; font-weight: 600; font-size: 10.5px; }", ".cal-app-tag { font-style: normal; font-weight: 800; margin-right: 3px; flex-shrink: 0; }", ".cal-app-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }", ".cal-app { font-size: 9px; }",
+        ".cal-app-hours { margin-left: 3px; font-style: normal; font-weight: 600; white-space: nowrap; flex-shrink: 0; }", ".cal-vac-app-tag { font-weight: 800; margin-right: 2px; }", ".cal-app-hours { margin-left: 0; flex-basis: 100%; font-size: 8.5px; line-height: 9.5px; }", ".cal-line.cal-app { flex-wrap: wrap; }"]) assert.strictEqual(cnt(SRC, css), 1, css);
+      const Th = require(path.join(ROOT, "app-styles.js")).THEME;
+      assert.deepStrictEqual([Th.light.appText, Th.light.appTint, Th.dark.appText, Th.dark.appTint], ["#86506A", "#F6EAF0", "#DDAFC2", "#3A2232"]);
     });
-    check("P29 pins: the day editor - the summary line for everyone but the scheduler (never ?public=1), the scheduler's controls only under canEdit and only when there is something to show; the controls never touch the draft", () => {
-      assert.ok(SRC.includes("appEntry={!isPublicMode ? appByDay[editorDay] || null : null} appChoices={appPickList(appNameRows)} appState={appDaysState} myProfileId={authUser && authUser.id} onSetApp={saveAppDayFromEditor}"), "the mount's props");
-      assert.ok(edSrc.includes("const appSummaryLine = () => (!canEdit && appEntry && !isPublicMode) ? ("), "the summary gate");
+    check("P35 pins: the day editor - the mount's props; one summary line per shift for everyone but the scheduler (never ?public=1); the scheduler's block: one line per type that runs that day (and per type a holder holds), Set / Change / Clear per holder, only under canEdit and only when there is something to show; 'APPs off' for the APPs on vacation; the controls never touch the draft", () => {
+      assert.ok(SRC.includes("appEntries={!isPublicMode ? appByDay[editorDay] || [] : []} appTypes={appTypes} appHolidayDays={appHolidayDays} appVacNames={!isPublicMode ? appVacationsOn(appVacs, editorDay).map(v => v.name) : []} appChoices={appPickList(appNameRows)} appState={appDaysState} myProfileId={authUser && authUser.id} onSetApp={saveAppDayFromEditor}"), "the mount's props");
+      assert.ok(edSrc.includes("const appSummaryLine = () => (!canEdit && appList.length && !isPublicMode) ? ("), "the summary gate");
+      assert.ok(edSrc.includes('{!isPublicMode && appVacNames.length > 0 && <div data-testid="editor-app-off">APPs off: {appVacNames.join(", ")}</div>}'), "the APPs on vacation that day");
       const blk = between(edSrc, "  const appEditorBlock = () => {", "\n  };\n");
       assert.ok(blk.indexOf("if (!canEdit || isPublicMode) return null;") > 0 && blk.indexOf("if (!canEdit || isPublicMode) return null;") < blk.indexOf("data-testid="), "the scheduler's block returns before any markup for everyone else");
-      assert.ok(blk.includes('if (appState !== "ok" || (!choices.length && !appEntry)) return null;'), "nothing while unread, nothing with no APP account and no holder");
-      // ship review 10/2: the not-ok block (unavailable / failed / skipped) keeps a save's own words on screen - a save whose reload
-      // failed lands here, and its "nothing was saved" / "may or may not have gone through" must not vanish behind the load line
-      const notOk = blk.slice(blk.indexOf('if (appState === "unavailable" || appState === "failed" || appState === "skipped") return ('), blk.indexOf('if (appState !== "ok" || (!choices.length && !appEntry)) return null;'));
-      assert.ok(notOk.length > 100, "the not-ok branch covers unavailable, failed and skipped");
-      assert.ok(notOk.includes('{appState === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"}'), "its line, per state");
-      assert.ok(notOk.includes('{appError && <div role="alert" data-testid="editor-app-error"') && notOk.includes('{appStatus && <div role="status" data-testid="editor-app-status"'), "the save's error / status lines render in the not-ok branch too");
-      for (const t of ["editor-app", "editor-app-set", "editor-app-clear", "editor-app-status", "editor-app-error", "editor-app-unavailable", "editor-app-block"]) {
+      assert.ok(blk.includes('if (appState !== "ok" || (!choices.length && !appList.length) || !lines.length) return null;'), "nothing while unread, nothing with no APP account and no holder, nothing with no line");
+      assert.ok(blk.includes("const lines = appTypeList.filter(t => appShiftRunsOn(t, day, props.appHolidayDays).ok || appList.some(e => e.type === t.id))"), "a line per type that runs that day, or that a holder holds");
+      assert.ok(blk.includes('const mode = !full ? "set" : ln.perDay === 1 && holders.length === 1 ? "change" : null;') && blk.includes('onClick={() => run(ln.id, mode, pick, mode === "change" ? holders[0].profileId : "")}') && blk.includes('onClick={() => run(ln.id, "clear", "", h.profileId)}'), "set a free place / change the one holder / clear one holder");
+      const notOk = blk.slice(blk.indexOf('if (appState === "unavailable" || appState === "failed" || appState === "skipped") return ('), blk.indexOf('if (appState !== "ok" || (!choices.length && !appList.length) || !lines.length) return null;'));
+      assert.ok(notOk.includes('{appState === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"}') && notOk.includes('{appError && <div role="alert" data-testid="editor-app-error"') && notOk.includes('{appStatus && <div role="status" data-testid="editor-app-status"'), "the not-ok branch keeps a save's own words on screen");
+      for (const t of ["editor-app", "editor-app-set", "editor-app-clear", "editor-app-status", "editor-app-error", "editor-app-unavailable", "editor-app-block", "editor-app-type", "editor-app-holder"]) {
         assert.strictEqual(cnt(edSrc, 'data-testid="' + t + '"'), cnt(blk, 'data-testid="' + t + '"'), t + " only inside the scheduler's block");
         assert.ok(cnt(blk, 'data-testid="' + t + '"') >= 1, t);
       }
       assert.ok(!/setDraft|dirty/.test(blk), "the APP controls never touch the day draft");
       assert.ok(edSrc.indexOf("{appSummaryLine()}") > edSrc.indexOf('{roleBlock("backup")}') && edSrc.indexOf("{appEditorBlock()}") > edSrc.indexOf("{appSummaryLine()}"), "rendered right after the backup block");
+      for (const t of ["editor-app-lines", "editor-app-line", "editor-app-name", "editor-app-you"]) assert.ok(cnt(between(edSrc, "  const appSummaryLine = () =>", "  const appEditorBlock = () => {"), 'data-testid="' + t + '"') === 1, t + " in the summary");
     });
-    check("P29 pins: My APP days - the APP keeps the Mine tab; the card is module scope, calls onSave ONCE per Save with the draft diff, taps never write, and uses THEME tokens without opacity", () => {
-      assert.ok(SRC.includes("          if (!pid && isApp) return <>\n            <AppDaysCard "), "the APP's view");
+    check("P35 pins: My APP shifts (Mine) - the APP keeps the Mine tab; the card is module scope, calls onSave ONCE per Save with the typed draft diff, taps never write, offers the type picker only once a second type is offered, and uses THEME tokens without opacity; My vacations follows it", () => {
+      assert.ok(SRC.includes("          if (!pid && isApp) return <>\n            <AppDaysCard css={css} dk={dk} profileId={authUser ? authUser.id : \"\"} byDay={appByDay} types={appTypes} holidayDays={appHolidayDays} myVacs={appVacs.filter(v => authUser && v.profileId === authUser.id)} "), "the APP's view - the card reads the types, the holidays and its own vacations");
       assert.ok(SRC.indexOf("          if (!pid && isApp) return <>") < SRC.indexOf("          if (following.length) return <>{followingCards()}</>;"), "before the Following return");
+      const mineBranch = between(SRC, "          if (!pid && isApp) return <>", "          </>;");
+      assert.ok(mineBranch.indexOf('<AppVacationsCard css={css} dk={dk} mode="mine" vacs={appVacs} picks={[]} me={authUser ? authUser.id : ""} isScheduler={false} isCoordinator={false} isApp={isApp}') > mineBranch.indexOf("<AppDaysCard ") && mineBranch.indexOf("{followingCards()}") > mineBranch.indexOf("<AppVacationsCard "), "My vacations right after My APP shifts, then any Following cards");
       assert.ok(/^function AppDaysCard\(/m.test(SRC), "module scope (a parent re-render keeps the draft)");
       assert.strictEqual(rxCount(cardSrc, /onSave\(/g), 1, "one onSave call");
       const sv = between(cardSrc, "  const save = async () => {", "\n  };\n");
       assert.ok(sv.includes("const r = await onSave(diff.add, diff.clear);"), "Save sends the draft diff once");
-      assert.ok(cardSrc.includes("React.useEffect(() => { setDraft(d => appDaysDraftPrune(d, held, profileId, todayC)); }, [byDay, profileId, todayC]);") && cardSrc.includes("const diff = appDaysDraftDiff(draft, held, profileId, todayC);"), "review 10/2: the draft is pruned and counted against today - a day that turns past while the card is open leaves it");
-      assert.ok(cardSrc.includes('state === "failed" ? "Couldn\'t load the APP days - the calendar below may be out of date."') && !/nothing was changed/.test(cardSrc), "review 10/2: the failed line never claims 'nothing was changed' (a Save may just have landed)");
-      // pin moved deliberately 10/3 (fix/painter-dark-mode, spec F): the signature gains onDirty (the leave guard's count); kept intent
-      assert.ok(!/onSave/.test(cardSrc.replace(sv, "").replace("function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {", "").replace('typeof onSave !== "function"', "")), "no other path calls onSave (a tap only drafts)");
+      assert.ok(cardSrc.includes("React.useEffect(() => { setDraft(d => appShiftDraftPrune(d, ctx)); }, [byDay, profileId, todayC, types, holidayDays]); // eslint-disable-line") && cardSrc.includes("const diff = appShiftDraftDiff(draft, held, profileId, todayC);"), "the draft is pruned after a reload and counted against today");
+      assert.ok(cardSrc.includes('state === "failed" ? "Couldn\'t load the APP shifts - the calendar below may be out of date."') && !/nothing was changed/.test(cardSrc), "the failed line never claims 'nothing was changed'");
+      assert.ok(!/onSave/.test(cardSrc.replace(sv, "").replace("function AppDaysCard({ css, dk, profileId, byDay, types, holidayDays, myVacs, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {", "").replace('typeof onSave !== "function"', "")), "no other path calls onSave (a tap only drafts)");
+      assert.ok(cardSrc.includes("{offered.length > 1 && (") && cardSrc.indexOf('data-testid="appdays-type"') > cardSrc.indexOf("{offered.length > 1 && ("), "the type picker shows once a second type is offered");
+      assert.ok(cardSrc.includes("const offered = typeList.filter(t => !t.retired);"), "a retired type is never offered");
       assert.ok(!/opacity/.test(cardSrc), "no opacity");
       assert.ok(!/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(cardSrc), "no literal hex colour - THEME tokens only");
       assert.ok(!/fetch\(|appDaysDb|db\.|supabase\./.test(cardSrc), "the card talks to nothing but its props");
-      for (const t of ["appdays-card", "appdays-state", "appdays-retry", "appdays-month", "appdays-prev", "appdays-next", "appdays-cell", "appdays-range", "appdays-paste-toggle", "appdays-paste", "appdays-paste-year", "appdays-paste-add", "appdays-hint", "appdays-count", "appdays-discard", "appdays-save", "appdays-saved", "appdays-error", "appdays-upcoming"]) assert.ok(cardSrc.includes('data-testid="' + t + '"'), t);
-      assert.ok(cardSrc.includes('"Tap a day to put yourself on call as the APP; tap it again to take it off. One APP per day - a day with a name on it is taken. Save sends all your changes at once. Past days stay as they are (ask the scheduler)."') || cardSrc.includes(">Tap a day to put yourself on call as the APP; tap it again to take it off. One APP per day - a day with a name on it is taken. Save sends all your changes at once. Past days stay as they are (ask the scheduler).<"), "the intro words");
+      for (const t of ["appdays-card", "appdays-state", "appdays-retry", "appdays-type", "appdays-type-note", "appdays-month", "appdays-prev", "appdays-next", "appdays-cell", "appdays-range", "appdays-paste-toggle", "appdays-paste", "appdays-paste-year", "appdays-paste-add", "appdays-hint", "appdays-count", "appdays-discard", "appdays-save", "appdays-saved", "appdays-error", "appdays-upcoming"]) assert.ok(cardSrc.includes('data-testid="' + t + '"'), t);
+      assert.ok(cardSrc.includes(">My APP shifts</div>") && cardSrc.includes(">Tap a day to put yourself on the shift; tap it again to take it off. A day with a name on it is taken, and a grey day has no shift for you. Save sends all your changes at once. Past days stay as they are (ask the scheduler).<"), "the title and the intro words");
+    });
+    check("P35 pins: APP vacations - one module-scope card for Mine ('My vacations', the APP's own) and Time off ('APP vacations', every signed-in role; the scheduler and the office add for any APP); ONE onSave per Save (a change = remove + add); the client's check first; Edit / Remove only where appVacationEditable allows; the surgeons' Time off pieces; THEME tokens", () => {
+      assert.ok(/^function AppVacationsCard\(/m.test(SRC), "module scope");
+      assert.strictEqual(rxCount(vacCardSrc, /onSave\(/g), 1, "one onSave call");
+      assert.ok(vacCardSrc.includes("const r = await onSave(pid, add, remove);"));
+      assert.ok(vacCardSrc.includes("const canAddAny = !mine && (isScheduler || isCoordinator);") && vacCardSrc.includes("const canAdd = state === \"ok\" && (mine ? !!isApp : canAddAny);"), "who adds: the APP in Mine; the scheduler and the office in Time off");
+      const addV = between(vacCardSrc, "  const addVac = () => {", "\n  };\n"), editV = between(vacCardSrc, "  const saveEdit = () => {", "\n  };\n");
+      assert.ok(addV.indexOf("const why = check(pid, start, end, null);") > 0 && addV.indexOf("const why = check(pid, start, end, null);") < addV.indexOf("run(pid, [{ start, end }], []"), "add: the client's check before the request");
+      assert.ok(vacCardSrc.includes("excludeId, name: nameOfP(pid), self: !!(mine && pid === me) });"), "the APP's own card asks for the words that address it (You hold / You are)");
+      assert.ok(editV.indexOf("const why = check(edit.profileId, edit.start, edit.end, edit.id);") < editV.indexOf("run(edit.profileId, [{ start: edit.start, end: edit.end }], [edit.id]"), "a change: checked without itself, then ONE request (remove + add)");
+      assert.ok(vacCardSrc.includes("const may = appVacationEditable(v, ctxEdit);") && vacCardSrc.includes('{may && <button type="button" data-testid="appvac-edit"') && vacCardSrc.includes('{may && <button type="button" data-testid="appvac-remove"'), "Edit / Remove only where allowed");
+      assert.ok(vacCardSrc.includes("const groups = groupVacationRows(appVacationMap(list), ids, todayC, showPast, null);") && vacCardSrc.includes("{vacRangeLabel(r.vs, r.ve, todayC)}"), "the surgeons' Time off pieces");
+      assert.ok(!/opacity/.test(vacCardSrc) && !/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(vacCardSrc) && !/fetch\(|appDaysDb|db\.|supabase\./.test(vacCardSrc), "THEME tokens, no opacity, props only");
+      for (const t of ["appvac-state", "appvac-who", "appvac-start", "appvac-end", "appvac-add", "appvac-show-past", "appvac-none", "appvac-edit", "appvac-remove", "appvac-edit-start", "appvac-edit-end", "appvac-edit-save", "appvac-edit-cancel", "appvac-saved", "appvac-error"]) assert.ok(vacCardSrc.includes('data-testid="' + t + '"'), t);
+      assert.ok(vacCardSrc.includes('data-testid={mine ? "appvac-mine" : "appvac-card"}') && vacCardSrc.includes('data-testid={"appvac-line-" + r.pid + "-" + r.vs}') && vacCardSrc.includes('data-testid={"appvac-group-" + g.pid}'));
+      assert.ok(SRC.includes("          {appDaysAllowed && (isScheduler || isCoordinator || isApp || appVacs.length > 0) && (\n            <AppVacationsCard css={css} dk={dk} mode=\"all\" vacs={appVacs} picks={appPickList(appNameRows)} me={authUser ? authUser.id : \"\"} isScheduler={isScheduler} isCoordinator={isCoordinator} isApp={isApp}"), "Time off: every signed-in role reads it (never ?public=1); shown to a surgeon / viewer only when there is one");
+      assert.ok(SRC.indexOf('<AppVacationsCard css={css} dk={dk} mode="all"') > SRC.indexOf("{renderVacationList(canEnterForAnyone || isViewer ? surgeons.map(s => s.id) : [mySurgeon], !isViewer)}"), "beside (after) the surgeons' list");
+    });
+    check("P35 pins: Setup > APP shifts - the scheduler's shift-type list (groupRules.appShiftTypes) saved through saveGroupRules (the blob, its rules.edit audit row); an id is set once and never edited after the save; Retire only with no shift from today on and the shifts loaded; the list validated before the one onSave", () => {
+      assert.ok(SRC.includes('<Collapsible css={css} ck="setup_app_shifts" defaultOpen={false} title="APP shifts (types)"'), "the card");
+      assert.ok(SRC.includes("<AppShiftTypesCard css={css} dk={dk} groupRules={groupRules} appByDay={appByDay} appState={appDaysState} today={todayStr} onSave={(list) => saveGroupRules({ ...(groupRules || {}), appShiftTypes: list })} showToast={showToast}/>"), "saved with the group rules");
+      assert.ok(SRC.indexOf('ck="setup_app_shifts"') > SRC.indexOf('ck="setup_users"') && SRC.indexOf('ck="setup_app_shifts"') < SRC.indexOf('ck="setup_rules"'), "between Users and Rules");
+      assert.ok(/^function AppShiftTypesCard\(/m.test(SRC), "module scope");
+      assert.strictEqual(rxCount(typesCardSrc, /onSave\(/g), 1, "one onSave call");
+      const sv = between(typesCardSrc, "  const save = () => {", "\n  };\n");
+      assert.ok(sv.indexOf("if (p.length) { setErr(p.join(\"; \")); return; }") < sv.indexOf("onSave(list);"), "validated before the save");
+      assert.ok(typesCardSrc.includes('{t.saved ? <span style={{fontFamily: mono}}>{t.id}</span> : <input data-testid="appshift-id"'), "an id is editable only before its first save");
+      assert.ok(typesCardSrc.includes('const canRetire = appState === "ok" && n === 0;'), "Retire: the shifts loaded and none from today on");
+      assert.ok(typesCardSrc.includes("const readable = appShiftTypesOf({ appShiftTypes: stored || APP_SHIFT_TYPES_DEFAULT });") && typesCardSrc.includes("const fromBlob = () => readable.map(t => ({ id: t.id, label: t.label, start: t.start, end: t.end, weekdays: t.weekdays.slice(), holidays: t.holidays, perDay: t.perDay, retired: t.retired, saved: true }));") && typesCardSrc.includes('data-testid="appshift-types-unreadable"'), "the card shows the list as the app and the database read it (an unreadable entry is counted and dropped by the next Save - a saved row always passes the Save's checks)");
+      for (const t of ["appshift-types", "appshift-table", "appshift-label", "appshift-start", "appshift-end", "appshift-holidays", "appshift-perday", "appshift-retire", "appshift-restore", "appshift-drop", "appshift-add", "appshift-revert", "appshift-save", "appshift-error"]) assert.ok(typesCardSrc.includes('data-testid="' + t + '"'), t);
+      assert.ok(!/opacity/.test(typesCardSrc) && !/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(typesCardSrc) && !/fetch\(|appDaysDb|db\.|supabase\./.test(typesCardSrc), "THEME tokens, no opacity, props only");
+      assert.ok(SRC.includes("    if (!isScheduler) return;\n    setGroupRules(next);\n    logAudit(\"rules.edit\", \"Group rules saved\", { keys: Object.keys(next || {}) });"), "saveGroupRules: the scheduler only, one rules.edit audit row");
     });
     check("P29 pins: Setup > Users - the pseudo-role 'app' through userRoleValue / userRolePatch (only the changed keys), the APP-unlinked refusal before the PATCH, 'APP on' / 'APP off' audit words, the pick list reloaded; followsPatch / FOLLOWER_ROLES / BLOB_KEYS unchanged", () => {
       assert.ok(SRC.includes('value={userRoleValue(p)} onChange={e => { const patch = userRolePatch(p, e.target.value); if (patch) onSave(p, patch); }}'));
@@ -12977,115 +13206,139 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(sup.includes('k === "is_app" ? (patch[k] === true ? "APP on" : "APP off")'), "the audit words");
       assert.ok(sup.includes("if (patch.is_app !== undefined) loadAppDays(true);"), "the scheduler's pick list follows the switch");
       assert.deepStrictEqual(plain(H.FOLLOWER_ROLES), ["viewer", "coordinator"]);
-      assert.deepStrictEqual(plain(H.BLOB_KEYS), ["roster", "surgeonRules", "groupRules", "holidays", "settings", "lastPublished", "lastGenerate"], "the APP days never ride the blob");
+      assert.deepStrictEqual(plain(H.BLOB_KEYS), ["roster", "surgeonRules", "groupRules", "holidays", "settings", "lastPublished", "lastGenerate"], "the APP shifts and vacations never ride the blob (only their types, in groupRules)");
       assert.ok(SRC.includes('<span data-testid="account-role" style={{...muted,marginLeft:6}}>({isApp ? "APP" : (userProfile?.role || "viewer")})</span>'), "Settings > Account names the APP");
     });
-    check("P29 pins: the generator, the rules, the exports, Totals, pay and the edge functions never read the APP days", () => {
-      // Prompt 31 Part B (10/13): + call-totals.js (the call-totals card counts surgeon roles only, never an APP day)
+    check("P29/P35 pins: the generator, the rules, the importer, the East feed, the call-totals counter, the exports, Totals, pay and the edge functions never read the APP shifts or vacations (Prompt 35 step 7: left alone)", () => {
       for (const f of ["generator.js", "rules.js", "importer.js", "east-feed.js", "call-totals.js"]) {
         const t = fs.readFileSync(path.join(ROOT, f), "utf8");
-        assert.ok(!/appDays|app_call|is_app|appByDay/.test(t), f + " mentions the APP days");
+        assert.ok(!/appDays|app_call|is_app|appByDay|appShift|appVac|app_time_off/.test(t), f + " mentions the APP shifts or vacations");
       }
       const exportsPart = HLP.slice(HLP.indexOf("function generateShareHTML("), HLP.indexOf("function buildErCallPanelsDocument("));
-      assert.ok(exportsPart.length > 1000 && !/appDays|appByDay|is_app/.test(exportsPart), "the share page / printable / ER panels builders");
-      for (const fn of ["function TotalsCard(", "function PayCard("]) { const s = SRC.indexOf(fn); assert.ok(s > 0, fn); assert.ok(!/appByDay|appDayRows|appDaysState/.test(between(SRC, fn, "\n}\n")), fn + " reads the APP days"); }
+      assert.ok(exportsPart.length > 1000 && !/appDays|appByDay|is_app|appShift|appVac/.test(exportsPart), "the share page / printable / ER panels builders");
+      for (const fn of ["function TotalsCard(", "function PayCard("]) { const s = SRC.indexOf(fn); assert.ok(s > 0, fn); assert.ok(!/appByDay|appDayRows|appDaysState|appVacs|appVacRows|appTypes/.test(between(SRC, fn, "\n}\n")), fn + " reads the APP picture"); }
       for (const dir of fs.readdirSync(path.join(ROOT, "edge-functions"))) {
         const p = path.join(ROOT, "edge-functions", dir, "index.ts");
-        if (fs.existsSync(p)) assert.ok(!/app_call_days|save_app_days|app_call_names/.test(fs.readFileSync(p, "utf8")), dir + " reads the APP table");
+        if (fs.existsSync(p)) assert.ok(!/app_call_days|save_app_days|app_call_names|app_time_off|save_app_vacations|appShiftTypes/.test(fs.readFileSync(p, "utf8")), dir + " reads the APP tables");
       }
     });
 
-    // Prompt 29 integration (spec H.2): the two halves were built apart (p29/db, p29/app); these pins make them meet. They read
-    // the migration (the DB lane's file) and pin the client (config.js, helpers.js, index-source.html), the smoke mock and the
-    // build guide's 4.3 bullet against it - a rename on either side fails here, not on the live database.
+    // Prompt 29 integration (spec H.2) / Prompt 35: the client meets the database here - these pins read the migrations (Prompt 29's
+    // table, revision ac's typed table, its vacation table and its functions) and hold config.js, helpers.js and index-source.html
+    // to them - a rename on either side fails here, not on the live database.
     const MIGP = fs.readFileSync(path.join(ROOT, "sql", "migrations", "2026-10-02-app-call-days.sql"), "utf8").replace(/\r\n/g, "\n");
-    const MIGS = MIGP.split("\n").filter(l => !/^\s*--/.test(l)).join("\n"); // the statements (the header's rollback text left out)
-    const SMOKEP = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8").replace(/\r\n/g, "\n");
+    const MIGAC = fs.readFileSync(path.join(ROOT, "sql", "migrations", "2026-11-17-app-shifts.sql"), "utf8").replace(/\r\n/g, "\n");
+    const MIGS = MIGAC.split("\n").filter(l => !/^\s*--/.test(l)).join("\n"); // revision ac's statements (the header left out)
+    const PROBEAC = fs.readFileSync(path.join(ROOT, "sql", "probes", "app-shifts-probe.sql"), "utf8").replace(/\r\n/g, "\n");
     const GUIDEP = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8").replace(/\r\n/g, "\n");
-    // every raise of save_app_days: { token, text (the format string, '' unescaped), code }
+    const fnOf = (name) => between(MIGS, "create or replace function public." + name + "(", "\nend $$;");
+    // every raise of the two save functions: { token, text (the format string, '' unescaped), code }
     const RAISES = [];
-    { const rx = /raise exception '(APP_DAY_[A-Z_]+): ((?:[^']|'')*)'(?:, [^;]*?)? using errcode = '(AP\d{3})'/g; let m; while ((m = rx.exec(MIGS))) RAISES.push({ token: m[1], text: m[2].replace(/''/g, "'"), code: m[3] }); }
-    check("P29 cross pins (integration): save_app_days's parameters = the four keys config.js sends, in a POST; the types; the 400-day cap = APP_DAYS_MAX_SAVE and the client's local words", () => {
-      const sig = /create or replace function public\.save_app_days\(([^)]*)\) returns jsonb\nlanguage plpgsql security definer set search_path = public, pg_temp as \$\$/.exec(MIGS);
-      assert.ok(sig, "the save function's signature line");
-      const parts = sig[1].split(",").map(s => s.trim().split(/\s+/));
-      assert.deepStrictEqual(parts.map(p => p[0]), ["p_profile", "p_add", "p_clear", "p_replace"], "the parameter names");
-      assert.deepStrictEqual(parts.map(p => p.slice(1).join(" ")), ["uuid", "date[]", "date[]", "boolean default false"], "the parameter types (the client sends a uuid / ISO day arrays / a boolean)");
-      const save = between(CFG, "  async save(profileId, add, clear, replace) {", "\n  },\n");
-      const bodyLine = /const body = \{ ([^\n]*) \};/.exec(save);
-      assert.ok(bodyLine, "appDaysDb.save builds one body object");
-      assert.deepStrictEqual((bodyLine[1].match(/\bp_[a-z]+(?=:)/g) || []), parts.map(p => p[0]), "config.js sends exactly the function's parameter names, in order");
-      assert.ok(save.includes('await authFetch(`${SUPABASE_URL}/rest/v1/rpc/save_app_days`, { method: "POST", body: JSON.stringify(body) })'), "one POST to rpc/save_app_days");
-      assert.strictEqual(cnt(CFG, "/rest/v1/rpc/save_app_days"), 1, "config.js requests the save RPC in one place (the one request)");
-      assert.ok(MIGS.includes("if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > " + H.APP_DAYS_MAX_SAVE + " then"), "the server's cap = APP_DAYS_MAX_SAVE (" + H.APP_DAYS_MAX_SAVE + ")");
-      assert.ok(RAISES.some(r => r.code === "AP004" && r.text === "at most " + H.APP_DAYS_MAX_SAVE + " days in one save - nothing was saved"), "the server's AP004 cap words");
-      assert.ok(SRC.includes('return { ok: false, words: "at most " + APP_DAYS_MAX_SAVE + " days in one save - nothing was saved" };'), "the client's local refusal says the server's words");
-    });
-    check("P29 cross pins (integration): APP_DAY_CODES = the codes and tokens the migration raises (14 raises, AP001-AP007), every message 'APP_DAY_<TOKEN>: <text>' (what appDaysErrorWords / appDaysErrorCode parse); the stale-picture reload codes exist", () => {
-      assert.strictEqual(RAISES.length, 14, "14 raises: " + RAISES.map(r => r.code).join(","));
-      assert.strictEqual(rxCount(MIGS, /errcode = 'AP\d{3}'/g), RAISES.length, "every AP errcode sits on a parsed raise");
-      const seen = {};
-      RAISES.forEach(r => { assert.ok(!seen[r.code] || seen[r.code] === r.token, r.code + " carries one token (" + seen[r.code] + " / " + r.token + ")"); seen[r.code] = r.token; });
-      assert.deepStrictEqual(seen, plain(H.APP_DAY_CODES), "the client's code table = the migration's code -> token pairs");
-      assert.deepStrictEqual(RAISES.map(r => r.code), ["AP001", "AP001", "AP002", "AP002", "AP004", "AP004", "AP004", "AP004", "AP003", "AP006", "AP007", "AP002", "AP005", "AP005"], "the check order (spec B.5; review 10/2 adds the non-finite AP004 after the empty one)");
-      ["AP002", "AP005", "AP006", "AP007"].forEach(c => { assert.ok(seen[c], c + " is raised"); assert.ok(SRC.includes('code === "' + c + '"'), "saveMyAppDays reloads on " + c); });
-      // the probe's B1 answer, as PostgREST relays it, read by the client's parsers
-      const b1 = JSON.stringify({ code: "AP005", details: null, hint: null, message: "APP_DAY_TAKEN: 12/2 already has probe app one - nothing was saved" });
-      assert.strictEqual(H.appDaysErrorWords(b1, 400), "12/2 already has probe app one - nothing was saved");
-      assert.strictEqual(H.appDaysErrorCode(b1), "AP005");
-      RAISES.forEach(r => { const msg = JSON.stringify({ code: r.code, message: r.token + ": " + r.text.replace(/%/g, "12/2") }); assert.strictEqual(H.appDaysErrorCode(msg), r.code, r.code + " read back"); assert.strictEqual(H.appDaysErrorWords(msg, 400), r.text.replace(/%/g, "12/2"), r.code + " words = the function's own sentence"); });
-    });
-    check("P29 cross pins (integration): the return keys of save_app_days (the client reads ok === true); config.js documents the same keys", () => {
-      const ret = between(MIGS, "  return jsonb_build_object(", ");\nend $$;");
-      const keys = (ret.match(/'([a-z_]+)'/g) || []).map(s => s.slice(1, -1));
-      assert.deepStrictEqual(keys, ["ok", "profile_id", "added", "removed", "kept", "absent", "replaced", "source", "audit"], "the binding return keys (spec B.5)");
-      assert.ok(ret.includes("'ok', true"), "ok is literally true");
-      assert.ok(CFG.includes("if (!result || result.ok !== true) return { ok: false, status: res.status, error: \"unexpected response from save_app_days: \" + text.slice(0, 160) };"), "the client accepts only ok === true");
-      assert.ok(CFG.includes("(the function's jsonb: " + keys.join(", ") + ")"), "config.js's comment lists the same keys");
-    });
-    check("P29 cross pins (integration): app_call_names is stable (the client GETs it, no body) and its OUT columns = the keys appDaysByDay / appPickList read; the table's columns cover config.js's select and appDaysByDay's reads; is_app is the column the client reads and patches", () => {
-      assert.ok(/create or replace function public\.app_call_names\(\) returns table \(profile_id uuid, display_name text, is_app boolean\)\nlanguage sql stable security definer set search_path = public, pg_temp as \$\$/.test(MIGS), "app_call_names: stable, definer, OUT (profile_id, display_name, is_app)");
-      // pin moved deliberately 10/2 (ship review): ONE set of headers per read (built once, before page 1 - D15's rule)
-      assert.ok(CFG.includes("const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers });") && CFG.includes("      const headers = dbAuthHeaders();\n      const rows = [];"), "a GET (no method, no body), with the read's one set of user headers");
-      const OUT = ["profile_id", "display_name", "is_app"];
-      for (const fn of ["function appDaysByDay(", "function appPickList("]) {
-        const f = between(HLP, fn, "\n}\n");
-        const read = Array.from(new Set((f.match(/\bn\.([a-z_]+)/g) || []).map(s => s.slice(2)))).sort();
-        assert.deepStrictEqual(read, OUT.slice().sort(), fn + " reads exactly the OUT columns");
+    { const rx = /raise exception '(APP_(?:DAY|VACATION)_[A-Z_]+): ((?:[^']|'')*)'(?:, [^;]*?)? using errcode = '(A[PV]\d{3})'/g; let m; while ((m = rx.exec(MIGS))) RAISES.push({ token: m[1], text: m[2].replace(/''/g, "'"), code: m[3] }); }
+    check("P35 cross pins (integration): save_app_days's and save_app_vacations's parameters = the keys config.js sends, in a POST; the types (typed shifts as jsonb, the replaced APP a uuid, the removed vacations uuid[]); the caps (400 / 50) = APP_DAYS_MAX_SAVE / APP_VACATIONS_MAX_SAVE and the client's local words", () => {
+      for (const [fn, keys, types, cfgHead] of [
+        ["save_app_days", ["p_profile", "p_add", "p_clear", "p_replace"], ["uuid", "jsonb", "jsonb", "uuid default null"], "  async save(profileId, add, clear, replace) {"],
+        ["save_app_vacations", ["p_profile", "p_add", "p_remove"], ["uuid", "jsonb", "uuid[]"], "  async saveVacations(profileId, add, remove) {"],
+      ]) {
+        const sig = new RegExp("create or replace function public\\." + fn + "\\(([^)]*)\\) returns jsonb\\nlanguage plpgsql security definer set search_path = public, pg_temp as \\$\\$").exec(MIGS);
+        assert.ok(sig, fn + ": the signature line");
+        const parts = sig[1].split(",").map(s => s.trim().split(/\s+/));
+        assert.deepStrictEqual(parts.map(p => p[0]), keys, fn + ": the parameter names");
+        assert.deepStrictEqual(parts.map(p => p.slice(1).join(" ")), types, fn + ": the parameter types");
+        const body = between(CFG, cfgHead, "\n  },\n");
+        const bodyLine = /const body = \{ ([^\n]*) \};/.exec(body);
+        assert.ok(bodyLine, fn + ": config.js builds one body object");
+        assert.deepStrictEqual((bodyLine[1].match(/\bp_[a-z]+(?=:)/g) || []), keys, fn + ": config.js sends exactly the parameter names, in order");
+        assert.ok(body.includes("await authFetch(`${SUPABASE_URL}/rest/v1/rpc/" + fn + "`, { method: \"POST\", body: JSON.stringify(body) })"), fn + ": one POST");
+        assert.strictEqual(cnt(CFG, "/rest/v1/rpc/" + fn + "`"), 1, fn + ": requested in one place");
       }
-      const ddl = between(MIGS, "create table if not exists public.app_call_days (", "\n);");
-      const cols = (ddl.match(/\n  ([a-z_]+)\s+/g) || []).map(s => s.trim().split(/\s+/)[0]);
-      assert.deepStrictEqual(cols, ["day", "profile_id", "source", "created_by", "created_at"], "the table's columns");
-      const sel = /app_call_days\?select=([a-z_,]+)&order=day\.asc&limit=\$\{APP_DAYS_PAGE\}&offset=\$\{offset\}/.exec(CFG);
-      assert.ok(sel, "config.js pages the table ordered by day");
+      assert.ok(!/save_app_days\(uuid, date\[\]/.test(MIGS.replace("drop function if exists public.save_app_days(uuid, date[], date[], boolean);", "")), "the old date-list signature is only dropped, never granted");
+      assert.ok(fnOf("save_app_days").includes("if coalesce(jsonb_array_length(p_add), 0) + coalesce(jsonb_array_length(p_clear), 0) > " + H.APP_DAYS_MAX_SAVE + " then"), "the shift cap = APP_DAYS_MAX_SAVE");
+      assert.ok(fnOf("save_app_vacations").includes("if coalesce(jsonb_array_length(p_add), 0) + coalesce(cardinality(p_remove), 0) > " + H.APP_VACATIONS_MAX_SAVE + " then"), "the vacation cap = APP_VACATIONS_MAX_SAVE");
+      assert.ok(RAISES.some(r => r.code === "AP004" && r.text === "at most " + H.APP_DAYS_MAX_SAVE + " shifts in one save - nothing was saved") && SRC.includes('return { ok: false, words: "at most " + APP_DAYS_MAX_SAVE + " shifts in one save - nothing was saved" };'), "the client's local shift refusal says the server's words");
+      assert.ok(RAISES.some(r => r.code === "AV004" && r.text === "at most " + H.APP_VACATIONS_MAX_SAVE + " vacations in one save - nothing was saved") && SRC.includes('return { ok: false, words: "at most " + APP_VACATIONS_MAX_SAVE + " vacations in one save - nothing was saved" };'), "the client's local vacation refusal says the server's words");
+    });
+    check("P35 cross pins (integration): APP_DAY_CODES / APP_VACATION_CODES = the codes and tokens revision ac raises (21 + 17 raises), every message '<TOKEN>: <text>' read back by appDaysErrorWords / appDaysErrorCode; the stale-picture reload codes exist on both sides", () => {
+      const ap = RAISES.filter(r => /^AP/.test(r.code)), av = RAISES.filter(r => /^AV/.test(r.code));
+      assert.deepStrictEqual(ap.map(r => r.code), ["AP001", "AP001", "AP002", "AP002", "AP004", "AP004", "AP004", "AP004", "AP004", "AP004", "AP004", "AP003", "AP006", "AP008", "AP007", "AP002", "AP007", "AP005", "AP010", "AP009", "AP005"], "save_app_days' check order");
+      assert.deepStrictEqual(av.map(r => r.code), ["AV001", "AV001", "AV002", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV003", "AV007", "AV006", "AV008", "AV005"], "save_app_vacations' check order");
+      assert.strictEqual(rxCount(MIGS, /errcode = 'A[PV]\d{3}'/g), RAISES.length, "every AP / AV errcode sits on a parsed raise");
+      for (const [list, table] of [[ap, H.APP_DAY_CODES], [av, H.APP_VACATION_CODES]]) {
+        const seen = {};
+        list.forEach(r => { assert.ok(!seen[r.code] || seen[r.code] === r.token, r.code + " carries one token"); seen[r.code] = r.token; });
+        assert.deepStrictEqual(seen, plain(table), "the client's code table = the migration's code -> token pairs");
+      }
+      ["AP002", "AP005", "AP006", "AP007", "AP008", "AP009", "AP010"].forEach(c => assert.ok(saveMineSrc.includes('"' + c + '"'), "saveMyAppDays reloads on " + c));
+      ["AV002", "AV005", "AV006", "AV007", "AV008"].forEach(c => assert.ok(saveVacSrc.includes('"' + c + '"'), "saveAppVacation reloads on " + c));
+      RAISES.forEach(r => { const msg = JSON.stringify({ code: r.code, message: r.token + ": " + r.text.replace(/%/g, "12/2") }); assert.strictEqual(H.appDaysErrorCode(msg), r.code, r.code + " read back"); assert.strictEqual(H.appDaysErrorWords(msg, 400), r.text.replace(/%/g, "12/2"), r.code + " words = the function's own sentence"); });
+      // the probe's answers, as PostgREST relays them, read by the client's parsers
+      const b1 = JSON.stringify({ code: "AP005", details: null, hint: null, message: "APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved" });
+      assert.deepStrictEqual([H.appDaysErrorWords(b1, 400), H.appDaysErrorCode(b1)], ["3/3 inbox already has probe shifts one - nothing was saved", "AP005"]);
+    });
+    check("P35 cross pins (integration): the return keys of both save functions (the client reads ok === true); config.js documents save_app_days' keys", () => {
+      const keysOf = (fn) => { const ret = between(fnOf(fn), "  return jsonb_build_object(", ");"); assert.ok(ret.includes("'ok', true"), fn + ": ok is literally true"); return (ret.match(/'([a-z_]+)'/g) || []).map(s => s.slice(1, -1)); };
+      const k1 = keysOf("save_app_days"), k2 = keysOf("save_app_vacations");
+      assert.deepStrictEqual(k1, ["ok", "profile_id", "added", "removed", "kept", "absent", "replaced", "source", "audit"]);
+      assert.deepStrictEqual(k2, ["ok", "profile_id", "added", "removed", "kept", "source", "audit"]);
+      assert.ok(CFG.includes("if (!result || result.ok !== true) return { ok: false, status: res.status, error: \"unexpected response from save_app_days: \" + text.slice(0, 160) };") && CFG.includes("if (!result || result.ok !== true) return { ok: false, status: res.status, error: \"unexpected response from save_app_vacations: \" + text.slice(0, 160) };"), "the client accepts only ok === true");
+      assert.ok(CFG.includes("(the function's jsonb: " + k1.join(", ") + ")"), "config.js's comment lists the same keys");
+    });
+    check("P35 cross pins (integration): app_call_names is stable (the client GETs it) and its OUT columns = what the helpers read of a names row; the tables' columns cover config.js's selects and the helpers' row reads; the paging key = each table's primary key; is_app is the column the client reads and patches", () => {
+      assert.ok(/create or replace function public\.app_call_names\(\) returns table \(profile_id uuid, display_name text, is_app boolean\)\nlanguage sql stable security definer set search_path = public, pg_temp as \$\$/.test(MIGS), "app_call_names: stable, definer, OUT (profile_id, display_name, is_app)");
+      assert.ok(CFG.includes("const nres = await fetch(`${SUPABASE_URL}/rest/v1/rpc/app_call_names`, { headers });") && CFG.includes("      const headers = dbAuthHeaders();\n"), "a GET (no method, no body), with the read's one set of user headers");
+      const OUT = ["display_name", "is_app", "profile_id"];
+      const nReads = ["function appNamesById(", "const appNameOfRow = ", "function appShiftDayMap(", "function appVacationRows(", "function appPickList("].map(h => between(HLP, h, h.startsWith("const") ? ";\n" : "\n}\n")).join("\n");
+      assert.deepStrictEqual(Array.from(new Set((nReads.match(/\bn\.([a-z_]+)/g) || []).map(s => s.slice(2)))).sort(), OUT, "the helpers read exactly the OUT columns of a names row");
+      // app_call_days: Prompt 29's columns + revision ac's shift_type
+      const ddl = between(MIGP, "create table if not exists public.app_call_days (", "\n);");
+      const cols = (ddl.match(/\n  ([a-z_]+)\s+/g) || []).map(s => s.trim().split(/\s+/)[0]).concat(/alter table public\.app_call_days add column if not exists (shift_type) text not null;/.exec(MIGS) ? ["shift_type"] : []);
+      assert.deepStrictEqual(cols, ["day", "profile_id", "source", "created_by", "created_at", "shift_type"]);
+      const sel = /readAll\("app_call_days", "select=([a-z_,]+)&order=([a-z_.,]+)", \(r\) => r\.day \+ "\|" \+ r\.shift_type \+ "\|" \+ r\.profile_id\)/.exec(CFG);
+      assert.ok(sel, "config.js pages app_call_days on its key");
       sel[1].split(",").forEach(c => assert.ok(cols.includes(c), "selected column " + c + " exists"));
-      const byDay = between(HLP, "function appDaysByDay(", "\n}\n");
-      Array.from(new Set((byDay.match(/\br\.([a-z_]+)/g) || []).map(s => s.slice(2)))).forEach(c => assert.ok(sel[1].split(",").includes(c), "appDaysByDay reads r." + c + ", which config.js selects"));
-      assert.ok(MIGS.includes("alter table public.user_profiles add column if not exists is_app boolean not null default false;"), "user_profiles.is_app");
-      assert.ok(SRC.includes("const isApp = isViewer && userProfile.is_app === true;"), "the client reads is_app");
-      assert.deepStrictEqual(plain(H.userRolePatch({ role: "viewer", person_id: null }, "app")), { is_app: true }, "Setup patches is_app");
-      assert.ok(MIGS.includes("check (not is_app or (role = 'viewer' and person_id is null));") && SRC.includes("if (nextIsApp && nextPerson) {"), "the APP-unlinked rule on both sides");
+      assert.strictEqual(sel[2], "day.asc,shift_type.asc,profile_id.asc", "ordered by the key");
+      assert.ok(MIGS.includes("alter table public.app_call_days add constraint app_call_days_pkey primary key (day, shift_type, profile_id);"), "the key = the primary key");
+      Array.from(new Set((between(HLP, "function appShiftDayMap(", "\n}\n").match(/\br\.([a-z_]+)/g) || []).map(s => s.slice(2)))).forEach(c => assert.ok(sel[1].split(",").includes(c), "appShiftDayMap reads r." + c + ", which config.js selects"));
+      // app_time_off (revision ac)
+      const vddl = between(MIGS, "create table if not exists public.app_time_off (", "\n);");
+      const vcols = (vddl.match(/\n  ([a-z_]+)\s+/g) || []).map(s => s.trim().split(/\s+/)[0]).filter(c => c !== "constraint");
+      assert.deepStrictEqual(vcols, ["id", "profile_id", "start_date", "end_date", "source", "created_by", "created_at"]);
+      const vsel = /readAll\("app_time_off", "select=([a-z_,]+)&order=([a-z_.,]+)", \(r\) => r\.id\)/.exec(CFG);
+      assert.ok(vsel, "config.js pages app_time_off on its id");
+      vsel[1].split(",").forEach(c => assert.ok(vcols.includes(c), "selected column " + c + " exists"));
+      assert.ok(/id\s+uuid primary key default gen_random_uuid\(\)/.test(vddl), "id is the primary key");
+      Array.from(new Set((between(HLP, "function appVacationRows(", "\n}\n").match(/\br\.([a-z_]+)/g) || []).map(s => s.slice(2)))).forEach(c => assert.ok(vsel[1].split(",").includes(c), "appVacationRows reads r." + c + ", which config.js selects"));
+      assert.ok(MIGS.includes("check (source in ('app', 'scheduler', 'office'))"), "an APP vacation's source: the APP, the scheduler, the office");
+      assert.ok(MIGP.includes("alter table public.user_profiles add column if not exists is_app boolean not null default false;") && SRC.includes("const isApp = isViewer && userProfile.is_app === true;"), "user_profiles.is_app on both sides");
     });
-    check("P29 cross pins (integration): the smoke mock's refusals say the migration's words (code, token, every fixed fragment) - the post-insert AP005 invariant excepted (it cannot happen under the lock, the mock has no race)", () => {
-      RAISES.filter(r => !/changed hands during this save/.test(r.text)).forEach(r => {
-        const lines = SMOKEP.split("\n").filter(l => l.includes('err("' + r.code + '", "' + r.token + '", '));
-        assert.ok(lines.length, "the mock raises " + r.code + " " + r.token);
-        r.text.split("%").filter(f => f.trim().length > 2).forEach(f => assert.ok(lines.some(l => l.includes(JSON.stringify(f).slice(1, -1))), r.code + " fragment " + JSON.stringify(f) + " in the mock"));
-      });
-      // the holder pieces the function builds in SQL (string_agg) and its name fallbacks
-      ["' already has '", "'''s day'", "'another APP'", "'that account'", "'FMMM/FMDD'"].forEach(p => assert.ok(MIGS.includes(p), "the migration builds " + p));
-      ['" already has "', "\"'s day\"", '"another APP"', '"that account"'].forEach(p => assert.ok(SMOKEP.includes(p), "the mock builds " + p));
-      assert.ok(SMOKEP.includes('const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));'), "the mock's M/D = to_char FMMM/FMDD");
-      // review 10/2: the joiners of several days - AP005 joins its parts with '; ', AP002 / AP007 / AP004 / AP006 with ', ' - on both sides
-      assert.ok(MIGS.includes("' already has ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP'), '; ' order by a.day)"), "the migration's AP005 parts are joined by '; '");
-      assert.ok(MIGS.includes("'''s day', ', ' order by a.day)"), "the migration's AP002 / AP007 parts are joined by ', '");
-      const mockLine = (code, token) => SMOKEP.split("\n").filter(l => l.includes('err("' + code + '", "' + token + '", ')).join("\n");
-      assert.ok(/already has " \+ appNameOfP\(r\.profile_id\)\)\.join\("; "\) \+ " - nothing was saved"/.test(mockLine("AP005", "APP_DAY_TAKEN")), "the mock's AP005 joins with '; '");
-      assert.ok(SMOKEP.includes('const txt = heldOther.map(r => appMd(r.day) + " is " + appNameOfP(r.profile_id) + "\'s day").join(", ");'), "the mock's AP002 / AP007 join with ', '");
+    check("P35 cross pins (integration): the shift-type reading - the database's default literal = APP_SHIFT_TYPES_DEFAULT; the id / HH:MM patterns and perDay 1-20 on both sides; appShiftTypesOf on the probe's own blob and on its four default cases = the probe's P4 / P5 answers", () => {
+      const types = between(MIGS, "create or replace function public.silvis_app_shift_types(p_data jsonb)", "\n$$;");
+      assert.ok(types.includes("else '" + JSON.stringify(plain(H.APP_SHIFT_TYPES_DEFAULT)) + "'::jsonb end as l"), "the SQL default = JSON.stringify(APP_SHIFT_TYPES_DEFAULT)");
+      assert.ok(types.includes("(e.t ->> 'id') ~ '" + H.APP_SHIFT_ID_RE.source + "'") && types.includes("(e.t ->> 'start') ~ '" + H.APP_HHMM_RE.source + "'") && types.includes("(e.t ->> 'end') ~ '" + H.APP_HHMM_RE.source + "'"), "the id and HH:MM patterns");
+      assert.ok(types.includes("between 1 and " + H.APP_SHIFT_PER_DAY_MAX + " then"), "perDay 1-" + H.APP_SHIFT_PER_DAY_MAX);
+      assert.ok(MIGS.includes("check (shift_type ~ '" + H.APP_SHIFT_ID_RE.source + "')") && fnOf("save_app_days").includes("(x ->> 'type') !~ '" + H.APP_SHIFT_ID_RE.source + "'"), "the row's type and a sent type: the same pattern");
+      const asTypes = (list) => list.length ? list.map(t => t.id + " " + t.label + " " + t.startMin + "-" + t.endMin + " d=" + t.weekdays.join(",") + " h=" + (t.holidays ? "t" : "f") + " n=" + t.perDay + " r=" + (t.retired ? "t" : "f")).join(" | ") : "none";
+      const blobList = JSON.parse(between(PROBEAC, "jsonb_build_object('appShiftTypes', '", "]'::jsonb))").replace("jsonb_build_object('appShiftTypes', '", "").replace(/'::jsonb\)\)$/, ""));
+      const want = (id) => { const m = new RegExp("^--   " + id + "   [^\\n]*? -> (.*)$", "m").exec(PROBEAC); assert.ok(m, "the probe header's " + id + " line"); return m[1]; };
+      assert.strictEqual(asTypes(H.appShiftTypesOf({ appShiftTypes: blobList })), want("P4"), "JS reads the probe's blob as the database does (P4)");
+      assert.strictEqual("absent=" + asTypes(H.appShiftTypesOf({})) + " null=" + asTypes(H.appShiftTypesOf(null)) + " notlist=" + asTypes(H.appShiftTypesOf({ appShiftTypes: "inbox" })) + " empty=" + asTypes(H.appShiftTypesOf({ appShiftTypes: [] })), want("P5"), "the four default cases (P5)");
     });
-    check("P29 cross pins (integration): the build guide's 4.3 bullet names the migration, revision v, verify-rls section 18 and the probe's 69 cases (= the probe header's count)", () => {
+    check("P35 cross pins (integration): the audit wording - the database writes '<APP>: inbox 11/18, 11/19; removed inbox 11/25' and '<APP>: vacation 12/1-12/5; removed vacation ...' - the client's saved notes say the same after 'Saved: '", () => {
+      const s = fnOf("save_app_days"), v = fnOf("save_app_vacations");
+      assert.ok(s.includes("v_sum := coalesce(t_name, 'APP') || ': ' || concat_ws('; ',") && s.includes("(x ->> 'type') || ' ' || string_agg(to_char((x ->> 'day')::date, 'FMMM/FMDD')") && s.includes("(select string_agg('removed ' || g.txt, '; ' order by g.first_day, g.t)") && s.includes("'appdays.save',"), "the shift summary: '<type> M/D, M/D', groups by '; ', 'removed ' before the cleared ones");
+      assert.ok(v.includes("(select 'vacation ' || string_agg(") && v.includes("(select 'removed vacation ' || string_agg(") && v.includes("'appvac.save',"), "the vacation summary");
+      assert.strictEqual(H.appShiftSavedNote([{ day: "2026-11-18", type: "inbox" }, { day: "2026-11-19", type: "inbox" }], [{ day: "2026-11-25", type: "inbox" }]).replace(/^Saved: /, ""), "inbox 11/18, 11/19; removed inbox 11/25");
+      assert.ok(!/email/i.test(s.replace(/--[^\n]*/g, "")) && !/email/i.test(v.replace(/--[^\n]*/g, "")), "no e-mail in either function");
+      assert.ok(!/insert into public\.notifications/.test(s + v) && !/net\.http_post|pg_net/.test(s + v), "no notification row, no outbound call");
+    });
+    check("P35 cross pins (integration): the holiday reading - the database refuses a type on any day of a stored holiday unit (blob holidays.units); the client's appHolidayDays reads the same units through holidayNameByDay", () => {
+      assert.ok(fnOf("save_app_days").includes("jsonb_each(case when jsonb_typeof(blob #> '{holidays,units}') = 'object' then blob #> '{holidays,units}' else '{}'::jsonb end) y(k, v),"), "the units, every year");
+      const units = { units: { "2026": [{ name: "Thanksgiving", tier: "major", days: ["2026-11-26", "2026-11-27"] }], "2027": [{ name: "New Year", days: ["2027-01-01"] }] } };
+      assert.deepStrictEqual(plain(H.holidayNameByDay(units)), { "2026-11-26": "Thanksgiving", "2026-11-27": "Thanksgiving", "2027-01-01": "New Year" }, "every day of every unit - Thanksgiving Friday too");
+      assert.deepStrictEqual(plain(H.appShiftRunsOn(H.appShiftTypesOf({})[0], "2026-11-27", H.holidayNameByDay(units))), { ok: false, why: "holiday" }, "the Friday after Thanksgiving is a holiday day for Inbox");
+    });
+    check("P29 cross pins (integration): the build guide's 4.3 bullet still names Prompt 29's migration, revision v, verify-rls section 18 and the probe's 69 cases (superseded by revision ac, kept as the record)", () => {
       const g43 = between(GUIDEP, "### 4.3 RLS posture", "### 4.4 ");
-      // pin moved deliberately 10/2 (the record step): the bullet reads applied (it read "report-first, NOT applied" before)
       const b = between(g43, "- **APP call days (2026-10-02, report-first, applied 2026-10-02 19:19 UTC; `sql/migrations/2026-10-02-app-call-days.sql`, revision v).**", "### 4.4 ");
       assert.ok(/Proof: `sql\/probes\/app-call-days-probe\.sql` \(rolled back; 69 cases in its header/.test(b), "69 cases");
       assert.ok(b.includes("`scripts/verify-rls.sh` section 18"), "section 18");
@@ -13095,6 +13348,19 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(VR.includes('echo "== 18. APP call days (2026-10-02, Prompt 29)'), "verify-rls section 18 exists");
       const SCH = fs.readFileSync(path.join(ROOT, "sql", "schema.sql"), "utf8").replace(/\r\n/g, "\n");
       assert.ok(SCH.includes("-- Revision 2026-10-02 v (APP call days, sql/migrations/2026-10-02-app-call-days.sql"), "schema.sql revision v");
+      assert.ok(SCH.includes("-- Revision 2026-11-17 ac (APP shifts and APP vacations, sql/migrations/2026-11-17-app-shifts.sql"), "schema.sql revision ac");
+    });
+    const SMOKEP = fs.readFileSync(path.join(ROOT, "test", "ui", "smoke.mjs"), "utf8").replace(/\r\n/g, "\n");
+    check("P35 cross pins (integration): the smoke mock's refusals say revision ac's words - every raise of both functions by code, token and each fixed fragment; the holder pieces the SQL builds (names sorted and joined ' and ', the perDay suffix, the overlap pairs, M/D = FMMM/FMDD) the mock builds the same way", () => {
+      RAISES.forEach(r => {
+        const lines = SMOKEP.split("\n").filter(l => l.includes('err("' + r.code + '", "' + r.token + '", '));
+        assert.ok(lines.length, "the mock raises " + r.code + " " + r.token);
+        r.text.split("%").filter(f => f.trim().length > 2).forEach(f => assert.ok(lines.some(l => l.includes(JSON.stringify(f).slice(1, -1))), r.code + " fragment " + JSON.stringify(f) + " in the mock"));
+      });
+      ["' already has ' || h.names", "' and '", "' (' || st.per_day || ' a day)'", "' is ' || h.names || ' shift'", "' overlaps '", "'FMMM/FMDD'"].forEach(p => assert.ok(fnOf("save_app_days").includes(p), "the migration builds " + p));
+      ['" already has " + appNamesJoin(by, "")', '" (" + st.perDay + " a day)"', '" is " + appNamesJoin(x.by, "\'s") + " shift"', '" overlaps "', 'const appNamesJoin = (pids, suffix) => pids.map(appNameOfP).sort().map(n => n + suffix).join(" and ");'].forEach(p => assert.ok(SMOKEP.includes(p), "the mock builds " + p));
+      assert.ok(SMOKEP.includes('const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));'), "the mock's M/D = to_char FMMM/FMDD");
+      assert.ok(SMOKEP.includes('const APP_MOCK_TYPES_DEFAULT = [' + JSON.stringify(plain(H.APP_SHIFT_TYPES_DEFAULT)[0]).replace(/"([a-zA-Z]+)":/g, "$1: ").replace(/,/g, ", ").replace(/:\s+/g, ": ").replace(/\{/, "{ ").replace(/\}$/, " }") + '];'), "the mock's default type = APP_SHIFT_TYPES_DEFAULT");
     });
   })();
 
@@ -13814,7 +14080,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
       // review of spec F: an APP who left Mine while his Save was running hears about a refusal (the card that shows it is gone)
       const smad = sliceP("  const saveMyAppDays = async (add, clear) => {", "\n  };\n");
-      assert.ok(smad.includes('      if (viewRef.current !== "myschedule") showToast("My APP days: " + words, "error");\n      return { ok: false, words };'), "a refusal off Mine is toasted");
+      // pin moved deliberately 11/17 (Prompt 35): the card is My APP shifts now
+      assert.ok(smad.includes('      if (viewRef.current !== "myschedule") showToast("My APP shifts: " + words, "error");\n      return { ok: false, words };'), "a refusal off Mine is toasted");
       // both update banners' reload buttons go through reloadForUpdate: it asks first (an iPhone never shows beforeunload), and
       // after an OK switches the card's beforeunload question off before the cache / worker clear (a desktop asks once)
       assert.ok(guard.includes('  const reloadForUpdate = () => { if (!leaveMineOk("reload")) return false; APP_DAYS_UNLOAD.confirmed = true; if (window.__silvisHardReset) window.__silvisHardReset(); else window.location.reload(); return true; };'));
@@ -13837,11 +14104,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(PSRC.includes("onRetry={() => loadAppDays(true)} onDirty={(n) => { appDaysDirtyRef.current = n; }}/>"), "the mount wires onDirty");
       assert.ok(card.includes('  React.useEffect(() => { if (typeof onDirty === "function") onDirty(diff.count); }, [diff.count]);') && card.includes('  React.useEffect(() => () => { if (typeof onDirty === "function") onDirty(0); }, []);'), "the count, and 0 on unmount");
       assert.ok(card.includes('    const ask = (e) => { if (APP_DAYS_UNLOAD.confirmed) return undefined; e.preventDefault(); e.returnValue = ""; return ""; };\n    window.addEventListener("beforeunload", ask);\n    return () => window.removeEventListener("beforeunload", ask);\n  }, [diff.count > 0]);') && card.includes("    if (!diff.count) return undefined;"), "beforeunload only while there are changes");
-      assert.strictEqual(H.appDaysLeaveWords(2), "Discard 2 unsaved APP day changes and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.");
-      assert.strictEqual(H.appDaysLeaveWords(1, "leave"), "Discard 1 unsaved APP day change and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.");
-      assert.strictEqual(H.appDaysLeaveWords(3, "signin"), "Discard 3 unsaved APP day changes and sign in again?\n\nCancel keeps them on My APP days (note the days, then sign in again).");
-      assert.strictEqual(H.appDaysLeaveWords(2, "reload"), "Discard 2 unsaved APP day changes and reload?\n\nCancel keeps them - tap Save first, then reload.");
-      assert.ok(/^Discard 0 unsaved APP day changes/.test(H.appDaysLeaveWords("x")), "junk reads 0");
+      // pins moved deliberately 11/17 (Prompt 35): the card is My APP shifts, its taps are shift changes
+      assert.strictEqual(H.appDaysLeaveWords(2), "Discard 2 unsaved APP shift changes and leave Mine?\n\nCancel stays on My APP shifts - tap Save to keep them.");
+      assert.strictEqual(H.appDaysLeaveWords(1, "leave"), "Discard 1 unsaved APP shift change and leave Mine?\n\nCancel stays on My APP shifts - tap Save to keep them.");
+      assert.strictEqual(H.appDaysLeaveWords(3, "signin"), "Discard 3 unsaved APP shift changes and sign in again?\n\nCancel keeps them on My APP shifts (note the days, then sign in again).");
+      assert.strictEqual(H.appDaysLeaveWords(2, "reload"), "Discard 2 unsaved APP shift changes and reload?\n\nCancel keeps them - tap Save first, then reload.");
+      assert.ok(/^Discard 0 unsaved APP shift changes/.test(H.appDaysLeaveWords("x")), "junk reads 0");
       // the docs promise only what a phone does: leaving Mine / reloading asks; closing asks only on a desktop browser
       const onb = fs.readFileSync(path.join(ROOT, "docs", "ONBOARDING.md"), "utf8"), bg = fs.readFileSync(path.join(ROOT, "docs", "SILVIS-BUILD-GUIDE.md"), "utf8");
       assert.ok(!/closing the app with unsaved taps asks first/.test(onb) && !/leaving or closing with unsaved taps asks first/.test(onb), "ONBOARDING no longer says closing the app asks");
@@ -14180,15 +14448,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "add12.mark.color !== PAINT || !(add12.mark.ratio >= 4.5)",
         "todayT.border !== rgbOf(themeMod.THEME.dark.accent) || !(todayT.borderRatio >= 3)",
         "arrows.prevBg !== SURF || arrows.nextBg !== rgbOf(themeMod.THEME.dark.raised)",
-        "const wantAsk = \"Discard 2 unsaved APP day changes and leave Mine?\\n\\nCancel stays on My APP days - tap Save to keep them.\";",
+        // pins moved deliberately 11/17 (Prompt 35): the leave question names My APP shifts
+        "const wantAsk = \"Discard 2 unsaved APP shift changes and leave Mine?\\n\\nCancel stays on My APP shifts - tap Save to keep them.\";",
         "if (!buDirty || buClean)",
         "n10.code !== \"P.App\" || n13.code !== \"J.App\"",
         "names.some(x => !x.codeShown || x.nameShown || x.cut)",
         // review of fix/painter-dark-mode: H compares whole WEEKS (cells grouped by their top edge), F covers the banner's reload
         "const r = e.getBoundingClientRect(), k = Math.round(r.top);",
-        "else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a week with an APP line is",
+        // pins moved deliberately 11/17 (Prompt 35): the hours line under the name may grow a week by one line per APP shift in its
+        // fullest cell, never more; every hours line is visible, unclipped, inside its cell and on one line of its own
+        "const badHrs = hrs.filter(x => !x.hours || !x.shown || !x.unclipped || !x.inside || !x.oneLine || !x.own);",
+        "const overGrown = appWeeks.filter(w => w.h > maxPlain + allowOf(w) + 0.5);",
+        "else if (overGrown.length) fail(`${P} 1 H (${theme}): a week with an APP line is",
         "else if (maxPlain > wk.minH + 0.5) fail(",
-        "const wantR = \"Discard 2 unsaved APP day changes and reload?\\n\\nCancel keeps them - tap Save first, then reload.\";",
+        "const wantR = \"Discard 2 unsaved APP shift changes and reload?\\n\\nCancel keeps them - tap Save first, then reload.\";",
         "cancelled.resets !== 0 || cancelled.count !== \"2 changes\"",
         "accepted.resets !== 1 || accepted.bu",
         "A.pg.on(\"dialog\", onDlgF);",
@@ -15552,7 +15825,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const nums = [...guide.matchAll(/^## (\d+)\. /gm)].map(m => Number(m[1]));
       // pin moved deliberately 11/11: Prompt 34 added section 26 (Fierce's weeks from the DSG lists) after it - section 25 is the
       // second to last now, still right after section 24
-      assert.deepStrictEqual(nums.slice(-3), [24, 25, 26], "section 25 follows section 24 (Part B); section 26 (Prompt 34) is the last numbered section");
+      // pin moved deliberately 11/17: Prompt 35 added section 27 (APP shifts and APP vacations) after section 26
+      assert.deepStrictEqual(nums.slice(-4), [24, 25, 26, 27], "section 25 follows section 24 (Part B); section 26 (Prompt 34), then section 27 (Prompt 35) - the last numbered section");
       let last = -1;
       SUBS.forEach(h => { const i = s25.indexOf("\n" + h); assert.ok(i > last, "sub-heading '" + h + "' missing or out of order"); last = i; });
       assert.strictEqual((guide.match(/\n### 25\.\d/g) || []).length, SUBS.length, "exactly six 25.x sub-headings");

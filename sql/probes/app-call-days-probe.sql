@@ -18,6 +18,12 @@
 -- without the column 'PROBE_SETUP: user_profiles.is_app is absent - ... is partly applied'; then the collision guard (it reads the
 -- table, so it cannot run before it exists): any app_call_days row in 2030-12 or on 2020-05-04 raises 'PROBE_SETUP: live rows
 -- already sit in the probe window ...'. AFTER the migration every case below must read as listed.
+-- SUPERSEDED (revision ac, sql/migrations/2026-11-17-app-shifts.sql - Prompt 35, Faraz 11/17): that file types the table (shift_type,
+-- key day + shift_type + profile_id) and re-creates save_app_days with JSON lists, so none of the cases below can run once it is applied.
+-- Right after the two absent checks the setup raises 'PROBE_SETUP: superseded by revision ac - app_call_days has shift_type ...' when
+-- the column exists (nothing else runs; verify-rls 18f reads it as the superseded picture, and section 25 runs
+-- sql/probes/app-shifts-probe.sql, which carries these cases over to typed shifts). Before revision ac - and after a rollback of it -
+-- the 69 cases below still read as listed.
 -- As run: the migration was applied 2026-10-02 19:19:27Z (schema.sql revision v); the probe read PROBE_SETUP (app_call_days is
 -- absent) before it and all 69 cases below as listed after it (<today M/D> = 10/2). Until the record step verify-rls read
 -- PROBE_SETUP and the anon 404s as the not-applied picture (unless its flag for the run right after the apply was set); since the
@@ -137,6 +143,10 @@ begin
   end if;
   if not exists (select 1 from pg_attribute a where a.attrelid = 'public.user_profiles'::regclass and a.attname = 'is_app' and not a.attisdropped) then
     raise exception 'PROBE_SETUP: user_profiles.is_app is absent - sql/migrations/2026-10-02-app-call-days.sql is partly applied';
+  end if;
+  -- revision ac (Prompt 35) typed the table and re-created the save function: from its apply on, this probe cannot run its cases
+  if exists (select 1 from pg_attribute a where a.attrelid = 'public.app_call_days'::regclass and a.attname = 'shift_type' and not a.attisdropped) then
+    raise exception 'PROBE_SETUP: superseded by revision ac - app_call_days has shift_type (sql/migrations/2026-11-17-app-shifts.sql); sql/probes/app-shifts-probe.sql proves the APP shifts';
   end if;
   -- the collision guard (after the absent checks: it reads the table)
   if exists (select 1 from public.app_call_days d where d.day between '2030-12-01' and '2030-12-31' or d.day = '2020-05-04') then

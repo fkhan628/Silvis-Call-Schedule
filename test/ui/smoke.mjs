@@ -668,24 +668,33 @@ const payForcedLine = (msg) => {
 // how many pay reads of `pg` the harness answered with its forced 404 (the missing-table guard) - the 'unavailable' checks
 // require > 0, so that state is never assumed from the live project (whose tables exist since the 2026-09-28 apply)
 const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status === 404).length;
-// Prompt 29 (APP call days): the APP table and its two functions are answered by the harness ITSELF (appRoute below), never
-// by the live project (applied there 2026-10-02; the smoke never touches it). Defaults keep every existing step's picture unchanged:
-// mode "ok", no APP day, and NO APP account (appProfiles empty), so app_call_names answers the scheduler no APP and the day
-// editor shows no APP block. The main page is always served the empty picture (its later steps read the grid); the P29
-// steps use their own pages. Each non-2xx answer arms exactly ONE expected browser line (appForcedLine, path + status).
-let appDayStore = [];   // { day, profile_id, source, created_at, created_by }
+// Prompt 29 (APP call days) / Prompt 35 (APP shifts and vacations, Faraz 11/17 - revision ac): the APP tables and their
+// functions are answered by the harness ITSELF (appRoute below), never by the live project (revision v applied there
+// 2026-10-02; revision ac is report-first and NOT applied - the smoke never touches either). Defaults keep every existing
+// step's picture unchanged: mode "ok", no APP shift, no APP vacation and NO APP account (appProfiles empty), so app_call_names
+// answers the scheduler no APP and the day editor shows no APP block. The main page is always served the empty picture (its
+// later steps read the grid); the P29 / P35 steps use their own pages. Each non-2xx answer arms exactly ONE expected browser
+// line (appForcedLine, path + status).
+let appDayStore = [];   // app_call_days: { day, shift_type, profile_id, source, created_at, created_by }
+let appVacStore = [];   // app_time_off (revision ac, authenticated-only): { id, profile_id, start_date, end_date, source, created_by, created_at }
 let appProfiles = [];   // the APP accounts the mock knows (profile rows with is_app true)
 let appDaysMode = "ok"; // "ok" | "absent" (before the migration: the table 404 PGRST205, the function 404 PGRST202) | "fail500" (the merge with main, 10/2: both reads answer 500) | "fail500slow" (ship review 10/2: the table read answers 500 after 1.5 s, or later while appSlowHold holds it - step 8c)
-let appStale = null;    // { sub, rows }: that caller's app_call_days GETs answered from a frozen copy until its first save POST
+let appStale = null;    // { sub } or { page } (P35), { rows[, vacs] }: that caller's / page's APP table GETs answered from a frozen copy until its first save POST
+// Prompt 35: the blob the save functions read (call_schedule_data 'main' - here the served one, liveBlobData, set once it is
+// read): groupRules.appShiftTypes (absent = the one decided type) and holidays.units. appTypesOverride = a step's own type list
+// for the mock (a Setup save is recorded, never served back - the served blob stays the live / fixture one).
+let appMockBlob = null;
+let appTypesOverride = null;
+const APP_MOCK_COORDS = new Set([COORD_UID]); // silvis_is_coord(): the harness's office account (role coordinator)
 // 10/4 (P29 8b/8c timing windows): step 8c's own condition for the "fail500slow" answer - () => Promise; the 500 is held until it
 // settles AND at least 1.5 s have passed (null: the 1.5 s alone)
 let appSlowHold = null;
 const appServed = [];   // { path, method, status, sub }
-const appAudit = [];    // the audit rows the save function would write ({ summary, actor, profile_id, added, removed, replaced, source })
+const appAudit = [];    // the audit rows the save functions would write ({ action: appdays.save | appvac.save, summary, actor, profile_id, added, removed[, replaced], source })
 let appColumnFixture = false; // the users fixture rows carry is_app (Setup > Users offers "app")
 const appForcedLines = [];
 let appForcedConsumed = 0;
-const APP_PATH_RE = /^\/rest\/v1\/(app_call_days|rpc\/app_call_names|rpc\/save_app_days)$/;
+const APP_PATH_RE = /^\/rest\/v1\/(app_call_days|app_time_off|rpc\/app_call_names|rpc\/save_app_days|rpc\/save_app_vacations)$/;
 const appForcedLine = (msg) => {
   const m = /^Failed to load resource: the server responded with a status of (\d{3})\b/.exec(msg.text());
   if (!m) return false;
@@ -1718,114 +1727,279 @@ const offerModeRpc = (b, json) => {
   if (r.code) return json(400, { message: r.message, code: r.code, details: null, hint: null });
   return json(200, { ok: true, period_id: offerPeriod.id, label: offerPeriod.label, person_id: who, mode: b.p_mode, rules_only_ids: offerPeriod.rules_only_ids, offer_modes: offerPeriod.offer_modes, by: "s1" });
 };
-// Prompt 29: save_app_days() as the migration writes it - the same order of refusals and the same strings (AP001 for every
-// caller that is neither an APP the mock knows nor the scheduler FAKE_UID, AP002, AP004, AP003, AP006 by the harness's
-// Central today, AP002 / AP007 on a held clear, AP005), the all-or-nothing writes and the one audit row it would write.
+// Prompt 29 / Prompt 35 (revision ac, Faraz 11/17): save_app_days() as the migration writes it - typed shifts (the lists are
+// [{ day, type }]), the same order of refusals and the same strings: AP001 for every caller that is neither an APP the mock
+// knows nor the scheduler FAKE_UID, AP002, AP004, AP003, AP006 by the harness's Central today, AP008 (the type: known, not
+// retired, its weekday, a holiday unit's day of the served blob), AP002 / AP007 on a clear another APP holds, AP007 on a change
+// whose holder moved, AP005 (perDay, naming the holders), AP010 (the APP's own vacation), AP009 (two shifts of one APP
+// overlapping) - the all-or-nothing writes and the one appdays.save audit row it would write. The shift types and the holiday
+// days are the served blob's (appMockBlob; appTypesOverride = a step's own list), read as silvis_app_shift_types reads them.
 const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
 const appNameOfP = (pid) => { const p = appProfiles.find(x => x.id === pid); return p && p.display_name && p.display_name.trim() ? p.display_name.trim() : "another APP"; };
+const appIsAppRow = (p) => !!(p && p.is_app === true && p.role === "viewer" && !p.person_id);
+const APP_MOCK_TYPES_DEFAULT = [{ id: "inbox", label: "Inbox", start: "07:00", end: "17:00", weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 1 }];
+const APP_MOCK_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const appMockTypes = () => {
+  const g = appTypesOverride ? { appShiftTypes: appTypesOverride } : ((appMockBlob && appMockBlob.groupRules) || {});
+  const list = Array.isArray(g.appShiftTypes) ? g.appShiftTypes : APP_MOCK_TYPES_DEFAULT;
+  const hm = /^([01][0-9]|2[0-3]):[0-5][0-9]$/, mins = (s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
+  const out = [], seen = new Set();
+  for (const t of list) {
+    if (!t || typeof t !== "object" || Array.isArray(t) || typeof t.id !== "string" || !/^[a-z][a-z0-9-]{0,23}$/.test(t.id)) continue;
+    if (typeof t.start !== "string" || !hm.test(t.start) || typeof t.end !== "string" || !hm.test(t.end)) continue;
+    if (!Array.isArray(t.weekdays) || !t.weekdays.length || t.weekdays.some(w => typeof w !== "number" || ![0, 1, 2, 3, 4, 5, 6].includes(w))) continue;
+    if (seen.has(t.id)) continue;
+    seen.add(t.id);
+    out.push({ id: t.id, label: (typeof t.label === "string" && t.label.trim()) || t.id, startMin: mins(t.start), endMin: mins(t.end), weekdays: [...new Set(t.weekdays)].sort((a, b) => a - b),
+      holidays: t.holidays === true, perDay: Number.isInteger(t.perDay) && t.perDay >= 1 && t.perDay <= 20 ? t.perDay : 1, retired: t.retired === true });
+  }
+  return out;
+};
+const appMockHolidayDays = () => {
+  const h = appMockBlob && appMockBlob.holidays, units = h && h.units && typeof h.units === "object" && !Array.isArray(h.units) ? h.units : {};
+  const out = new Set();
+  Object.values(units).forEach(v => (Array.isArray(v) ? v : []).forEach(u => { if (u && typeof u === "object" && Array.isArray(u.days)) u.days.forEach(d => { if (typeof d === "string") out.add(d); }); }));
+  return out;
+};
+const appIsDay = (d) => { const x = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))); return /^\d{4}-\d{2}-\d{2}$/.test(d) && x.getUTCFullYear() === +d.slice(0, 4) && x.getUTCMonth() === +d.slice(5, 7) - 1 && x.getUTCDate() === +d.slice(8, 10); };
+const appDayIdx = (d) => Math.round((Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) - Date.UTC(2000, 0, 1)) / 86400000);
+const appDow = (d) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))).getUTCDay();
+// a shift's minutes on the day scale (an end at or before the start runs into the next day; a type the blob no longer lists = its whole day)
+const appSpanOf = (day, t) => { const b = appDayIdx(day) * 1440; return !t ? { s: b, e: b + 1440 } : { s: b + t.startMin, e: b + t.startMin + (t.endMin > t.startMin ? t.endMin - t.startMin : t.endMin - t.startMin + 1440) }; };
+const appVacSpan = (v) => ({ s: appDayIdx(v.start_date) * 1440, e: (appDayIdx(v.end_date) + 1) * 1440 });
+// the holders' names as the functions' string_agg builds them: sorted by name, each + the suffix, joined " and "
+const appNamesJoin = (pids, suffix) => pids.map(appNameOfP).sort().map(n => n + suffix).join(" and ");
+const appShiftSort = (a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : a.type < b.type ? -1 : a.type > b.type ? 1 : 0;
+const appShiftWord = (x) => appMd(x.day) + " " + x.type;
 const appDaysRpc = (b, sub) => {
   const err = (code, token, text) => ({ status: 400, body: { code, details: null, hint: null, message: token + ": " + text } });
   const sched = sub === FAKE_UID;
-  const caller = appProfiles.find(p => p.id === sub);
-  const cApp = !!(caller && caller.is_app === true && caller.role === "viewer" && !caller.person_id);
-  if (!sub || (!sched && !cApp)) return err("AP001", "APP_DAY_NOT_ALLOWED", "only an APP account or the scheduler can put an APP on a call day");
+  const cApp = appIsAppRow(appProfiles.find(p => p.id === sub));
+  if (!sub || (!sched && !cApp)) return err("AP001", "APP_DAY_NOT_ALLOWED", "only an APP account or the scheduler can put an APP on a shift");
   let who = b.p_profile || null;
   if (!who && cApp) who = sub;
   if (!who) return err("AP001", "APP_DAY_NOT_ALLOWED", "name the APP (pick one in the day editor)");
-  if (!sched && who !== sub) return err("AP002", "APP_DAY_NOT_YOURS", "an APP adds or removes only their own days - ask the scheduler");
-  const repl = !!b.p_replace;
-  if (repl && !sched) return err("AP002", "APP_DAY_NOT_YOURS", "only the scheduler can replace another APP on a day");
-  const addRaw = Array.isArray(b.p_add) ? b.p_add : [], clrRaw = Array.isArray(b.p_clear) ? b.p_clear : [];
-  if (addRaw.some(d => d === null) || clrRaw.some(d => d === null)) return err("AP004", "APP_DAY_BAD_DAY", "a day in the list is empty - nothing was saved");
-  if (addRaw.concat(clrRaw).some(d => d === "infinity" || d === "-infinity")) return err("AP004", "APP_DAY_BAD_DAY", "a day in the list is not a calendar day - nothing was saved");
-  if (addRaw.length + clrRaw.length > 400) return err("AP004", "APP_DAY_BAD_DAY", "at most 400 days in one save - nothing was saved");
-  const adds = [...new Set(addRaw)].sort(), clears = [...new Set(clrRaw)].sort();
-  const both = adds.filter(d => clears.includes(d));
-  if (both.length) return err("AP004", "APP_DAY_BAD_DAY", both.map(appMd).join(", ") + " is both added and removed in one save - nothing was saved");
+  if (!sched && who !== sub) return err("AP002", "APP_DAY_NOT_YOURS", "an APP adds or removes only their own shifts - ask the scheduler");
+  const repl = b.p_replace || null;
+  if (repl && !sched) return err("AP002", "APP_DAY_NOT_YOURS", "only the scheduler can replace another APP on a shift");
+  const isList = (x) => x === null || x === undefined || Array.isArray(x);
+  if (!isList(b.p_add) || !isList(b.p_clear)) return err("AP004", "APP_DAY_BAD_DAY", "the shifts must come as a list - nothing was saved");
+  const addRaw = b.p_add || [], clrRaw = b.p_clear || [], all0 = addRaw.concat(clrRaw);
+  if (all0.some(x => !x || typeof x !== "object" || Array.isArray(x) || typeof x.day !== "string" || typeof x.type !== "string" || !/^[a-z][a-z0-9-]{0,23}$/.test(x.type))) return err("AP004", "APP_DAY_BAD_DAY", "a shift in the list is not a day and a shift type - nothing was saved");
+  if (all0.some(x => !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(x.day))) return err("AP004", "APP_DAY_BAD_DAY", "a day in the list is not a calendar day - nothing was saved");
+  if (addRaw.length + clrRaw.length > 400) return err("AP004", "APP_DAY_BAD_DAY", "at most 400 shifts in one save - nothing was saved");
+  if (all0.some(x => !appIsDay(x.day))) return err("AP004", "APP_DAY_BAD_DAY", "a day in the list is not a calendar day - nothing was saved");
+  const uniq = (l) => { const m = new Map(); l.forEach(x => m.set(x.day + "|" + x.type, { day: x.day, type: x.type })); return [...m.values()].sort(appShiftSort); };
+  const adds = uniq(addRaw), clears = uniq(clrRaw);
+  const same = (x, r) => r.day === x.day && r.shift_type === x.type;
+  const both = adds.filter(a => clears.some(c => c.day === a.day && c.type === a.type));
+  if (both.length) return err("AP004", "APP_DAY_BAD_DAY", both.map(appShiftWord).join(", ") + " is both added and removed in one save - nothing was saved");
+  if (repl && (repl === who || !adds.length)) return err("AP004", "APP_DAY_BAD_DAY", "a change takes a shift over from another APP - name the shift and that APP (nothing was saved)");
   const target = appProfiles.find(p => p.id === who);
   const tName = target && target.display_name && target.display_name.trim() ? target.display_name.trim() : null;
-  if (adds.length && !(target && target.is_app === true)) return err("AP003", "APP_DAY_NOT_APP", (tName || "that account") + " is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)");
+  if (adds.length && !appIsAppRow(target)) return err("AP003", "APP_DAY_NOT_APP", (tName || "that account") + " is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)");
   if (!sched) {
-    const past = adds.concat(clears).filter(d => d < todayCentral).sort();
+    const past = [...new Set(adds.concat(clears).map(x => x.day).filter(d => d < todayCentral))].sort();
     if (past.length) return err("AP006", "APP_DAY_PAST", past.map(appMd).join(", ") + " is before today (" + appMd(todayCentral) + ") in Central time - a past day stays as it was");
   }
-  const heldOther = clears.map(d => appDayStore.find(r => r.day === d)).filter(r => r && r.profile_id !== who);
+  const types = appMockTypes(), hol = appMockHolidayDays();
+  const typeOf = (id) => types.find(t => t.id === id) || null;
+  const noShift = adds.map(a => {
+    const st = typeOf(a.type);
+    if (!st) return "there is no " + a.type + " shift type";
+    if (st.retired) return "the " + a.type + " shift is retired";
+    if (!st.weekdays.includes(appDow(a.day))) return appMd(a.day) + " is a " + APP_MOCK_DAY_NAMES[appDow(a.day)] + " (" + st.label + " does not run that day)";
+    if (!st.holidays && hol.has(a.day)) return appMd(a.day) + " is a holiday (" + st.label + " does not run on holidays)";
+    return null;
+  }).filter(Boolean);
+  if (noShift.length) return err("AP008", "APP_DAY_NO_SHIFT", noShift.join(", ") + " - nothing was saved");
+  const holds = (x, pid) => appDayStore.some(r => same(x, r) && r.profile_id === pid);
+  // a clear names the APP's own shift: one another APP holds instead (and this one does not) is a stale picture
+  const heldOther = clears.map(c => ({ c, by: appDayStore.filter(r => same(c, r) && r.profile_id !== who).map(r => r.profile_id) })).filter(x => x.by.length && !holds(x.c, who));
   if (heldOther.length) {
-    const txt = heldOther.map(r => appMd(r.day) + " is " + appNameOfP(r.profile_id) + "'s day").join(", ");
+    const txt = heldOther.map(x => appShiftWord(x.c) + " is " + appNamesJoin(x.by, "'s") + " shift").join(", ");
     return sched ? err("AP007", "APP_DAY_STALE", txt + " - reload the calendar (nothing was saved)") : err("AP002", "APP_DAY_NOT_YOURS", txt + " - only that APP or the scheduler can remove it (nothing was saved)");
   }
-  if (!repl) {
-    const taken = adds.map(d => appDayStore.find(r => r.day === d)).filter(r => r && r.profile_id !== who);
-    if (taken.length) return err("AP005", "APP_DAY_TAKEN", taken.map(r => appMd(r.day) + " already has " + appNameOfP(r.profile_id)).join("; ") + " - nothing was saved");
+  let rName = null;
+  if (repl) {
+    const rp = appProfiles.find(p => p.id === repl);
+    rName = rp && rp.display_name && rp.display_name.trim() ? rp.display_name.trim() : null;
+    const gone = adds.filter(a => !holds(a, repl));
+    if (gone.length) return err("AP007", "APP_DAY_STALE", gone.map(appShiftWord).join(", ") + " is no longer " + (rName || "another APP") + "'s shift - reload the calendar (nothing was saved)");
   }
+  // perDay: other APPs (not the one a change takes over from) already fill the shift
+  const taken = adds.map(a => {
+    const st = typeOf(a.type);
+    const by = appDayStore.filter(r => same(a, r) && r.profile_id !== who && r.profile_id !== repl).map(r => r.profile_id);
+    return st && by.length >= st.perDay && !holds(a, who) ? appShiftWord(a) + " already has " + appNamesJoin(by, "") + (st.perDay > 1 ? " (" + st.perDay + " a day)" : "") : null;
+  }).filter(Boolean);
+  if (taken.length) return err("AP005", "APP_DAY_TAKEN", taken.join("; ") + " - nothing was saved");
+  const myVacs = appVacStore.filter(v => v.profile_id === who).map(appVacSpan);
+  const onVac = adds.filter(a => { const s = appSpanOf(a.day, typeOf(a.type)); return myVacs.some(v => s.s < v.e && v.s < s.e); });
+  if (onVac.length) return err("AP010", "APP_DAY_VACATION", onVac.map(appShiftWord).join(", ") + " is on " + (tName || "the APP") + "'s vacation - change the vacation first (nothing was saved)");
+  // two shifts of one APP may not overlap: the added ones against each other and against the shifts the APP keeps
+  const kept = appDayStore.filter(r => r.profile_id === who && !clears.some(c => same(c, r)) && !adds.some(a => same(a, r)));
+  const iv = adds.map(a => ({ day: a.day, type: a.type, added: true, ...appSpanOf(a.day, typeOf(a.type)) }))
+    .concat(kept.map(r => ({ day: r.day, type: r.shift_type, added: false, ...appSpanOf(r.day, typeOf(r.shift_type)) })));
+  const pairs = [];
+  iv.forEach(p => { if (p.added) iv.forEach(q => { if ((q.day === p.day && q.type === p.type) || (q.added && appShiftSort(p, q) >= 0)) return; if (p.s < q.e && q.s < p.e) pairs.push({ p, q }); }); });
+  pairs.sort((x, y) => appShiftSort(x.p, y.p) || appShiftSort(x.q, y.q));
+  if (pairs.length) return err("AP009", "APP_DAY_OVERLAP", pairs.map(x => appShiftWord(x.p) + " overlaps " + appShiftWord(x.q)).join(", ") + " - one APP holds one shift at a time (nothing was saved)");
+  const before = appDayStore.slice();
   const src = who === sub ? "app" : "scheduler";
   let replaced = [];
   if (repl) {
-    replaced = appDayStore.filter(r => adds.includes(r.day) && r.profile_id !== who).map(r => ({ day: r.day, profile_id: r.profile_id, name: appNameOfP(r.profile_id) }));
-    appDayStore = appDayStore.filter(r => !(adds.includes(r.day) && r.profile_id !== who));
+    replaced = appDayStore.filter(r => r.profile_id === repl && adds.some(a => same(a, r))).map(r => ({ day: r.day, type: r.shift_type, profile_id: repl, name: rName || "another APP" })).sort(appShiftSort);
+    appDayStore = appDayStore.filter(r => !(r.profile_id === repl && adds.some(a => same(a, r))));
   }
-  const removed = appDayStore.filter(r => r.profile_id === who && clears.includes(r.day)).map(r => r.day).sort();
-  appDayStore = appDayStore.filter(r => !(r.profile_id === who && clears.includes(r.day)));
-  const added = adds.filter(d => !appDayStore.some(r => r.day === d));
-  added.forEach(d => appDayStore.push({ day: d, profile_id: who, source: src, created_by: sub, created_at: new Date().toISOString() }));
+  const removed = appDayStore.filter(r => r.profile_id === who && clears.some(c => same(c, r))).map(r => ({ day: r.day, type: r.shift_type })).sort(appShiftSort);
+  appDayStore = appDayStore.filter(r => !(r.profile_id === who && clears.some(c => same(c, r))));
+  const added = adds.filter(a => !holds(a, who));
+  added.forEach(a => appDayStore.push({ day: a.day, shift_type: a.type, profile_id: who, source: src, created_by: sub, created_at: new Date().toISOString() }));
+  // defence in depth (the function's post-insert check - unreachable under its lock, and so here)
+  if (adds.some(a => { const st = typeOf(a.type); return st && appDayStore.filter(r => same(a, r)).length > st.perDay; })) { appDayStore = before; return err("AP005", "APP_DAY_TAKEN", "a shift filled up during this save - reload and try again (nothing was saved)"); }
   if (added.length + removed.length) {
-    const was = (d) => { const x = replaced.find(r => r.day === d); return x ? " (was " + x.name + ")" : ""; };
+    const was = (x) => { const r = replaced.find(y => y.day === x.day && y.type === x.type); return r ? " (was " + r.name + ")" : ""; };
+    // grouped by type ("inbox 11/18, 11/19"), the groups in the order of their first day - the function's string_agg
+    const groups = (list, withWas) => { const by = new Map(); list.forEach(x => { if (!by.has(x.type)) by.set(x.type, []); by.get(x.type).push(x); }); return [...by.entries()].map(([t, xs]) => ({ t, first: xs[0].day, txt: t + " " + xs.map(x => appMd(x.day) + (withWas ? was(x) : "")).join(", ") })).sort((p, q) => p.first < q.first ? -1 : p.first > q.first ? 1 : p.t < q.t ? -1 : 1).map(g => g.txt); };
     const parts = [];
-    if (added.length) parts.push("on call " + added.map(d => appMd(d) + was(d)).join(", "));
-    if (removed.length) parts.push("removed " + removed.map(appMd).join(", "));
-    appAudit.push({ summary: (tName || "APP") + ": " + parts.join("; "), actor: sub, profile_id: who, added, removed, replaced, source: src });
+    if (added.length) parts.push(groups(added, true).join("; "));
+    if (removed.length) parts.push(groups(removed, false).map(t => "removed " + t).join("; "));
+    appAudit.push({ action: "appdays.save", summary: (tName || "APP") + ": " + parts.join("; "), actor: sub, profile_id: who, added, removed, replaced, source: src });
   }
   return { status: 200, body: { ok: true, profile_id: who, added: added.length, removed: removed.length, kept: adds.length - added.length, absent: clears.length - removed.length, replaced: replaced.length, source: src, audit: added.length + removed.length > 0 } };
 };
-// app_call_names() for a caller: the holders, the caller's own APP entry, and - for the scheduler - every APP account.
+// Prompt 35 (revision ac): save_app_vacations() as the migration writes it - p_add [{ start, end }], p_remove [ids]: AV001 for
+// every caller that is neither an APP the mock knows, the scheduler FAKE_UID nor the office (APP_MOCK_COORDS), AV002, AV004 (the
+// list, an empty id, a range's shape, the cap of 50, a calendar day, ends before it starts, longer than a year, two adds
+// overlapping), AV003, AV007 (an id gone or another APP's), AV006 (a started vacation removed by anyone but the scheduler), AV008
+// (touching a kept vacation of that APP - an equal add is kept), AV005 (over one of the APP's shifts: "remove the shift first") -
+// the all-or-nothing writes and the one appvac.save audit row. No vacation guard (the surgeons' minimum does not count APPs).
+const appVacRange = (s, e) => e > s ? appMd(s) + "-" + appMd(e) : appMd(s);
+const appVacRpc = (b, sub) => {
+  const err = (code, token, text) => ({ status: 400, body: { code, details: null, hint: null, message: token + ": " + text } });
+  const sched = sub === FAKE_UID, coord = APP_MOCK_COORDS.has(sub);
+  const cApp = appIsAppRow(appProfiles.find(p => p.id === sub));
+  if (!sub || !(sched || coord || cApp)) return err("AV001", "APP_VACATION_NOT_ALLOWED", "only an APP account, the scheduler or the office can enter an APP vacation");
+  let who = b.p_profile || null;
+  if (!who && cApp) who = sub;
+  if (!who) return err("AV001", "APP_VACATION_NOT_ALLOWED", "name the APP (pick one in Time off)");
+  if (!(sched || coord) && who !== sub) return err("AV002", "APP_VACATION_NOT_YOURS", "an APP enters, changes or removes only their own vacations - ask the scheduler or the office");
+  if (b.p_add !== null && b.p_add !== undefined && !Array.isArray(b.p_add)) return err("AV004", "APP_VACATION_BAD_RANGE", "the vacations must come as a list - nothing was saved");
+  const addRaw = Array.isArray(b.p_add) ? b.p_add : [], rmRaw = Array.isArray(b.p_remove) ? b.p_remove : [];
+  if (rmRaw.some(x => x === null)) return err("AV004", "APP_VACATION_BAD_RANGE", "a vacation in the remove list is empty - nothing was saved");
+  if (addRaw.some(x => !x || typeof x !== "object" || Array.isArray(x) || typeof x.start !== "string" || typeof x.end !== "string")) return err("AV004", "APP_VACATION_BAD_RANGE", "a vacation in the list is not a first and a last day - nothing was saved");
+  if (addRaw.length + rmRaw.length > 50) return err("AV004", "APP_VACATION_BAD_RANGE", "at most 50 vacations in one save - nothing was saved");
+  const isoRe = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+  if (addRaw.some(x => !isoRe.test(x.start) || !isoRe.test(x.end))) return err("AV004", "APP_VACATION_BAD_RANGE", "a day in the list is not a calendar day - nothing was saved");
+  if (addRaw.some(x => !appIsDay(x.start) || !appIsDay(x.end))) return err("AV004", "APP_VACATION_BAD_RANGE", "a day in the list is not a calendar day - nothing was saved");
+  const am = new Map(); addRaw.forEach(x => am.set(x.start + "|" + x.end, { start: x.start, end: x.end }));
+  const adds = [...am.values()].sort((p, q) => p.start < q.start ? -1 : p.start > q.start ? 1 : p.end < q.end ? -1 : p.end > q.end ? 1 : 0);
+  const back = adds.filter(a => a.end < a.start);
+  if (back.length) return err("AV004", "APP_VACATION_BAD_RANGE", back.map(a => appMd(a.start) + "-" + appMd(a.end)).join(", ") + " ends before it starts - nothing was saved");
+  const long = adds.filter(a => appDayIdx(a.end) - appDayIdx(a.start) > 365);
+  if (long.length) return err("AV004", "APP_VACATION_BAD_RANGE", long.map(a => appMd(a.start) + "-" + appMd(a.end)).join(", ") + " is longer than a year - nothing was saved");
+  const ov = [];
+  adds.forEach((p, i) => adds.forEach((q, j) => { if (i < j && p.start <= q.end && q.start <= p.end) ov.push(appVacRange(p.start, p.end) + " and " + appVacRange(q.start, q.end)); }));
+  if (ov.length) return err("AV004", "APP_VACATION_BAD_RANGE", ov.join(", ") + " overlap - nothing was saved");
+  const rm = [...new Set(rmRaw.map(String))];
+  const target = appProfiles.find(p => p.id === who);
+  const tName = target && target.display_name && target.display_name.trim() ? target.display_name.trim() : null;
+  if (adds.length && !appIsAppRow(target)) return err("AV003", "APP_VACATION_NOT_APP", (tName || "that account") + " is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)");
+  if (rm.some(id => !appVacStore.some(v => v.id === id && v.profile_id === who))) return err("AV007", "APP_VACATION_STALE", "a vacation in the list is gone or is not " + (tName || "this APP") + "'s - reload Time off (nothing was saved)");
+  const vSort = (p, q) => p.start_date < q.start_date ? -1 : p.start_date > q.start_date ? 1 : p.end_date < q.end_date ? -1 : p.end_date > q.end_date ? 1 : 0;
+  if (!sched) {
+    const started = appVacStore.filter(v => rm.includes(v.id) && v.start_date <= todayCentral).sort(vSort);
+    if (started.length) return err("AV006", "APP_VACATION_PAST", started.map(v => appVacRange(v.start_date, v.end_date)).join(", ") + " has started or passed (today is " + appMd(todayCentral) + " in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)");
+  }
+  const keptV = appVacStore.filter(v => v.profile_id === who && !rm.includes(v.id));
+  const nKept = adds.filter(a => keptV.some(v => v.start_date === a.start && v.end_date === a.end)).length;
+  const clash = new Map();
+  adds.forEach(a => keptV.forEach(v => { if (v.start_date <= a.end && a.start <= v.end_date && !(v.start_date === a.start && v.end_date === a.end)) clash.set(v.start_date + "|" + v.end_date, v); }));
+  if (clash.size) return err("AV008", "APP_VACATION_OVERLAP", (tName || "the APP") + " is already away " + [...clash.values()].sort(vSort).map(v => appVacRange(v.start_date, v.end_date)).join(", ") + " - change that vacation instead (nothing was saved)");
+  const types = appMockTypes(), typeOf = (id) => types.find(t => t.id === id) || null;
+  const hits = new Map();
+  appDayStore.filter(r => r.profile_id === who).forEach(r => { const s = appSpanOf(r.day, typeOf(r.shift_type)); if (adds.some(a => { const v = appVacSpan({ start_date: a.start, end_date: a.end }); return s.s < v.e && v.s < s.e; })) hits.set(r.day + "|" + r.shift_type, { day: r.day, type: r.shift_type }); });
+  if (hits.size) return err("AV005", "APP_VACATION_ON_SHIFT", (tName || "the APP") + " holds " + [...hits.values()].sort(appShiftSort).map(appShiftWord).join(", ") + " - remove the shift first (nothing was saved)");
+  const src = who === sub ? "app" : sched ? "scheduler" : "office";
+  const del = appVacStore.filter(v => rm.includes(v.id) && v.profile_id === who).sort(vSort).map(v => ({ id: v.id, start: v.start_date, end: v.end_date }));
+  appVacStore = appVacStore.filter(v => !(rm.includes(v.id) && v.profile_id === who));
+  const ins = adds.filter(a => !appVacStore.some(v => v.profile_id === who && v.start_date === a.start && v.end_date === a.end)).map(a => ({ id: crypto.randomUUID(), start: a.start, end: a.end }));
+  ins.forEach(x => appVacStore.push({ id: x.id, profile_id: who, start_date: x.start, end_date: x.end, source: src, created_by: sub, created_at: new Date().toISOString() }));
+  if (ins.length + del.length) {
+    const parts = [];
+    if (ins.length) parts.push("vacation " + ins.map(x => appVacRange(x.start, x.end)).join(", "));
+    if (del.length) parts.push("removed vacation " + del.map(x => appVacRange(x.start, x.end)).join(", "));
+    appAudit.push({ action: "appvac.save", summary: (tName || "APP") + ": " + parts.join("; "), actor: sub, profile_id: who, added: ins, removed: del, source: src });
+  }
+  return { status: 200, body: { ok: true, profile_id: who, added: ins.length, removed: del.length, kept: nKept, source: src, audit: ins.length + del.length > 0 } };
+};
+// app_call_names() for a caller (revision ac): every profile holding a shift or a vacation, the caller's own APP entry, and - for
+// the scheduler and the office - every APP account (their pick lists); nothing without a session.
 const appNamesFor = (sub) => {
-  const holders = new Set(appDayStore.map(r => r.profile_id));
-  return appProfiles.filter(p => holders.has(p.id) || p.id === sub || sub === FAKE_UID)
-    .map(p => ({ profile_id: p.id, display_name: p.display_name, is_app: p.is_app === true }))
+  if (!sub) return [];
+  const holders = new Set(appDayStore.map(r => r.profile_id).concat(appVacStore.map(v => v.profile_id)));
+  const wide = sub === FAKE_UID || APP_MOCK_COORDS.has(sub);
+  return appProfiles.filter(p => holders.has(p.id) || (appIsAppRow(p) && (p.id === sub || wide)))
+    .map(p => ({ profile_id: p.id, display_name: p.display_name && p.display_name.trim() ? p.display_name.trim() : null, is_app: appIsAppRow(p) }))
     .sort((a, b) => a.profile_id < b.profile_id ? -1 : 1);
 };
 const appRoute = (route, req, url, method, json) => {
   const sub = jwtSub(req);
   let pg = null; try { pg = req.frame().page(); } catch (e) { pg = null; }
   const mainPage = pg === page; // the main page's later steps read the grid: it is always served the empty picture
+  const table = url.pathname.split("/").pop();
   const answer = (status, body) => {
-    appServed.push({ path: url.pathname, method, status, sub });
+    appServed.push({ path: url.pathname, method, status, sub, page: pg });
     if (status >= 400) appForcedLines.push({ path: url.pathname, status });
     return json(status, body);
   };
-  if (url.pathname === "/rest/v1/rpc/save_app_days") {
+  // a frozen picture (step 2's APP B; P35's second page of one APP) - released on that caller's / page's first save
+  const staleHere = () => !!appStale && ((!!appStale.sub && appStale.sub === sub) || (!!appStale.page && appStale.page === pg));
+  if (url.pathname === "/rest/v1/rpc/save_app_days" || url.pathname === "/rest/v1/rpc/save_app_vacations") {
     const body = req.postData() || "";
     writes.push({ method, path: url.pathname + url.search, body, prefer: req.headers()["prefer"] || "", auth: req.headers()["authorization"] || "", sub, at: Date.now() });
     if (method !== "POST") return answer(405, { code: "PGRST117", message: "Unsupported HTTP method", details: null, hint: null });
-    if (appDaysMode === "absent") return answer(404, { code: "PGRST202", details: null, hint: null, message: "Could not find the function public.save_app_days(p_add, p_clear, p_profile, p_replace) in the schema cache" });
-    if (appStale && appStale.sub === sub) appStale = null; // released on that caller's first save: its post-refusal reload reads the real store
+    const days = url.pathname === "/rest/v1/rpc/save_app_days";
+    if (appDaysMode === "absent") return answer(404, { code: "PGRST202", details: null, hint: null, message: days ? "Could not find the function public.save_app_days(p_add, p_clear, p_profile, p_replace) in the schema cache" : "Could not find the function public.save_app_vacations(p_add, p_profile, p_remove) in the schema cache" });
+    if (staleHere()) appStale = null; // released on that caller's first save: its post-refusal reload reads the real store
     let b = {}; try { b = JSON.parse(body || "{}"); } catch (e) { b = {}; }
-    const r = appDaysRpc(b, sub);
+    const r = days ? appDaysRpc(b, sub) : appVacRpc(b, sub);
     return answer(r.status, r.body);
   }
-  // a direct write of the table (the client never sends one - the save function is the only door): recorded, refused like the
+  // a direct write of a table (the client never sends one - the save functions are the only door): recorded, refused like the
   // revoked privilege, and NOT armed - its console line stays an unexpected error
-  if (method !== "GET") { writes.push({ method, path: url.pathname + url.search, body: req.postData() || "", prefer: req.headers()["prefer"] || "", sub, at: Date.now() }); return json(403, { code: "42501", message: "permission denied for table app_call_days", details: null, hint: null }); }
+  if (method !== "GET") { writes.push({ method, path: url.pathname + url.search, body: req.postData() || "", prefer: req.headers()["prefer"] || "", sub, at: Date.now() }); return json(403, { code: "42501", message: "permission denied for table " + table, details: null, hint: null }); }
   if (mainPage) return answer(200, []); // whatever the mode: the main page's later steps read an unchanged grid
   if (url.pathname === "/rest/v1/rpc/app_call_names") {
     if (appDaysMode === "fail500") return answer(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure" });
     if (appDaysMode === "absent") return answer(404, { code: "PGRST202", details: null, hint: null, message: "Could not find the function public.app_call_names without parameters in the schema cache" });
     return answer(200, appNamesFor(sub));
   }
+  // Prompt 35: both tables are authenticated-only (no anon policy, anon privileges revoked - PostgREST answers 401 42501). Not
+  // armed: the client never reads them without a session (?public=1 never asks), so such a line stays an unexpected error.
+  if (!sub) { appServed.push({ path: url.pathname, method, status: 401, sub, page: pg }); return json(401, { code: "42501", details: null, hint: null, message: "permission denied for table " + table }); }
   if (appDaysMode === "fail500") return answer(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure" });
   // ship review 10/2: the same 500 held 1.5 s (recorded on arrival) - the load's read is still out when a Realtime SUBSCRIBED
   // refreshAll starts its own (step 8c). 10/4: and held on until step 8c's appSlowHold settles (the SUBSCRIBED refreshAll was
   // seen) - the 1.5 s alone was a race the join lost on a busy PC
   if (appDaysMode === "fail500slow") {
-    appServed.push({ path: url.pathname, method, status: 500, sub, at: Date.now() });
+    appServed.push({ path: url.pathname, method, status: 500, sub, page: pg, at: Date.now() });
     appForcedLines.push({ path: url.pathname, status: 500 });
     const hold = appSlowHold;
     return Promise.all([new Promise(r => setTimeout(r, 1500)), hold ? hold() : null]).then(() => json(500, { code: "XX000", details: null, hint: null, message: "harness: forced APP-day read failure (slow)" })).catch(() => {});
   }
-  if (appDaysMode === "absent") return answer(404, { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public.app_call_days' in the schema cache" });
-  const src = appStale && appStale.sub === sub ? appStale.rows : appDayStore;
-  const rows = src.slice().sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0).map(r => ({ day: r.day, profile_id: r.profile_id, source: r.source, created_at: r.created_at }));
-  const off = Number(url.searchParams.get("offset") || 0), lim = Number(url.searchParams.get("limit") || rows.length);
+  if (appDaysMode === "absent") return answer(404, { code: "PGRST205", details: null, hint: null, message: "Could not find the table 'public." + table + "' in the schema cache" });
+  const off = Number(url.searchParams.get("offset") || 0), lim = Number(url.searchParams.get("limit") || 100000);
+  if (url.pathname === "/rest/v1/app_time_off") {
+    const src = staleHere() && Array.isArray(appStale.vacs) ? appStale.vacs : appVacStore;
+    const rows = src.slice().sort((a, b) => a.start_date < b.start_date ? -1 : a.start_date > b.start_date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      .map(v => ({ id: v.id, profile_id: v.profile_id, start_date: v.start_date, end_date: v.end_date, source: v.source, created_at: v.created_at }));
+    return answer(200, rows.slice(off, off + lim));
+  }
+  const src = staleHere() && Array.isArray(appStale.rows) ? appStale.rows : appDayStore;
+  const rows = src.slice().sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : a.shift_type < b.shift_type ? -1 : a.shift_type > b.shift_type ? 1 : a.profile_id < b.profile_id ? -1 : a.profile_id > b.profile_id ? 1 : 0)
+    .map(r => ({ day: r.day, shift_type: r.shift_type, profile_id: r.profile_id, source: r.source, created_at: r.created_at }));
   return answer(200, rows.slice(off, off + lim));
 };
 // Review 9/27 Do first 9 (10/1): the geometry of My schedule / Following's 90-day rows, read in the page (`scope` = a card
@@ -2873,6 +3047,7 @@ try {
     }
   } catch (e) { fail("live blob: could not read call_schedule_data for lastPublished / the holiday units: " + String(e && e.message || e).split("\n")[0]); }
   const holidayUnitDays = new Set(Object.values((liveBlobData && liveBlobData.holidays && liveBlobData.holidays.units) || {}).flat().flatMap(u => (u && Array.isArray(u.days)) ? u.days : []));
+  appMockBlob = liveBlobData; // Prompt 35: the APP mock's save functions read this blob's appShiftTypes and holiday units (call_schedule_data 'main')
   // An open slot per the live rows (the app's rule): primary is open with no holder and no external
   // cover (a cover stands in for the primary), backup with no holder; a row-less day is open in both.
   const liveOpen = (d, role) => { const r = liveByDay[d]; return role === "primary" ? !(r && (r.primary_id || r.external_cover)) : !(r && r.backup_id); };
@@ -9318,7 +9493,7 @@ try {
   // snapshot (no writes) -> Accept & Publish for real (snapshot before the
   // first schedule_days write, publish dialog), Import seed dry run (zero
   // changes, no writes) and a seed with an injected contact KEY (refused).
-  const SETUP_CARDS = ["setup_issues", "setup_roster", "setup_users", "setup_rules", "setup_availability", "setup_vacations", "setup_holidays", "setup_pay", "setup_east", "setup_generate", "setup_import", "setup_office", "setup_clear"];
+  const SETUP_CARDS = ["setup_issues", "setup_roster", "setup_users", "setup_app_shifts", "setup_rules", "setup_availability", "setup_vacations", "setup_holidays", "setup_pay", "setup_east", "setup_generate", "setup_import", "setup_office", "setup_clear"];
   // (openCard is defined above, before the Totals section that also needs it.)
   try {
     await clickTab(page, "setup");
@@ -12835,6 +13010,9 @@ try {
       } catch (e) { fail(`B7 ${theme}: ` + errLine(e)); try { await b7.screenshot({ path: path.join(OUT, `failure-b7-${theme}.png`), fullPage: true }); } catch (e2) {} }
       b7DeadLinkStatusLines = 0;
       await b7.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
+      // 11/17 (Prompt 35's smoke runs): the context's own routes too - an East read still being answered when the context closed threw
+      // an unhandled "route.fulfill: Route is already handled!" from routeEast and ended a whole run once
+      await b7Ctx.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
       await b7Ctx.close();
     }
   }
@@ -13234,38 +13412,55 @@ try {
   }
   try { await clickTab(page, "settings"); await page.click("button:has-text('Light')"); } catch (e) { /* leave the theme as it is */ }
 
-  // ====================== Prompt 29: APP call days (Faraz 10/1) ======================
-  // Decided 10/1: any day; ONE APP per day; everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log
-  // only. The APP table and its two functions are MOCKED here (appRoute: the live ones exist since the 2026-10-02 apply - nothing
-  // reaches the live project). M = next month (Central); D10 / D11 / D12 = its 10th / 11th / 12th. Each APP page runs in its
-  // own BrowserContext at 390 x 844 (the token is read from localStorage at send time).
-  //  1. APP A adds D10 + D11 on My APP days: ONE save POST with exactly { p_profile: A, p_add: [D10, D11], p_clear: [],
-  //     p_replace: false }; the cells read mine; the grid shows "A ..." on both (no line overflows, the appText colour, the
-  //     legend line); the contrast measure over the card and the grid lines passes in light and in dark; since
+  // ====================== Prompt 29: APP call days (Faraz 10/1) - typed APP shifts since Prompt 35 (Faraz 11/17) ======================
+  // Decided 10/1: everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log only. Prompt 35 (revision ac):
+  // the days are typed shifts (today one type, Inbox 7a-5p Mon-Fri, not on holidays, one APP a shift - its perDay), the lists
+  // [{ day, type }] and p_replace the APP a change takes over from (uuid | null). The APP tables and their functions are MOCKED
+  // here (appRoute: revision v exists live since the 2026-10-02 apply, revision ac is NOT applied - nothing reaches the live
+  // project). M = next month (Central); D10 / D11 / D12 / D13 = four days in a row of it that the first offered type runs (named
+  // after Prompt 29's 10th..13th; picked, never fixed - a weekend or a holiday unit's day has no Inbox shift), D14P / D16P / D20P
+  // = three later such days. Each APP page runs in its own BrowserContext at 390 x 844 (the token is read at send time).
+  //  1. APP A adds D10 + D11 on My APP shifts: ONE save POST with exactly { p_profile: A, p_add: [{ D10, inbox }, { D11, inbox }],
+  //     p_clear: [], p_replace: null }; the cells read mine; the grid shows "A ... 7a-5p" on both (no line overflows, the appText
+  //     colour, the legend line); the contrast measure over the card and the grid lines passes in light and in dark; since
   //     fix/painter-dark-mode (10/3): a third APP "Jo Applegate" holds D13 for this step only - at 390 px the grid's NAME shows
-  //     whole and apart ("P.App" / "J.App", spec H) and a week with an APP line is no taller than one without (measured on a
-  //     month the APP pages see with no vacation dot: their time_off answer leaves out its rows, so live data never reaches
-  //     the heights) - and in dark My APP days keeps its tile colours and outlines (E), shows the
+  //     whole and apart ("P.App" / "J.App", spec H), each A line's hours on one line of their own under the name, and a week
+  //     with an APP line is taller than one without by at most one hours line per APP shift in its tallest cell (Prompt 35, pin
+  //     moved deliberately 11/17; measured on a month the APP pages see with no vacation dot: their time_off answer leaves out
+  //     its rows, so live data never reaches the heights) - and in dark My APP shifts keeps its tile colours and outlines (E), shows the
   //     unsaved mark (G) and asks before unsaved taps leave Mine (F, BEHAVIOUR);
   //  2. APP B, holding the picture from before A's Save (a frozen copy the mock releases on B's first save), is refused on D10
   //     (400 AP005, the function's own words); the reload shows D10 taken by Appleton (aria-disabled); a further tap sends nothing;
-  //  3. A removes D11 (one POST p_clear [D11]); the grid keeps D10 only;
-  //  4. a surgeon, the coordinator and a plain viewer (main context) see the grid line and the day summary's APP line, get no
-  //     APP controls and no My APP days (the plain viewer no Mine tab) and send no save;
+  //  3. A removes D11 (one POST p_clear [{ D11, inbox }]); the grid keeps D10 only;
+  //  4. a surgeon, the coordinator and a plain viewer (main context) see the grid line and the day summary's APP line (the
+  //     shift, its hours and the name), get no APP controls and no My APP shifts (the plain viewer no Mine tab) and send no save;
   //  5. the scheduler (a fresh page of the main context: the main page is always served the empty picture) sets Bramble on
-  //     D12, changes D10 to Bramble (p_replace), clears D12 - never the day's own Save, no schedule_days write;
+  //     D12, changes D10 to Bramble (p_replace = Appleton), clears D12 - never the day's own Save, no schedule_days write;
   //  6. Setup > Users: "app" on the follower row = ONE PATCH { is_app: true } (no role key) + the audit "APP on"; "app" on a
   //     linked row is refused with no PATCH; rows without the column offer no "app";
-  //  7. ?public=1 shows nothing and requests none of the three paths; the share page carries no APP name;
-  //  8. "absent" (the migration not applied): My APP days says the sentence, no toast, no grid line; every forced 404 consumed;
+  //  7. ?public=1 shows nothing and requests none of the five APP paths; the share page carries no APP name;
+  //  8. "absent" (the migration not applied): My APP shifts says the sentence, no toast, no grid line; every forced 404 consumed;
   //  9. the stores reset; the client posted no audit row and no notification for any APP save (the function writes the audit).
   {
     const P = "P29 APP days";
     const cy = Number(todayCentral.slice(0, 4)), cm = Number(todayCentral.slice(5, 7));
     const NM = cm === 12 ? { y: cy + 1, m: 1 } : { y: cy, m: cm + 1 };
     const isoM = (d) => NM.y + "-" + String(NM.m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
-    const D10 = isoM(10), D11 = isoM(11), D12 = isoM(12);
     const MLABEL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][NM.m - 1] + " " + NM.y;
+    // Prompt 35: the first offered type of the served blob (as the save function reads it) and the days it runs next month
+    const P29T = appMockTypes().find(t => !t.retired) || null, P29HOL = appMockHolidayDays();
+    const p29Runs = (d) => !!P29T && P29T.weekdays.includes(appDow(d)) && (P29T.holidays || !P29HOL.has(d));
+    const nmAll = Array.from({ length: new Date(Date.UTC(NM.y, NM.m, 0)).getUTCDate() }, (_, i) => isoM(i + 1));
+    const r4at = nmAll.findIndex((d, i) => i + 3 < nmAll.length && [0, 1, 2, 3].every(k => p29Runs(nmAll[i + k])));
+    const run4 = r4at >= 0 ? nmAll.slice(r4at, r4at + 4) : [isoM(10), isoM(11), isoM(12), isoM(13)];
+    const later29 = r4at >= 0 ? nmAll.filter(d => d > run4[3] && p29Runs(d)) : [];
+    if (!P29T || r4at < 0 || later29.length < 3) fail(`${P}: ${MLABEL} has no four days in a row of the ${P29T ? P29T.id : "(none offered)"} shift with three more after them - the steps below run on fixed days and will fail`);
+    const D10 = run4[0], D11 = run4[1], D12 = run4[2];
+    const D14P = later29[0] || isoM(14), D16P = later29[1] || isoM(16), D20P = later29[2] || isoM(20);
+    const hourOf = (m) => { const h = Math.floor(m / 60) % 24, mm = m % 60; return (h % 12 === 0 ? 12 : h % 12) + (mm ? ":" + String(mm).padStart(2, "0") : "") + (h < 12 ? "a" : "p"); };
+    const TY = P29T ? P29T.id : "inbox", TL = P29T ? P29T.label : "Inbox", TH = P29T ? hourOf(P29T.startMin) + "\u2013" + hourOf(P29T.endMin) : "7a\u20135p";
+    const shf = (...days) => days.map(d => ({ day: d, type: TY })); // the save body's typed list
+    console.log(`     (${P}: the ${TY} shift (${TL} ${TH}) - D10..D13 ${run4.join(", ")}; D14P ${D14P}, D16P ${D16P}, D20P ${D20P})`);
     const { authEmail: _appAe, ...appARow } = APP_A_PROFILE;
     const { authEmail: _appBe, ...appBRow } = APP_B_PROFILE;
     const appSaves = () => writes.filter(w => w.path === "/rest/v1/rpc/save_app_days");
@@ -13321,11 +13516,12 @@ try {
       await pg.waitForSelector("[data-testid=appdays-card][data-state=ok]", { timeout: 10000 });
       for (let i = 0; i < 3 && (await pg.$eval("[data-testid=appdays-month]", el => el.textContent.trim())) !== MLABEL; i++) { await pg.click("[data-testid=appdays-next]"); await pg.waitForTimeout(150); }
       const lab = await pg.$eval("[data-testid=appdays-month]", el => el.textContent.trim());
-      if (lab !== MLABEL) throw new Error("My APP days did not reach " + MLABEL + " (it shows " + lab + ")");
+      if (lab !== MLABEL) throw new Error("My APP shifts did not reach " + MLABEL + " (it shows " + lab + ")");
     };
     const cellOf = (pg, d) => pg.$eval(`[data-testid=appdays-cell][data-day="${d}"]`, el => ({ state: el.getAttribute("data-state"), holder: el.getAttribute("data-holder"), dis: el.getAttribute("aria-disabled") }));
     const waitCell = (pg, d, st) => pg.waitForFunction(([d, st]) => { const el = document.querySelector(`[data-testid=appdays-cell][data-day="${d}"]`); return !!el && el.getAttribute("data-state") === st; }, [d, st], { timeout: 10000 });
-    const gridApp = (pg) => pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); return a ? { day: e.getAttribute("data-day"), text: a.textContent.trim(), profile: a.getAttribute("data-app-profile"), color: getComputedStyle(a).color } : null; }).filter(Boolean));
+    // Prompt 35: + the shift's type and its hours span (shown, whole - "A <name> 7a-5p")
+    const gridApp = (pg) => pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); if (!a) return null; const h = a.querySelector("[data-testid=cal-app-hours]"); return { day: e.getAttribute("data-day"), text: a.textContent.trim(), profile: a.getAttribute("data-app-profile"), type: a.getAttribute("data-app-type"), color: getComputedStyle(a).color, hours: h ? h.textContent : null, hoursShown: !!h && getComputedStyle(h).display !== "none" && h.getClientRects().length > 0, hoursCut: !!h && h.scrollWidth > h.clientWidth + 0.5 }; }).filter(Boolean));
     const lineOverflowOf = (pg) => pg.$$eval("[data-testid=cal-grid] .cal-line", els => els.filter(e => e.scrollWidth > e.clientWidth + 0.5).map(e => { const cell = e.closest("[data-day]"); return (cell ? cell.getAttribute("data-day") : "?") + ":" + e.textContent + " " + e.scrollWidth + ">" + e.clientWidth; }));
     // Re-check of spec H (10/3): step 1's week check measures cell heights, and at 390 px the one piece of LIVE content that
     // grows a cell is the vacation dots row (+9 px; the holiday name, the NOTE tag and the badges are hidden or absolute). The
@@ -13371,9 +13567,9 @@ try {
     // fix/painter-dark-mode (10/3, spec H): for step 1 only a third APP whose name starts like Appleton's - "Jo Applegate" on D13
     // (a harness row, no save) - so the phone grid must tell "Appleton" from "Applegate" (helpers.appGridLabels: "P.App" /
     // "J.App"); it leaves the store before step 2 (step 3b drafts D13 and step 5's pick list names A and B)
-    const APP_C_UID = "00000000-0000-4000-8000-0000000a0003", D13H = isoM(13);
+    const APP_C_UID = "00000000-0000-4000-8000-0000000a0003", D13H = run4[3];
     appProfiles.push({ id: APP_C_UID, person_id: null, role: "viewer", is_app: true, display_name: "Jo Applegate", email: null, created_at: "2026-10-01T00:00:00Z" });
-    appDayStore.push({ day: D13H, profile_id: APP_C_UID, source: "app", created_by: APP_C_UID, created_at: "2026-10-01T00:00:00Z" });
+    appDayStore.push({ day: D13H, shift_type: TY, profile_id: APP_C_UID, source: "app", created_by: APP_C_UID, created_at: "2026-10-01T00:00:00Z" });
     // ---- 1. APP A adds two days and sees them ----
     try {
       A = await mkAppCtx(APP_A_PROFILE, APP_A_JWT, "p29-app-a");
@@ -13384,11 +13580,11 @@ try {
       else ok(`${P} 1: the APP keeps the Mine tab ("Mine"), no Setup: ${tabs.map(t => t[0]).join(", ")}`);
       await checkPhoneNav(A.pg, `${P} 1 (APP, 390)`, { ...NAV_SURGEON, more: ["totals", "settings", "alerts"] }, true); // 11/1 item 6: no Paint offers, no pay
       await toMineM(A.pg);
-      // Prompt 31 Part B (B4): the call-totals card is the East-code surgeon's own - never on an APP's Mine (My APP days)
+      // Prompt 31 Part B (B4): the call-totals card is the East-code surgeon's own - never on an APP's Mine (My APP shifts)
       {
         const ctA = await A.pg.$$eval("[data-testid=call-totals-card]", els => els.length).catch(() => -1);
         if (ctA !== 0) fail(`P31B card (P29 APP A): ${ctA < 0 ? "the page could not be read" : ctA + " call-totals card(s)"} on the APP's Mine - the card is the East-code surgeon's own`);
-        else ok("P31B card (P29 APP A): no call-totals card on the APP's Mine (My APP days)");
+        else ok("P31B card (P29 APP A): no call-totals card on the APP's Mine (My APP shifts)");
       }
       const s0 = appSaves().length;
       await A.pg.click(`[data-testid=appdays-cell][data-day="${D10}"]`);
@@ -13401,20 +13597,21 @@ try {
       await waitCell(A.pg, D10, "mine"); await waitCell(A.pg, D11, "mine");
       const sv = appSaves().slice(s0);
       const savedText = await A.pg.$eval("[data-testid=appdays-saved]", el => el.textContent.trim());
-      const want = { p_profile: APP_A_UID, p_add: [D10, D11], p_clear: [], p_replace: false };
+      const want = { p_profile: APP_A_UID, p_add: shf(D10, D11), p_clear: [], p_replace: null };
+      const wantSaved = `Saved: ${TY} ${appMd(D10)}, ${appMd(D11)}`;
       if (sv.length !== 1) fail(`${P} 1: one Save should send exactly ONE save POST, got ${sv.length}`);
       else if (!sameJson(saveBody(sv[0]), want)) fail(`${P} 1: the save body should be ${JSON.stringify(want)}, got ${sv[0].body}`);
-      else if (savedText !== `Saved: on call ${appMd(D10)}, ${appMd(D11)}`) fail(`${P} 1: the saved note should name both days, got '${savedText}'`);
+      else if (savedText !== wantSaved) fail(`${P} 1: the saved note should read '${wantSaved}', got '${savedText}'`);
       else ok(`${P} 1: APP A's Save = ONE POST ${JSON.stringify(want)}; the cells read mine; '${savedText}'`);
       const au = appAudit.slice(audit0);
-      if (au.length !== 1 || au[0].summary !== `Pat Appleton: on call ${appMd(D10)}, ${appMd(D11)}`) fail(`${P} 1: the function's one audit row should read 'Pat Appleton: on call ${appMd(D10)}, ${appMd(D11)}', got ${JSON.stringify(au)}`);
+      if (au.length !== 1 || au[0].summary !== `Pat Appleton: ${TY} ${appMd(D10)}, ${appMd(D11)}`) fail(`${P} 1: the function's one audit row should read 'Pat Appleton: ${TY} ${appMd(D10)}, ${appMd(D11)}', got ${JSON.stringify(au)}`);
       else ok(`${P} 1: one audit row per Save (written by the function): '${au[0].summary}'`);
       const sw1 = await A.pg.evaluate(() => document.documentElement.scrollWidth);
-      if (sw1 > 392) fail(`${P} 1: My APP days scrolls sideways at 390 px (scrollWidth ${sw1})`); else ok(`${P} 1: My APP days fits 390 px (scrollWidth ${sw1})`);
+      if (sw1 > 392) fail(`${P} 1: My APP shifts scrolls sideways at 390 px (scrollWidth ${sw1})`); else ok(`${P} 1: My APP shifts fits 390 px (scrollWidth ${sw1})`);
       const tapSmall = await A.pg.$$eval("[data-testid=appdays-card] button", els => els.filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).map(e => ({ h: Math.round(e.getBoundingClientRect().height), t: (e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 16) })).filter(x => x.h < 36));
-      if (tapSmall.length) fail(`${P} 1: My APP days has ${tapSmall.length} button(s) under 36 px: ${JSON.stringify(tapSmall.slice(0, 5))}`); else ok(`${P} 1: every My APP days button is at least 36 px tall`);
+      if (tapSmall.length) fail(`${P} 1: My APP shifts has ${tapSmall.length} button(s) under 36 px: ${JSON.stringify(tapSmall.slice(0, 5))}`); else ok(`${P} 1: every My APP shifts button is at least 36 px tall`);
       await A.pg.screenshot({ path: path.join(OUT, "p29-appdays-light-390.png"), fullPage: true });
-      p29Judge("1 contrast: My APP days (light)", await p29Measure(A.pg, "[data-testid=appdays-card]"));
+      p29Judge("1 contrast: My APP shifts (light)", await p29Measure(A.pg, "[data-testid=appdays-card]"));
       for (const theme of ["light", "dark"]) {
         if (theme === "dark") {
           await A.settle();
@@ -13423,9 +13620,9 @@ try {
           await A.pg.waitForSelector("text=Synced", { timeout: 30000 });
           await A.pg.waitForTimeout(500);
           await toMineM(A.pg);
-          p29Judge("1 contrast: My APP days (dark)", await p29Measure(A.pg, "[data-testid=appdays-card]"));
+          p29Judge("1 contrast: My APP shifts (dark)", await p29Measure(A.pg, "[data-testid=appdays-card]"));
           await A.pg.screenshot({ path: path.join(OUT, "p29-appdays-dark-390.png"), fullPage: true });
-          // ---- fix/painter-dark-mode (10/3) on My APP days in DARK mode (computed styles): E - a free day tile is the dark surface,
+          // ---- fix/painter-dark-mode (10/3) on My APP shifts in DARK mode (computed styles): E - a free day tile is the dark surface,
           //      never rgb(46, 80, 144); the "+ You" / removal / today outlines survive (>= 3:1); the disabled month arrow has no
           //      fill while the live one keeps the raised one; an active navy button still gets #2E5090. G - a drafted day's unsaved
           //      mark >= 4.5:1 on its tile, the key line. F (BEHAVIOUR) - leaving Mine with unsaved taps asks: Cancel stays (the taps
@@ -13439,7 +13636,7 @@ try {
               const cs = getComputedStyle(el), u = el.querySelector("[data-testid=appdays-unsaved]");
               return { state: el.getAttribute("data-state"), bg: cs.backgroundColor, borderStyle: cs.borderTopStyle, border: cs.borderTopColor, borderRatio: ratio(parse(cs.borderTopColor), parse(cs.backgroundColor)), title: el.getAttribute("title"), mark: u ? { text: u.textContent.trim(), color: getComputedStyle(u).color, ratio: ratio(parse(getComputedStyle(u).color), parse(cs.backgroundColor)) } : null };
             });
-            const SURF = rgbOf(themeMod.THEME.dark.surface), D12 = isoM(12);
+            const SURF = rgbOf(themeMod.THEME.dark.surface); // D12: the step's third day of the shift (free here)
             const free12 = await tile(D12);
             if (free12.state !== "free" || free12.bg === "rgb(46, 80, 144)" || free12.bg !== SURF || free12.mark) fail(`${EP} E: the free tile ${D12} should be the dark surface ${SURF} with no unsaved mark, got ${JSON.stringify(free12)}`);
             else ok(`${EP} E: free tile ${D12} = ${free12.bg} (the dark surface, not rgb(46, 80, 144))`);
@@ -13502,10 +13699,10 @@ try {
               await A.pg.click('button[data-tab="calendar"]'); await A.pg.waitForTimeout(250);
               disc = { c1, c2, c3, nArrows, nLeave: asked.length, card: !!(await A.pg.$("[data-testid=appdays-card]")) };
             } finally { A.pg.off("dialog", onDlgF); }
-            const wantAsk = "Discard 2 unsaved APP day changes and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.";
+            const wantAsk = "Discard 2 unsaved APP shift changes and leave Mine?\n\nCancel stays on My APP shifts - tap Save to keep them.";
             if (!buDirty || buClean) fail(`${EP} F: beforeunload should be armed only while taps are unsaved (dirty ${buDirty}, after leaving ${buClean})`);
             else if (nCancel !== 1 || nOk !== 2 || asked[0] !== wantAsk || asked[1] !== wantAsk) fail(`${EP} F: each click off Mine with 2 unsaved taps should ask '${wantAsk.replace(/\n/g, " / ")}' exactly once (after Cancel ${nCancel}, after OK ${nOk}): ${JSON.stringify(asked)}`);
-            else if (!stay.card || stay.count !== "2 changes") fail(`${EP} F: Cancel should stay on My APP days with the 2 taps kept: ${JSON.stringify(stay)}`);
+            else if (!stay.card || stay.count !== "2 changes") fail(`${EP} F: Cancel should stay on My APP shifts with the 2 taps kept: ${JSON.stringify(stay)}`);
             else if (left.card || !left.grid) fail(`${EP} F: OK should leave Mine for the Calendar: ${JSON.stringify(left)}`);
             else if (after.count !== "No changes" || after.states.join(",") !== "free,mine" || after.key) fail(`${EP} F: after the confirmed leave the taps are gone (No changes, ${D12} free, ${D10} mine): ${JSON.stringify(after)}`);
             else if (disc.c1 !== "1 change" || disc.c2 !== "1 change" || disc.nArrows !== 2 || disc.c3 !== "No changes" || disc.nLeave !== 2 || disc.card) fail(`${EP} F: the arrows should keep the draft with no question, Discard empty it, and leaving after Discard ask nothing: ${JSON.stringify(disc)}`);
@@ -13536,7 +13733,7 @@ try {
               answerR = "accept";
               await banner.locator("button:has-text('Tap to reload')").click(); await R.waitForTimeout(250);
               const nOkR = askedR.length, accepted = await probe();
-              const wantR = "Discard 2 unsaved APP day changes and reload?\n\nCancel keeps them - tap Save first, then reload.";
+              const wantR = "Discard 2 unsaved APP shift changes and reload?\n\nCancel keeps them - tap Save first, then reload.";
               if (before.count !== "2 changes" || !before.bu) fail(`${EP} F reload: the setup should hold 2 unsaved taps with beforeunload armed: ${JSON.stringify(before)}`);
               else if (nCancelR !== 1 || askedR[0] !== wantR || cancelled.resets !== 0 || cancelled.count !== "2 changes" || !cancelled.card || !cancelled.bu) fail(`${EP} F reload: Tap to reload with 2 unsaved taps should ask '${wantR.replace(/\n/g, " / ")}' once and, on Cancel, clear nothing and keep the taps (beforeunload still armed): asked ${JSON.stringify(askedR)}, ${JSON.stringify(cancelled)}`);
               else if (nOkR !== 2 || askedR[1] !== wantR || accepted.resets !== 1 || accepted.bu) fail(`${EP} F reload: OK should run ONE hard reset and switch the card's beforeunload question off (no second question on a desktop): asked ${askedR.length}, ${JSON.stringify(accepted)}`);
@@ -13584,8 +13781,14 @@ try {
         if (!g10 || !g11 || !/^A/.test(g10.text) || !/^A/.test(g11.text)) fail(`${P} 1 (${theme}): D10 / D11 should carry the 'A ...' line on the grid: ${JSON.stringify(g)}`);
         else if (g10.color !== wantColor || g11.color !== wantColor) fail(`${P} 1 (${theme}): the APP line's colour should be THEME.${theme}.appText ${wantColor}, got ${g10.color} / ${g11.color}`);
         else if (over.length) fail(`${P} 1 (${theme}): ${over.length} grid line(s) overflow their cell at 390 px: ${over.slice(0, 4).join(", ")}`);
-        else if (!legend) fail(`${P} 1 (${theme}): the legend has no APP line although the month has APP days`);
+        else if (!legend) fail(`${P} 1 (${theme}): the legend has no APP line although the month has APP shifts`);
         else ok(`${P} 1 (${theme}): the grid shows '${g10.text}' on ${D10} and ${D11} in ${wantColor}, no line overflows at 390 px, the legend explains it`);
+        // Prompt 35: the shift's hours ride on the A line - shown and whole at 390 px, the type's own hours
+        const badHours = g.filter(x => x.hours !== TH || !x.hoursShown || x.hoursCut || x.type !== TY);
+        const legTxt = await A.pg.$eval("[data-testid=legend-app]", el => el.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
+        if (badHours.length) fail(`${P} 1 (${theme}): every A line should carry the ${TY} shift's hours '${TH}' shown and whole at 390 px: ${JSON.stringify(badHours)}`);
+        else if (legTxt !== `A name ${TH} = APP shift (its hours)`) fail(`${P} 1 (${theme}): the legend's APP line should read 'A name ${TH} = APP shift (its hours)', got '${legTxt}'`);
+        else ok(`${P} 1 (${theme}): every A line carries '${TH}' (data-app-type ${TY}), shown and whole at 390 px; the legend reads '${legTxt}'`);
         const appI2 = await A.pg.evaluate(() => ({ ring: document.querySelectorAll("[data-testid=cal-grid] [data-mine]").length, legend: !!document.querySelector("[data-testid=legend-mine]"), line: !!document.querySelector("[data-testid=my-next-call]") }));
         if (appI2.ring || appI2.legend || appI2.line) fail(`${P} 1 (${theme}): Item 2's own-days marks on an APP's page (no roster id): ${JSON.stringify(appI2)}`); else ok(`${P} 1 (${theme}): Item 2 - an APP gets no ring, no legend line and no 'Your next call'`);
         // fix/painter-dark-mode (10/3, spec H): at 390 px the NAME is measured, not only its line - the phone label (cal-app-code)
@@ -13596,24 +13799,52 @@ try {
         // the phone min-height, or a taller plain week could hide the APP week's growth. Re-check (10/3): the heights must not read
         // live content - the APP pages' time_off answer leaves out every row overlapping this month's grid (appTimeOff above), so
         // a cell with a vacation bar here means that control did not hold and the check FAILS (a week with a vacation bar is not measurable).
+        // pin moved deliberately 11/17 (Prompt 35): Faraz 11/17 asked for the A line to show its hours readable at 390 px ("A <name>
+        // 7a-5p"), and "A Appl 7a-5p" cannot fit one line of a ~45 px phone cell - so at <= 600 px the hours (cal-app-hours) take a
+        // line of their own under the name (flex-basis 100%, 8.5 px on a 9.5 px line): a week with APP lines is BY DESIGN taller.
+        // Kept intent: the name never wraps, never ellipsizes and never overflows (codeShown, the name hidden, nothing cut; the tag and
+        // the label on one row). New: every A line's hours line is visible, unclipped (its scrollWidth <= clientWidth), inside its
+        // cell and on ONE line of its own under the name; a week with APP lines may be taller than the month's weeks without one by
+        // at most one hours line per APP shift in its tallest cell - an hours line = what it adds under the name row (its bottom less
+        // the name row's: the 9.5 px line + the row gap above it; about 10.3 px of growth here, 76.3 vs 66) - and never more.
         {
           const names = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.map(e => { const a = e.querySelector("[data-testid=cal-app]"); if (!a) return null; const code = a.querySelector("[data-testid=cal-app-code]"), nm = a.querySelector(".cal-app-name"); return { day: e.getAttribute("data-day"), code: code ? code.textContent : null, codeShown: !!code && getComputedStyle(code).display !== "none", cut: !!code && code.scrollWidth > code.clientWidth + 0.5, w: code ? Math.round(code.scrollWidth * 10) / 10 : null, nameShown: !!nm && getComputedStyle(nm).display !== "none" }; }).filter(Boolean));
+          // Prompt 35: every A line's hours line, measured in its cell (add = its bottom less the name row's bottom)
+          const hrs = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => els.flatMap(e => Array.from(e.querySelectorAll("[data-testid=cal-app]")).map(a => {
+            const R = (el) => { const r = el.getBoundingClientRect(); return { t: r.top, b: r.bottom, l: r.left, r: r.right, h: r.height, w: r.width }; };
+            const r1 = (x) => Math.round(x * 10) / 10;
+            const tag = a.querySelector(".cal-app-tag"), code = a.querySelector("[data-testid=cal-app-code]"), h = a.querySelector("[data-testid=cal-app-hours]");
+            if (!h) return { day: e.getAttribute("data-day"), hours: null };
+            const cell = R(e), hr = R(h), tr = tag ? R(tag) : null, cr = code ? R(code) : null, cs = getComputedStyle(h);
+            const nameBottom = Math.max(tr ? tr.b : -Infinity, cr ? cr.b : -Infinity);
+            return { day: e.getAttribute("data-day"), hours: h.textContent, shown: cs.display !== "none" && cs.visibility !== "hidden" && hr.w > 0 && hr.h > 0,
+              unclipped: h.scrollWidth <= h.clientWidth + 0.5, inside: hr.l >= cell.l - 0.5 && hr.r <= cell.r + 0.5 && hr.t >= cell.t - 0.5 && hr.b <= cell.b + 0.5,
+              oneLine: Math.abs(hr.h - parseFloat(cs.lineHeight)) <= 0.5, own: !!tr && !!cr && Math.abs(tr.t - cr.t) <= 1 && hr.t >= nameBottom - 0.5,
+              h: r1(hr.h), add: r1(hr.b - nameBottom) };
+          })));
           const wk = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => {
             const by = {}, dotDays = [];
-            els.forEach(e => { const r = e.getBoundingClientRect(), k = Math.round(r.top); const w = by[k] || (by[k] = { top: k, n: 0, app: 0, dots: 0, h: 0 }); w.n++; if (e.querySelector("[data-testid=cal-app]")) w.app++; if (e.querySelector("[data-testid=cal-vac]")) { w.dots++; dotDays.push(e.getAttribute("data-day")); } w.h = Math.max(w.h, Math.round(r.height * 10) / 10); });
+            els.forEach(e => { const r = e.getBoundingClientRect(), k = Math.round(r.top); const w = by[k] || (by[k] = { top: k, n: 0, app: 0, dots: 0, h: 0, days: [] }); w.n++; w.days.push(e.getAttribute("data-day")); if (e.querySelector("[data-testid=cal-app]")) w.app++; if (e.querySelector("[data-testid=cal-vac]")) { w.dots++; dotDays.push(e.getAttribute("data-day")); } w.h = Math.max(w.h, Math.round(r.height * 10) / 10); });
             return { weeks: Object.keys(by).map(Number).sort((a, b) => a - b).map(k => by[k]), minH: els.length ? parseFloat(getComputedStyle(els[0]).minHeight) : NaN, dotDays };
           });
           const appWeeks = wk.weeks.filter(w => w.app), plainWeeks = wk.weeks.filter(w => !w.app);
           const n10 = names.find(x => x.day === D10), n13 = names.find(x => x.day === D13H);
           const maxPlain = plainWeeks.length ? Math.max(...plainWeeks.map(w => w.h)) : NaN, maxApp = appWeeks.length ? Math.max(...appWeeks.map(w => w.h)) : NaN;
+          // a week's allowance: its tallest cell's hours lines (one per APP shift there), each what it adds under its name row
+          const addOf = {}; hrs.forEach(x => { addOf[x.day] = Math.round(((addOf[x.day] || 0) + (x.add || 0)) * 10) / 10; });
+          const allowOf = (w) => Math.max(0, ...w.days.map(d => addOf[d] || 0));
+          const badHrs = hrs.filter(x => !x.hours || !x.shown || !x.unclipped || !x.inside || !x.oneLine || !x.own);
+          const overGrown = appWeeks.filter(w => w.h > maxPlain + allowOf(w) + 0.5);
+          const allowMax = appWeeks.length ? Math.max(...appWeeks.map(allowOf)) : 0;
           if (!n10 || !n13) fail(`${P} 1 H (${theme}): ${D10} (Appleton) and ${D13H} (Applegate) should both carry an APP line: ${JSON.stringify(names)}`);
           else if (names.some(x => !x.codeShown || x.nameShown || x.cut)) fail(`${P} 1 H (${theme}): at 390 px every APP line should show its short label whole (cal-app-code shown, the name hidden, nothing cut): ${JSON.stringify(names)}`);
           else if (n10.code !== "P.App" || n13.code !== "J.App" || n10.code === n13.code) fail(`${P} 1 H (${theme}): Appleton and Applegate should read apart ("P.App" / "J.App"), got '${n10.code}' / '${n13.code}'`);
+          else if (badHrs.length || hrs.length !== names.length) fail(`${P} 1 H (${theme}): every A line's hours (cal-app-hours) should be visible, unclipped, inside its cell and on ONE line of its own under the name (the tag and the label on one row above it): ${JSON.stringify(badHrs.length ? badHrs : hrs)}`);
           else if (wk.dotDays.length) fail(`${P} 1 H (${theme}): ${wk.dotDays.length} cell(s) of the month carry a vacation bar (${wk.dotDays.slice(0, 6).join(", ")}) although the APP pages' time_off answer leaves out every row overlapping ${NM_GRID_LO}..${NM_GRID_HI} - a week with a vacation bar is not measurable (the heights would read live content), so the week comparison cannot run: ${JSON.stringify(wk.weeks)}`);
           else if (!appWeeks.length || !plainWeeks.length || !(wk.minH > 0)) fail(`${P} 1 H (${theme}): the month should have weeks with and without an APP line and a phone min-height to compare: ${JSON.stringify(wk)}`);
-          else if (maxApp > maxPlain + 0.5) fail(`${P} 1 H (${theme}): a week with an APP line is ${maxApp}px tall, the month's weeks without one at most ${maxPlain}px - the APP line grew its row: ${JSON.stringify(wk.weeks)}`);
+          else if (overGrown.length) fail(`${P} 1 H (${theme}): a week with an APP line is ${maxApp}px tall, the month's weeks without one at most ${maxPlain}px - more than one hours line per APP shift in its tallest cell (allowed ${overGrown.map(w => "+" + allowOf(w) + "px on the week of " + w.days[0]).join(", ")}): ${JSON.stringify(wk.weeks)}`);
           else if (maxPlain > wk.minH + 0.5) fail(`${P} 1 H (${theme}): a week without an APP line is ${maxPlain}px, over the phone min-height ${wk.minH}px - it would hide an APP week's growth: ${JSON.stringify(wk.weeks)}`);
-          else ok(`${P} 1 H (${theme}): at 390 px the names show whole and apart - '${n10.code}' (Appleton, ${n10.w}px) / '${n13.code}' (Applegate, ${n13.w}px), no name cut; ${appWeeks.length} week(s) with an APP line ${maxApp}px, ${plainWeeks.length} without ${maxPlain}px (min-height ${wk.minH}px) - the row height holds; no vacation dot in the month (the APP pages' time_off answer left out ${appVacLeftOut.size} row(s) overlapping ${NM_GRID_LO}..${NM_GRID_HI}${appVacLeftOut.size ? ": " + [...appVacLeftOut].slice(0, 6).join(", ") : ""})`);
+          else ok(`${P} 1 H (${theme}): at 390 px the names show whole and apart - '${n10.code}' (Appleton, ${n10.w}px) / '${n13.code}' (Applegate, ${n13.w}px), no name cut; every A line's hours '${hrs[0].hours}' on one line of its own under the name (${hrs[0].h}px, +${hrs[0].add}px under the name row), whole and inside its cell; ${appWeeks.length} week(s) with an APP line ${maxApp}px, ${plainWeeks.length} without ${maxPlain}px (min-height ${wk.minH}px) - the growth +${Math.round((maxApp - maxPlain) * 10) / 10}px stays within one hours line per APP shift in the tallest cell (+${allowMax}px allowed); no vacation dot in the month (the APP pages' time_off answer left out ${appVacLeftOut.size} row(s) overlapping ${NM_GRID_LO}..${NM_GRID_HI}${appVacLeftOut.size ? ": " + [...appVacLeftOut].slice(0, 6).join(", ") : ""})`);
         }
         p29Judge(`1 contrast: the grid's APP lines (${theme})`, await p29Measure(A.pg, "[data-testid=cal-app]"));
         await A.pg.screenshot({ path: path.join(OUT, `p29-calendar-${theme}-390.png`), fullPage: true });
@@ -13639,8 +13870,8 @@ try {
       await B.pg.waitForSelector("[data-testid=appdays-error]", { timeout: 10000 });
       const errTxt = await B.pg.$eval("[data-testid=appdays-error]", el => el.textContent.trim());
       const sv = appSaves().slice(s0);
-      const wantErr = `${appMd(D10)} already has Pat Appleton - nothing was saved`;
-      if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_B_UID, p_add: [D10], p_clear: [], p_replace: false })) fail(`${P} 2: B's Save should send ONE POST { p_profile: B, p_add: [D10] }, got ${JSON.stringify(sv.map(w => w.body))}`);
+      const wantErr = `${appMd(D10)} ${TY} already has Pat Appleton - nothing was saved`;
+      if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_B_UID, p_add: shf(D10), p_clear: [], p_replace: null })) fail(`${P} 2: B's Save should send ONE POST { p_profile: B, p_add: [{ ${D10}, ${TY} }] }, got ${JSON.stringify(sv.map(w => w.body))}`);
       else if (errTxt !== wantErr) fail(`${P} 2: the refusal should read '${wantErr}', got '${errTxt}'`);
       else ok(`${P} 2: APP B refused on ${D10} (400 AP005): '${errTxt}'`);
       await waitCell(B.pg, D10, "taken");
@@ -13656,10 +13887,10 @@ try {
       const hintTxt = await B.pg.$eval("[data-testid=appdays-hint]", el => el.textContent.trim()).catch(() => "");
       const saveDisabled = await B.pg.$eval("[data-testid=appdays-save]", el => el.disabled);
       if (appSaves().length !== s1) fail(`${P} 2: a tap on the taken day sent a save`);
-      else if (hintTxt !== `${appMd(D10)} already has Pat Appleton` || !saveDisabled) fail(`${P} 2: a tap on the taken day should only say '${appMd(D10)} already has Pat Appleton' (Save disabled): hint '${hintTxt}', disabled ${saveDisabled}`);
+      else if (hintTxt !== `${appMd(D10)} ${TL} already has Pat Appleton.` || !saveDisabled) fail(`${P} 2: a tap on the taken day should only say '${appMd(D10)} ${TL} already has Pat Appleton.' (Save disabled): hint '${hintTxt}', disabled ${saveDisabled}`);
       else ok(`${P} 2: a further tap sends nothing - '${hintTxt}'`);
       await B.pg.screenshot({ path: path.join(OUT, "p29-app-b-refused-390.png"), fullPage: true });
-      // ---- 2b. The merge with main (10/2, Do first 9's phone rules): My APP days at 360 / 320 px and in phone landscape - no
+      // ---- 2b. The merge with main (10/2, Do first 9's phone rules): My APP shifts at 360 / 320 px and in phone landscape - no
       //      sideways scroll, every card button 36 px or taller and inside the screen, the seven day columns inside the card ----
       for (const [w, h] of [[360, 780], [320, 640], [844, 390]]) {
         await B.pg.setViewportSize({ width: w, height: h });
@@ -13671,10 +13902,10 @@ try {
           const cells = Array.from(card.querySelectorAll("[data-testid=appdays-cell]")).map(c => c.getBoundingClientRect());
           return { sw: document.documentElement.scrollWidth, vw, small: btns.filter(b => b.h < 36 && b.t !== "appdays-cell"), out: btns.filter(b => b.l < 0 || b.r > vw), cellsOut: cells.filter(r => r.left < cb.left - 0.5 || r.right > cb.right + 0.5).length, cells: cells.length };
         });
-        if (m.sw > m.vw + 2) fail(`${P} 2b (${w}x${h}): My APP days scrolls sideways (scrollWidth ${m.sw} > ${m.vw})`);
+        if (m.sw > m.vw + 2) fail(`${P} 2b (${w}x${h}): My APP shifts scrolls sideways (scrollWidth ${m.sw} > ${m.vw})`);
         else if (m.small.length || m.out.length) fail(`${P} 2b (${w}x${h}): card buttons under 36 px ${JSON.stringify(m.small)} / outside the screen ${JSON.stringify(m.out)}`);
         else if (m.cellsOut || m.cells < 28) fail(`${P} 2b (${w}x${h}): ${m.cellsOut} of ${m.cells} day cells outside the card`);
-        else ok(`${P} 2b (${w}x${h}): My APP days fits (scrollWidth ${m.sw}), every button 36 px+ inside the screen, ${m.cells} day cells inside the card`);
+        else ok(`${P} 2b (${w}x${h}): My APP shifts fits (scrollWidth ${m.sw}), every button 36 px+ inside the screen, ${m.cells} day cells inside the card`);
         await B.pg.screenshot({ path: path.join(OUT, `p29-appdays-${w}x${h}.png`), fullPage: true });
       }
       await B.pg.setViewportSize({ width: 390, height: 844 });
@@ -13693,21 +13924,21 @@ try {
       await waitCell(A.pg, D11, "free");
       const sv = appSaves().slice(s0);
       if (st.state !== "remove") fail(`${P} 3: a tap on his own ${D11} should draft 'remove', got ${st.state}`);
-      else if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_A_UID, p_add: [], p_clear: [D11], p_replace: false })) fail(`${P} 3: one POST { p_clear: [D11] } expected, got ${JSON.stringify(sv.map(w => w.body))}`);
-      else ok(`${P} 3: APP A removes ${D11} - ONE POST { p_add: [], p_clear: [${D11}] }`);
+      else if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_A_UID, p_add: [], p_clear: shf(D11), p_replace: null })) fail(`${P} 3: one POST { p_clear: [{ ${D11}, ${TY} }] } expected, got ${JSON.stringify(sv.map(w => w.body))}`);
+      else ok(`${P} 3: APP A removes ${D11} - ONE POST { p_add: [], p_clear: [{ day: ${D11}, type: ${TY} }] }`);
       await showM(A.pg);
       const g = await gridApp(A.pg);
       if (!g.some(x => x.day === D10) || g.some(x => x.day === D11)) fail(`${P} 3: the grid should keep the APP line on ${D10} only: ${JSON.stringify(g)}`);
       else ok(`${P} 3: the grid keeps 'A ...' on ${D10}, none on ${D11}`);
-      if (appAudit.slice(audit0).map(a => a.summary).pop() !== `Pat Appleton: removed ${appMd(D11)}`) fail(`${P} 3: the audit row should read 'Pat Appleton: removed ${appMd(D11)}': ${JSON.stringify(appAudit.slice(audit0))}`);
+      if (appAudit.slice(audit0).map(a => a.summary).pop() !== `Pat Appleton: removed ${TY} ${appMd(D11)}`) fail(`${P} 3: the audit row should read 'Pat Appleton: removed ${TY} ${appMd(D11)}': ${JSON.stringify(appAudit.slice(audit0))}`);
     } catch (e) { fail(`${P} 3 (the first APP removes one): ` + errLine(e)); }
     // ---- 3b. Range and Paste dates only draft (review 10/2: the card's glue was never driven): Range D10-D13 with D10 his own
-    //      = 3 adds + "skipped <D10> is already yours"; Paste "<M>/20, x" = 1 add + "not a date: x"; Discard; nothing is sent ----
+    //      = 3 adds + "skipped <D10> is already yours"; Paste "<M>/<D20P>, x" = 1 add + "not a date: x"; Discard; nothing is sent ----
     try {
       if (!A) throw new Error("the APP A page did not open");
       await toMineM(A.pg);
       const s0 = appSaves().length;
-      const D13 = isoM(13), D20 = isoM(20);
+      const D13 = D13H, D20 = D20P; // Prompt 35: D10..D13 run in a row, D20P is a later day of the shift
       const hintOf = () => A.pg.$eval("[data-testid=appdays-hint]", el => el.textContent.trim()).catch(() => "");
       const countOf = () => A.pg.$eval("[data-testid=appdays-count]", el => el.textContent.trim());
       await A.pg.click("[data-testid=appdays-range]");
@@ -13716,17 +13947,17 @@ try {
       await A.pg.click(`[data-testid=appdays-cell][data-day="${D13}"]`);
       const h2 = await hintOf();
       const states = (await Promise.all([D11, D12, D13].map(d => cellOf(A.pg, d)))).map(c => c.state).join(",");
-      const wantH2 = `Range ${appMd(D10)}-${appMd(D13)}: 3 days added to your changes - skipped ${appMd(D10)} is already yours`;
+      const wantH2 = `Range ${appMd(D10)}-${appMd(D13)}: 3 shifts added to your changes - skipped ${appMd(D10)} is already yours`;
       if (h1 !== `Range from ${appMd(D10)} - now tap the last day.`) fail(`${P} 3b: the first Range tap should ask for the last day, got '${h1}'`);
       else if (h2 !== wantH2 || states !== "add,add,add" || (await countOf()) !== "3 changes") fail(`${P} 3b: Range ${D10}-${D13} should draft 3 adds and say '${wantH2}': hint '${h2}', cells ${states}, count '${await countOf()}'`);
       else ok(`${P} 3b: Range drafts the free days and names the skip - '${h2}'`);
       await A.pg.click("[data-testid=appdays-range]");   // Range off
       await A.pg.click("[data-testid=appdays-paste-toggle]");
-      await A.pg.fill("[data-testid=appdays-paste]", `${NM.m}/20, x`);
+      await A.pg.fill("[data-testid=appdays-paste]", `${appMd(D20)}, x`);
       await A.pg.click("[data-testid=appdays-paste-add]");
       const h3 = await hintOf();
       const c20 = await cellOf(A.pg, D20);
-      if (h3 !== "Paste: 1 day added to your changes - not a date: x" || c20.state !== "add" || (await countOf()) !== "4 changes") fail(`${P} 3b: Paste '${NM.m}/20, x' should draft ${D20} and say 'not a date: x': hint '${h3}', ${D20} ${c20.state}, count '${await countOf()}'`);
+      if (h3 !== "Paste: 1 shift added to your changes - not a date: x" || c20.state !== "add" || (await countOf()) !== "4 changes") fail(`${P} 3b: Paste '${appMd(D20)}, x' should draft ${D20} and say 'not a date: x': hint '${h3}', ${D20} ${c20.state}, count '${await countOf()}'`);
       else ok(`${P} 3b: Paste dates drafts ${D20} and names the bad token - '${h3}'`);
       await A.pg.click("[data-testid=appdays-discard]");
       const back = (await Promise.all([D11, D12, D13, D20].map(d => cellOf(A.pg, d)))).map(c => c.state).join(",");
@@ -13734,7 +13965,7 @@ try {
       else if (back !== "free,free,free,free" || (await countOf()) !== "No changes") fail(`${P} 3b: Discard should drop every drafted day: ${back}, '${await countOf()}'`);
       else ok(`${P} 3b: Discard drops the drafted days; nothing was sent`);
     } catch (e) { fail(`${P} 3b (Range / Paste dates): ` + errLine(e)); }
-    // ---- 3c. The merge with main (10/2): My APP days' save errors stay in the card (role=alert until the next tap / Save), not in a
+    // ---- 3c. The merge with main (10/2): My APP shifts' save errors stay in the card (role=alert until the next tap / Save), not in a
     //      toast (Do first 8's model is for toasts); a 503 gateway page says the outcome is unknown and - ship review 10/2 - reloads
     //      the picture (nothing else did, though the words sent the APP to reload) and says the calendar was reloaded; a 401 whose
     //      forced refresh meets an auth 503 (Do first 7: "couldn't reach", never a sign-out) says the session couldn't be refreshed -
@@ -13742,7 +13973,7 @@ try {
     try {
       if (!A) throw new Error("the APP A page did not open");
       await toMineM(A.pg);
-      const D14 = isoM(14);
+      const D14 = D14P; // Prompt 35: a later day the shift runs
       let saveMode = "503";
       const forced = { save: 0, token: 0 };
       const xRoute = async (route) => {
@@ -13769,8 +14000,8 @@ try {
       await A.pg.waitForSelector("[data-testid=appdays-error]", { timeout: 10000 });
       const e503 = await A.pg.$eval("[data-testid=appdays-error]", el => el.textContent.trim());
       const t503 = await toastNow();
-      // pin moved deliberately 10/2 (ship review): the 503 reloads the APP days, and the words say that reload landed
-      const want503 = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. The calendar was reloaded - save again if a day is missing.";
+      // pin moved deliberately 10/2 (ship review): the 503 reloads the APP shifts, and the words say that reload landed (Prompt 35: "a shift")
+      const want503 = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. The calendar was reloaded - save again if a shift is missing.";
       const reloads503 = appServed.slice(served0).filter(x => x.sub === APP_A_UID && x.method === "GET" && x.path === "/rest/v1/app_call_days").length;
       if (e503 !== want503) fail(`${P} 3c: a 503 gateway page should say '${want503}', got '${e503}'`);
       else if (/may or may not/.test(t503)) fail(`${P} 3c: the save error also showed as a toast: '${t503}'`);
@@ -13786,7 +14017,7 @@ try {
       if (forced.token - st0 < 1) fail(`${P} 3c: the 401 should have made the client try ONE forced refresh (the token endpoint got ${forced.token - st0})`);
       else if (e401 !== want401) fail(`${P} 3c: a 401 with the refresh answered 503 should say '${want401}', got '${e401}'`);
       else if (signedOut.pw || !signedOut.card) fail(`${P} 3c: an auth 503 signed the APP out (password field ${signedOut.pw}, card ${signedOut.card}) - Do first 7: never a sign-out`);
-      else ok(`${P} 3c: a 401 + the refresh's 503 - '${e401}'; still signed in (no password field, My APP days on screen)`);
+      else ok(`${P} 3c: a 401 + the refresh's 503 - '${e401}'; still signed in (no password field, My APP shifts on screen)`);
       await A.pg.unroute((url) => url.hostname === SUPABASE_HOST && (url.pathname === "/rest/v1/rpc/save_app_days" || url.pathname === "/auth/v1/token"), xRoute).catch(() => {});
       await A.pg.click("[data-testid=appdays-discard]");
       if (appDayStore.some(r => r.day === D14)) fail(`${P} 3c: ${D14} landed in the store although every save was refused by the harness`);
@@ -13824,11 +14055,11 @@ try {
           let mineCard = false;
           if (tabs.includes("myschedule")) { await rp.click('button[data-tab="myschedule"]'); await rp.waitForTimeout(400); mineCard = !!(await rp.$("[data-testid=appdays-card]")); }
           if (!g10 || !/^A/.test(g10.text)) fail(`${P} 4 (${label}): ${D10} should show the APP line on the grid: ${JSON.stringify(g)}`);
-          else if (!/^APP\s*Pat Appleton$/.test(ed.line) || ed.you) fail(`${P} 4 (${label}): the day summary should show 'APP Pat Appleton' (no You chip), got '${ed.line}' you=${ed.you}`);
+          else if (ed.line.replace(/\s/g, "") !== ("APP" + TL + TH + "Pat Appleton").replace(/\s/g, "") || ed.you) fail(`${P} 4 (${label}): the day summary should show 'APP ${TL} ${TH} Pat Appleton' (no You chip), got '${ed.line}' you=${ed.you}`);
           else if (ed.ctrl.length) fail(`${P} 4 (${label}): the day summary carries APP controls: ${ed.ctrl.join(", ")}`);
-          else if (mineCard || (label === "viewer" && tabs.includes("myschedule"))) fail(`${P} 4 (${label}): My APP days / the Mine tab should not be there (tabs ${tabs.join(",")}, card ${mineCard})`);
+          else if (mineCard || (label === "viewer" && tabs.includes("myschedule"))) fail(`${P} 4 (${label}): My APP shifts / the Mine tab should not be there (tabs ${tabs.join(",")}, card ${mineCard})`);
           else if (appSaves().length !== s0) fail(`${P} 4 (${label}): the page sent a save`);
-          else ok(`${P} 4 (${label}): sees '${g10.text}' on ${D10} and '${ed.line}' in the day summary - no controls, no My APP days${label === "viewer" ? ", no Mine tab" : ""}, no save`);
+          else ok(`${P} 4 (${label}): sees '${g10.text}' on ${D10} and '${ed.line}' in the day summary - no controls, no My APP shifts${label === "viewer" ? ", no Mine tab" : ""}, no save`);
         } catch (e) { fail(`${P} 4 (${label}): ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, `failure-p29-4-${label}.png`), fullPage: true }); } catch (e2) {} }
         try { await settleR(); await rp.close(); } catch (e) {}
       }
@@ -13862,8 +14093,9 @@ try {
       if (!optVals.includes(APP_A_UID) || !optVals.includes(APP_B_UID) || optVals[0] !== "") fail(`${P} 5: the scheduler's pick list should be 'none' + both APPs: ${JSON.stringify(optVals)}`);
       else ok(`${P} 5: the day editor's APP line lists none + both APP accounts`);
       let r = await runApp(APP_B_UID, "editor-app-set");
-      if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [D12], p_clear: [], p_replace: false })) fail(`${P} 5: Set APP on ${D12} should send ONE POST { p_profile: B, p_add: [D12], p_replace: false }: ${JSON.stringify(r)}`);
-      else ok(`${P} 5: Set APP on ${D12} = ONE POST { p_profile: B, p_add: [${D12}], p_replace: false } - '${r.status}'`);
+      if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: shf(D12), p_clear: [], p_replace: null })) fail(`${P} 5: Set APP on ${D12} should send ONE POST { p_profile: B, p_add: [{ ${D12}, ${TY} }], p_replace: null }: ${JSON.stringify(r)}`);
+      else if (r.status !== `${TL} ${appMd(D12)}: Lee Bramble`) fail(`${P} 5: Set APP's status should read '${TL} ${appMd(D12)}: Lee Bramble', got '${r.status}'`);
+      else ok(`${P} 5: Set APP on ${D12} = ONE POST { p_profile: B, p_add: [{ day: ${D12}, type: ${TY} }], p_replace: null } - '${r.status}'`);
       // the merge with main (10/2, Do first 8): the editor's APP toast never sits on the day editor's action row (Cancel / Save) - P29 LIFT CHECK
       // (the text from the message span, only the geometry from the box - Do first 8's smoke pin)
       {
@@ -13880,29 +14112,33 @@ try {
       await closeEd();
       await openEd(D10);
       const holder10 = await sc.$eval("[data-testid=editor-app-holder]", el => el.textContent.trim()).catch(() => "");
+      await sc.selectOption("[data-testid=editor-app]", APP_B_UID);
+      const changeLabel = await sc.$eval("[data-testid=editor-app-set]", el => el.textContent.trim()).catch(() => "");
       r = await runApp(APP_B_UID, "editor-app-set");
       if (holder10 !== "Pat Appleton") fail(`${P} 5: ${D10}'s APP line should name Pat Appleton before the change, got '${holder10}'`);
-      else if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [D10], p_clear: [], p_replace: true })) fail(`${P} 5: changing ${D10} should send ONE POST with p_replace true: ${JSON.stringify(r)}`);
-      else ok(`${P} 5: change ${D10} Appleton -> Bramble = ONE POST with p_replace: true`);
+      else if (changeLabel !== "Change APP") fail(`${P} 5: on a held one-APP shift the button should read 'Change APP', got '${changeLabel}'`);
+      else if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: shf(D10), p_clear: [], p_replace: APP_A_UID })) fail(`${P} 5: changing ${D10} should send ONE POST with p_replace = Appleton's profile: ${JSON.stringify(r)}`);
+      else ok(`${P} 5: change ${D10} Appleton -> Bramble ('Change APP') = ONE POST with p_replace: Appleton's profile id - '${r.status}'`);
       await closeEd();
       await sc.waitForFunction((d) => { const c = document.querySelector(`[data-day="${d}"] [data-testid=cal-app]`); return !!c && /Bramble/.test(c.textContent); }, D10, { timeout: 10000 }).then(() => ok(`${P} 5: the grid shows 'A Bramble' on ${D10}`)).catch(() => fail(`${P} 5: the grid does not show 'A Bramble' on ${D10} after the change`));
       await openEd(D12);
       r = await runApp(null, "editor-app-clear");
-      if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [], p_clear: [D12], p_replace: false })) fail(`${P} 5: Clear APP on ${D12} should send ONE POST { p_profile: B, p_clear: [D12] }: ${JSON.stringify(r)}`);
-      else ok(`${P} 5: Clear APP on ${D12} = ONE POST { p_profile: B, p_add: [], p_clear: [${D12}] } - '${r.status}'`);
+      if (r.err || r.sv.length !== 1 || !sameJson(saveBody(r.sv[0]), { p_profile: APP_B_UID, p_add: [], p_clear: shf(D12), p_replace: null })) fail(`${P} 5: Clear on ${D12} should send ONE POST { p_profile: B, p_clear: [{ ${D12}, ${TY} }] }: ${JSON.stringify(r)}`);
+      else if (r.status !== `${TL} cleared for ${appMd(D12)} (Lee Bramble)`) fail(`${P} 5: Clear's status should read '${TL} cleared for ${appMd(D12)} (Lee Bramble)', got '${r.status}'`);
+      else ok(`${P} 5: Clear on ${D12} = ONE POST { p_profile: B, p_add: [], p_clear: [{ day: ${D12}, type: ${TY} }] } - '${r.status}'`);
       await closeEd();
       const days1 = writes.filter(w => w.path.startsWith("/rest/v1/schedule_days")).length;
       if (days1 !== days0) fail(`${P} 5: the APP line wrote ${days1 - days0} schedule_days row(s) - it must never touch the day`); else ok(`${P} 5: no schedule_days write (the day's own Save was never pressed)`);
       const sums = appAudit.slice(audit0).map(a => a.summary);
-      const wantSums = [`Lee Bramble: on call ${appMd(D12)}`, `Lee Bramble: on call ${appMd(D10)} (was Pat Appleton)`, `Lee Bramble: removed ${appMd(D12)}`];
+      const wantSums = [`Lee Bramble: ${TY} ${appMd(D12)}`, `Lee Bramble: ${TY} ${appMd(D10)} (was Pat Appleton)`, `Lee Bramble: removed ${TY} ${appMd(D12)}`];
       if (!sameJson(sums.slice(-3), wantSums)) fail(`${P} 5: the audit rows should read ${JSON.stringify(wantSums)}, got ${JSON.stringify(sums)}`); else ok(`${P} 5: the audit rows: ${wantSums.join(" | ")}`);
     } catch (e) { fail(`${P} 5 (the scheduler's APP line): ` + errLine(e)); try { if (sc) await sc.screenshot({ path: path.join(OUT, "failure-p29-5.png"), fullPage: true }); } catch (e2) {} }
     // ---- 5b. Ship review 10/2: the scheduler's Set APP during an outage - save_app_days answers a 503 gateway page and the reload
     //      after it (app_call_days) a 500. The editor's block turns to "APP days could not be loaded", and the save's own words stay
-    //      under it (editor-app-error, role=alert): the outcome is unknown, in the editor's words (never "My APP days") - they used
+    //      under it (editor-app-error, role=alert): the outcome is unknown, in the editor's words (never "My APP shifts") - they used
     //      to vanish behind the load line, leaving only the reload's toast. A fresh scheduler page; every answer is the harness's. ----
     {
-      const D16 = isoM(16);
+      const D16 = D16P; // Prompt 35: a later day the shift runs
       const sb = await context.newPage();
       watchPage(sb, "p29-scheduler-outage");
       const settleSb = restReadsSettled(sb);
@@ -13946,12 +14182,12 @@ try {
           const errEl = document.querySelector("[data-testid=editor-app-error]");
           return { err: t("[data-testid=editor-app-error]"), role: errEl ? errEl.getAttribute("role") : "", line: t("[data-testid=editor-app-unavailable]"), toast: t("[data-testid=toast]"), set: !!document.querySelector("[data-testid=editor-app-set]") };
         });
-        const wantErr = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. Check this day's APP after the next refresh, then set it again if it is wrong.";
+        const wantErr = "Couldn't confirm the save (HTTP 503) - it may or may not have gone through. Check this day's APPs after the next refresh, then set them again if one is wrong.";
         if (holder0 !== "none") fail(`${P} 5b: ${D16} should have no APP before the outage step, got '${holder0}'`);
         else if (forced.save !== 1 || forced.read < 1) fail(`${P} 5b: the harness should have refused ONE save (503) and at least one reload (500): ${JSON.stringify(forced)}`);
         else if (got.err !== wantErr || got.role !== "alert") fail(`${P} 5b: the editor should keep the save's words '${wantErr}' (role=alert) under the failed line, got ${JSON.stringify(got)}`);
         else if (!/^APP\s*APP days could not be loaded$/.test(got.line) || got.set) fail(`${P} 5b: the block should read 'APP days could not be loaded' with no controls, got ${JSON.stringify(got)}`);
-        else if (!got.toast.includes("Couldn't load the APP days - the last loaded days are kept.") || /may or may not/.test(got.toast)) fail(`${P} 5b: the reload's failure should be the toast (and the save's words not), got '${got.toast}'`);
+        else if (!got.toast.includes("Couldn't load the APP shifts and vacations - the last loaded ones are kept.") || /may or may not/.test(got.toast)) fail(`${P} 5b: the reload's failure should be the toast (and the save's words not), got '${got.toast}'`);
         else if (appDayStore.some(r => r.day === D16)) fail(`${P} 5b: ${D16} landed in the store although the harness refused the save`);
         else ok(`${P} 5b: Set APP during an outage (save 503, reload 500) - the block says 'APP days could not be loaded' and keeps '${got.err}' under it (role=alert); the toast is the reload's`);
         await sb.screenshot({ path: path.join(OUT, "p29-editor-outage.png"), fullPage: false });
@@ -14019,7 +14255,7 @@ try {
         else if (/Appleton|Bramble/.test(pv.text)) fail(`${P} 7: ?public=1 page text names an APP`);
         else if (ppApp.length) fail(`${P} 7: ?public=1 requested the APP paths: ${ppApp.join(", ")}`);
         else if (writes.filter(w => w.public).length !== pubW0) fail(`${P} 7: ?public=1 attempted a write`);
-        else ok(`${P} 7: ?public=1 on ${MLABEL} (a day with an APP in the store) - no APP line, no legend line, no APP name, ZERO requests to the three APP paths, no write`);
+        else ok(`${P} 7: ?public=1 on ${MLABEL} (a day with an APP in the store) - no APP line, no legend line, no APP name, ZERO requests to the five APP paths, no write`);
         if (ppErrors.length) fail(`${P} 7: public page errors: ${ppErrors.join(" | ")}`);
       } catch (e) { fail(`${P} 7 (?public=1): ` + errLine(e)); }
       try { await pp.close(); } catch (e) {}
@@ -14058,8 +14294,8 @@ try {
       const g = await gridApp(a2);
       await a2.waitForTimeout(500);
       const forced404 = appServed.slice(served0).filter(x => x.status === 404 && x.sub === APP_A_UID).length;
-      if (stTxt !== "APP days are available after the next database update.") fail(`${P} 8: My APP days should say the unavailable sentence, got '${stTxt}'`);
-      else if (/APP days/.test(toast)) fail(`${P} 8: a toast about the APP days showed: '${toast}'`);
+      if (stTxt !== "APP shifts and vacations are available after the next database update.") fail(`${P} 8: My APP shifts should say the unavailable sentence, got '${stTxt}'`);
+      else if (/APP (days|shifts)/.test(toast)) fail(`${P} 8: a toast about the APP shifts showed: '${toast}'`);
       else if (g.length) fail(`${P} 8: the grid shows APP lines while the table is absent`);
       else if (!forced404) fail(`${P} 8: the state was not forced by the harness's 404`);
       else ok(`${P} 8: absent (404 PGRST205) - '${stTxt}', no toast, no grid line (${forced404} forced 404 served)`);
@@ -14097,7 +14333,7 @@ try {
         await rp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
         await rp.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
         await loadApp(rp, "P29 viewer page (APP read 500)");
-        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        const want = "Couldn't load the APP shifts and vacations - the A lines on the calendar may be missing until they load.";
         const { toast: toastTxt, pill: errPill } = await p29LoadToast(rp, want);
         // 10/4: the reads are counted once the page's reads have settled (no REST read out for 500 ms) - not at the toast's
         // moment, where a read whose route callback had not run yet would be missed
@@ -14158,7 +14394,7 @@ try {
         appSlowHold = async () => { if (!(await waitFor(() => rtq.joins >= 2 && rerunProfileReads > 0, 20000, 50))) holdCeiling = true; };
         await rq.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(VIEWER_PROFILE));
         await loadApp(rq, "P29 viewer page (APP read 500, Realtime joins answered)");
-        const want = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+        const want = "Couldn't load the APP shifts and vacations - the A lines on the calendar may be missing until they load.";
         const { toast: toastTxt, pill: errPill } = await p29LoadToast(rq, want);
         await waitFor(() => rtq.joins >= 2, 15000); // 10/4: the join count is read once the second join came, not at a fixed moment
         // 10/4: replaces the fixed 2.5 s - the reads are counted once the page's REST reads have settled (none out for 500 ms). A
@@ -14184,17 +14420,381 @@ try {
       appDaysMode = "ok";
       await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
     }
+    // ====================== P35: APP shifts with hours + APP vacations (Prompt 35, Faraz 11/17 - revision ac) ======================
+    // Faraz's decisions (11/17): an APP puts itself on typed shifts with hours (one type for now - Inbox 7a-5p on weekdays, not on
+    // holidays, one APP a shift: Setup data, perDay enforced by the database), never two overlapping shifts and never one on its own
+    // vacation; APP vacations are self-entered with no approval (the scheduler and the office add / change / remove one for any
+    // APP), refused over the APP's own shift ("remove the shift first"), with no 2-around guard. Everyone signed in sees the shifts
+    // (A <name> <hours>) and the vacations; ?public=1, share and print show nothing; no e-mails or notices - the functions' audit
+    // rows only. Inside the P29 block (its page helpers), on fresh stores; the tables and functions are the harness's (appRoute -
+    // revision ac is NOT applied live). E1 / E2 = D10 / D11 (two days in a row of the first offered type), F1 = D12, VA..VB =
+    // D13..D14P (APP A's vacation, VA a day the shift runs), WA..WB = D16P..D20P (the office's vacation for APP B).
+    //  a. APP A (390 x 844) adds E1 + E2 on My APP shifts (ONE save POST, the audit row "Pat Appleton: inbox E1, E2") and the
+    //     vacation VA-VB on My vacations (ONE save_app_vacations POST { p_profile, p_add: [{ start, end }], p_remove: [] }, the audit
+    //     row "Pat Appleton: vacation VA-VB"); the calendar shows "A <name> 7a-5p" on E1 / E2 and "A <name>" in the vacation bar
+    //     over VA..VB, the legend both lines, the day summary the shift (You) and "APPs off: Pat Appleton" - readable at 390 px in
+    //     light and in dark (the hours shown whole, every text element of both at its contrast minimum);
+    //  b. APP B sees E1 taken (a tap says "<E1> Inbox already has Pat Appleton." and sends nothing), takes F1 (ONE POST), and reads
+    //     A's vacation in Time off with no Edit / Remove;
+    //  c. a tap on A's own vacation day says "<VA> is on your vacation - change the vacation first." and sends nothing; a vacation
+    //     over A's own shift is refused before any request ("... - remove the shift first."); the scheduler's Set APP of A on VA is
+    //     refused by the database (400 AP010 - its words in the day editor, nothing stored);
+    //  d. the office (coordinator, 390 px) in Time off > APP vacations: a vacation over B's shift F1 is refused before any request;
+    //     WA-WB for B = ONE POST { p_profile: B, ... } (the audit row's source "office"), the line in the list; the office changes it
+    //     to WA (ONE POST: the old id removed + the new range, one audit row) and removes it (asked first, ONE POST p_remove [id]);
+    //  e. ?public=1 with all of it in the stores: no A line, no APP vacation, no APP legend line, no APP name, ZERO requests to the
+    //     five APP paths, no write; the scheduler's share page names no APP while his grid shows both;
+    //  f. Setup > APP shifts (types): the type's row as served, Retire refused while it has shifts from today on, Add a type then
+    //     Revert - no write. (Step 9 below: every forced answer's line consumed, no client audit / notification / e-mail.)
+    {
+      const Q = "P35 APP shifts";
+      appDayStore = []; appVacStore = []; appStale = null; appDaysMode = "ok";
+      appProfiles = [appARow, appBRow];
+      const E1 = D10, E2 = D11, F1 = D12, VA = D13H, VB = D14P, WA = D16P, WB = D20P;
+      const vacDays = []; for (let x = VA; x <= VB; x = nmShift(x, 1)) vacDays.push(x);
+      const vacSaves = () => writes.filter(w => w.path === "/rest/v1/rpc/save_app_vacations");
+      const vacRng = (s, e) => e > s ? appMd(s) + "-" + appMd(e) : appMd(s);
+      const hintOf = (pg) => pg.$eval("[data-testid=appdays-hint]", el => el.textContent.trim()).catch(() => "");
+      const forceTap = async (pg, d) => { await pg.$eval(`[data-testid=appdays-cell][data-day="${d}"]`, el => el.scrollIntoView({ block: "center" })); await pg.click(`[data-testid=appdays-cell][data-day="${d}"]`, { force: true }); await pg.waitForTimeout(300); };
+      const lastAudit = () => appAudit[appAudit.length - 1] || null;
+      const j35 = (label, rows) => {
+        const bad = rows.filter(r => r.ratio < r.min);
+        if (!rows.length) fail(`${Q} ${label}: nothing measured (the region did not render)`);
+        else if (bad.length) fail(`${Q} ${label}: ${bad.length} of ${rows.length} text element(s) below their minimum: ` + bad.slice(0, 6).map(r => `<${r.tag}> '${r.text}' ${r.color} on ${r.bg} ${r.ratio}:1 (min ${r.min})`).join("; "));
+        else ok(`${Q} ${label}: ${rows.length} text element(s) at their minimum or better (worst ${Math.min(...rows.map(r => r.ratio))}:1)`);
+      };
+      let A35 = null, B35 = null, sc35 = null, settleSc35 = null;
+      // ---- a. APP A adds two shifts and a vacation; the calendar, the legend and the day summary show both, readable at 390 px ----
+      try {
+        A35 = await mkAppCtx(APP_A_PROFILE, APP_A_JWT, "p35-app-a");
+        await loadApp(A35.pg, "P35 APP A page");
+        await toMineM(A35.pg);
+        const picker = !!(await A35.pg.$("[data-testid=appdays-type]"));
+        const note = await A35.pg.$eval("[data-testid=appdays-type-note]", el => el.textContent.trim()).catch(() => "");
+        const offered = appMockTypes().filter(t => !t.retired).length;
+        if (offered < 2 && picker) fail(`${Q} a: with ${offered} offered type My APP shifts should show no type picker`);
+        else if (!note.startsWith(`${TL} (${TH}, `)) fail(`${Q} a: the type note should start '${TL} (${TH}, ', got '${note}'`);
+        else ok(`${Q} a: ${offered} offered type - no picker; the note '${note}'`);
+        const s0 = appSaves().length;
+        await A35.pg.click(`[data-testid=appdays-cell][data-day="${E1}"]`);
+        await A35.pg.click(`[data-testid=appdays-cell][data-day="${E2}"]`);
+        await A35.pg.click("[data-testid=appdays-save]");
+        await A35.pg.waitForSelector("[data-testid=appdays-saved]", { timeout: 10000 });
+        await waitCell(A35.pg, E1, "mine"); await waitCell(A35.pg, E2, "mine");
+        const sv = appSaves().slice(s0), au = lastAudit();
+        const savedTxt = await A35.pg.$eval("[data-testid=appdays-saved]", el => el.textContent.trim()).catch(() => "");
+        const want = { p_profile: APP_A_UID, p_add: shf(E1, E2), p_clear: [], p_replace: null };
+        if (sv.length !== 1 || !sameJson(saveBody(sv[0]), want)) fail(`${Q} a: one Save should send ONE POST ${JSON.stringify(want)}, got ${JSON.stringify(sv.map(w => w.body))}`);
+        else if (savedTxt !== `Saved: ${TY} ${appMd(E1)}, ${appMd(E2)}`) fail(`${Q} a: the saved note should read 'Saved: ${TY} ${appMd(E1)}, ${appMd(E2)}', got '${savedTxt}'`);
+        else if (!au || au.action !== "appdays.save" || au.source !== "app" || au.summary !== `Pat Appleton: ${TY} ${appMd(E1)}, ${appMd(E2)}`) fail(`${Q} a: the function's audit row should read 'Pat Appleton: ${TY} ${appMd(E1)}, ${appMd(E2)}' (appdays.save, source app), got ${JSON.stringify(au)}`);
+        else ok(`${Q} a: APP A adds two ${TY} shifts - ONE POST, '${savedTxt}', the audit row '${au.summary}'`);
+        await A35.pg.waitForSelector("[data-testid=appvac-mine][data-state=ok]", { timeout: 10000 });
+        const v0 = vacSaves().length;
+        await A35.pg.fill("[data-testid=appvac-mine] [data-testid=appvac-start]", VA);
+        await A35.pg.fill("[data-testid=appvac-mine] [data-testid=appvac-end]", VB);
+        await A35.pg.click("[data-testid=appvac-mine] [data-testid=appvac-add]");
+        await A35.pg.waitForSelector("[data-testid=appvac-mine] [data-testid=appvac-saved]", { timeout: 10000 });
+        await A35.pg.waitForSelector(`[data-testid=appvac-mine] [data-testid="appvac-line-${APP_A_UID}-${VA}"]`, { timeout: 10000 });
+        const vs = vacSaves().slice(v0), av = lastAudit();
+        const vSaved = await A35.pg.$eval("[data-testid=appvac-mine] [data-testid=appvac-saved]", el => el.textContent.trim()).catch(() => "");
+        const wantV = { p_profile: APP_A_UID, p_add: [{ start: VA, end: VB }], p_remove: [] };
+        if (vs.length !== 1 || !sameJson(saveBody(vs[0]), wantV)) fail(`${Q} a: Add vacation should send ONE save_app_vacations POST ${JSON.stringify(wantV)}, got ${JSON.stringify(vs.map(w => w.body))}`);
+        else if (vSaved !== `Saved: vacation ${vacRng(VA, VB)}`) fail(`${Q} a: the vacation's saved note should read 'Saved: vacation ${vacRng(VA, VB)}', got '${vSaved}'`);
+        else if (!av || av.action !== "appvac.save" || av.source !== "app" || av.summary !== `Pat Appleton: vacation ${vacRng(VA, VB)}`) fail(`${Q} a: the vacation's audit row should read 'Pat Appleton: vacation ${vacRng(VA, VB)}' (appvac.save, source app), got ${JSON.stringify(av)}`);
+        else ok(`${Q} a: APP A's own vacation (no approval) - ONE POST ${JSON.stringify(wantV)}, '${vSaved}', the audit row '${av.summary}'`);
+        await waitCell(A35.pg, VA, "away");
+        ok(`${Q} a: My APP shifts reads ${VA} 'away' once the vacation is saved`);
+        for (const theme of ["light", "dark"]) {
+          if (theme === "dark") {
+            await A35.settle();
+            await A35.pg.evaluate(() => { try { localStorage.removeItem("silvis-theme"); localStorage.setItem("silvis-dark-mode", "true"); } catch (e) {} });
+            await A35.pg.reload({ waitUntil: "domcontentloaded" });
+            await A35.pg.waitForSelector("text=Synced", { timeout: 30000 });
+            await A35.pg.waitForTimeout(500);
+          }
+          await showM(A35.pg);
+          await A35.pg.waitForSelector(`[data-testid=cal-grid] [data-appvac="${APP_A_UID}"]`, { timeout: 10000 }).catch(() => {});
+          const g = await gridApp(A35.pg);
+          const ge = [E1, E2].map(d => g.find(x => x.day === d) || null);
+          const wantColor = rgbOf(themeMod.THEME[theme].appText);
+          const bar = await A35.pg.evaluate(([pid, days]) => days.map(d => {
+            const c = document.querySelector(`[data-testid=cal-grid] .cal-cell[data-day="${d}"]`), w = c && c.querySelector(`[data-appvac="${pid}"]`);
+            if (!w) return { d, found: false };
+            const code = w.querySelector(".cal-code"), tag = w.querySelector(".cal-vac-app-tag");
+            return { d, found: true, tag: tag ? tag.textContent : null, code: code ? code.textContent : null, codeShown: !!code && getComputedStyle(code).display !== "none", cut: !!code && code.scrollWidth > code.clientWidth + 0.5, title: w.getAttribute("title") };
+          }), [APP_A_UID, vacDays]);
+          const leg = await A35.pg.evaluate(() => { const t = (s) => ((document.querySelector(s) || {}).textContent || "").replace(/\s+/g, " ").trim(); return { app: t("[data-testid=legend-app]"), vac: t("[data-testid=legend-appvac]") }; });
+          const over = await lineOverflowOf(A35.pg);
+          const sw = await A35.pg.evaluate(() => document.documentElement.scrollWidth);
+          const badBar = bar.filter(b => !b.found || b.tag !== "A" || !b.codeShown || b.cut || b.title !== "APP Pat Appleton on vacation");
+          if (ge.some(x => !x || x.hours !== TH || !x.hoursShown || x.hoursCut || x.color !== wantColor)) fail(`${Q} a (${theme}): ${E1} / ${E2} should carry 'A <name> ${TH}' in ${wantColor} with the hours shown whole at 390 px: ${JSON.stringify(ge)}`);
+          else if (badBar.length) fail(`${Q} a (${theme}): every day ${VA}..${VB} should carry 'A <name>' for Pat Appleton in the vacation bar (the label whole, the hover 'APP Pat Appleton on vacation'): ${JSON.stringify(badBar)}`);
+          else if (leg.app !== `A name ${TH} = APP shift (its hours)` || leg.vac !== "Aname = APP on vacation") fail(`${Q} a (${theme}): the legend should explain both - 'A name ${TH} = APP shift (its hours)' and 'A name = APP on vacation', got ${JSON.stringify(leg)}`);
+          else if (over.length || sw > 392) fail(`${Q} a (${theme}): at 390 px ${over.length} grid line(s) overflow (${over.slice(0, 3).join(", ")}), scrollWidth ${sw}`);
+          else ok(`${Q} a (${theme}, 390 px): '${ge[0].text}' on ${E1} / ${E2} (the hours '${TH}' whole, ${wantColor}); the vacation bar's 'A ${bar[0].code}' on ${vacDays.length} day(s); the legend '${leg.app}' / '${leg.vac}'; nothing overflows`);
+          j35(`a contrast: the A lines with their hours (${theme}, 390 px)`, await p29Measure(A35.pg, "[data-testid=cal-app]"));
+          j35(`a contrast: the APP in the vacation bar (${theme}, 390 px)`, await p29Measure(A35.pg, `[data-appvac="${APP_A_UID}"]`));
+          await A35.pg.screenshot({ path: path.join(OUT, `p35-calendar-${theme}-390.png`), fullPage: true });
+          if (theme === "light") {
+            // the day summary: the shift line (the type, its hours, You) on E1; "APPs off: Pat Appleton" on VA
+            await A35.pg.click(`[data-day="${E1}"]`);
+            await A35.pg.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
+            await A35.pg.waitForTimeout(200);
+            const s1 = await A35.pg.evaluate(() => { const l = document.querySelector("[data-testid=editor-app-line]"); return l ? { shift: ((l.querySelector("[data-testid=editor-app-shift]") || {}).textContent || "").trim(), name: ((l.querySelector("[data-testid=editor-app-name]") || {}).textContent || "").trim(), you: !!l.querySelector("[data-testid=editor-app-you]"), type: l.getAttribute("data-app-type") } : null; });
+            await A35.pg.keyboard.press("Escape");
+            await A35.pg.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+            await A35.pg.click(`[data-day="${VA}"]`);
+            await A35.pg.waitForSelector("[data-testid=day-editor]", { timeout: 8000 });
+            await A35.pg.waitForTimeout(200);
+            const off = await A35.pg.$eval("[data-testid=editor-app-off]", el => el.textContent.trim()).catch(() => "");
+            await A35.pg.keyboard.press("Escape");
+            await A35.pg.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 });
+            if (!s1 || s1.shift !== `${TL} ${TH}` || s1.name !== "Pat Appleton" || !s1.you || s1.type !== TY) fail(`${Q} a: ${E1}'s day summary should show 'APP ${TL} ${TH} Pat Appleton' with the You chip, got ${JSON.stringify(s1)}`);
+            else if (off !== "APPs off: Pat Appleton") fail(`${Q} a: ${VA}'s day summary should say 'APPs off: Pat Appleton', got '${off}'`);
+            else ok(`${Q} a: the day summary - ${E1} 'APP ${s1.shift} ${s1.name}' + You; ${VA} '${off}'`);
+          }
+        }
+      } catch (e) { fail(`${Q} a (APP A adds two shifts and a vacation): ` + errLine(e)); try { if (A35) await A35.pg.screenshot({ path: path.join(OUT, "failure-p35-a.png"), fullPage: true }); } catch (e2) {} }
+      // ---- b. A second APP is refused on the taken shift (no request), takes another one, and reads A's vacation ----
+      try {
+        B35 = await mkAppCtx(APP_B_PROFILE, APP_B_JWT, "p35-app-b");
+        await loadApp(B35.pg, "P35 APP B page");
+        await toMineM(B35.pg);
+        const c1 = await cellOf(B35.pg, E1);
+        const s0 = appSaves().length;
+        await forceTap(B35.pg, E1);
+        const h = await hintOf(B35.pg);
+        const saveDis = await B35.pg.$eval("[data-testid=appdays-save]", el => el.disabled);
+        if (c1.state !== "taken" || c1.holder !== "Appleton" || c1.dis !== "true") fail(`${Q} b: APP B should see ${E1} taken by Appleton (aria-disabled), got ${JSON.stringify(c1)}`);
+        else if (h !== `${appMd(E1)} ${TL} already has Pat Appleton.` || appSaves().length !== s0 || !saveDis) fail(`${Q} b: a tap on the taken ${E1} should only say '${appMd(E1)} ${TL} already has Pat Appleton.' and send nothing: hint '${h}', ${appSaves().length - s0} save(s), Save disabled ${saveDis}`);
+        else ok(`${Q} b: APP B on the taken ${E1} - '${h}', nothing sent (perDay 1)`);
+        await B35.pg.click(`[data-testid=appdays-cell][data-day="${F1}"]`);
+        await B35.pg.click("[data-testid=appdays-save]");
+        await B35.pg.waitForSelector("[data-testid=appdays-saved]", { timeout: 10000 });
+        await waitCell(B35.pg, F1, "mine");
+        const sv = appSaves().slice(s0), au = lastAudit();
+        if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_B_UID, p_add: shf(F1), p_clear: [], p_replace: null })) fail(`${Q} b: B's Save of ${F1} should send ONE POST { p_profile: B, p_add: [{ ${F1}, ${TY} }] }, got ${JSON.stringify(sv.map(w => w.body))}`);
+        else if (!au || au.summary !== `Lee Bramble: ${TY} ${appMd(F1)}`) fail(`${Q} b: the audit row should read 'Lee Bramble: ${TY} ${appMd(F1)}', got ${JSON.stringify(au)}`);
+        else ok(`${Q} b: APP B takes ${F1} - ONE POST, the audit row '${au.summary}'`);
+        await clickTab(B35.pg, "timeoff");
+        await B35.pg.waitForSelector("[data-testid=appvac-card][data-state=ok]", { timeout: 10000 });
+        const seen = await B35.pg.evaluate(([pid, va]) => { const l = document.querySelector(`[data-testid=appvac-card] [data-testid="appvac-line-${pid}-${va}"]`); return { line: !!l, buttons: l ? l.querySelectorAll("button").length : -1, form: !!document.querySelector("[data-testid=appvac-card] [data-testid=appvac-who]"), add: !!document.querySelector("[data-testid=appvac-card] [data-testid=appvac-add]") }; }, [APP_A_UID, VA]);
+        if (!seen.line || seen.buttons !== 0 || seen.form || seen.add) fail(`${Q} b: APP B's Time off should list Pat Appleton's vacation with no Edit / Remove and no form for another APP: ${JSON.stringify(seen)}`);
+        else ok(`${Q} b: APP B's Time off lists Pat Appleton's vacation ${vacRng(VA, VB)} - no Edit / Remove, no form for another APP`);
+        await B35.pg.screenshot({ path: path.join(OUT, "p35-app-b-timeoff-390.png"), fullPage: true });
+      } catch (e) { fail(`${Q} b (a second APP): ` + errLine(e)); try { if (B35) await B35.pg.screenshot({ path: path.join(OUT, "failure-p35-b.png"), fullPage: true }); } catch (e2) {} }
+      // ---- c. A shift on the APP's own vacation is refused - the card's tap, a vacation over its own shift, the database's AP010 ----
+      try {
+        if (!A35) throw new Error("the P35 APP A page did not open");
+        await toMineM(A35.pg);
+        const cv = await cellOf(A35.pg, VA);
+        const s0 = appSaves().length, v0 = vacSaves().length;
+        await forceTap(A35.pg, VA);
+        const h = await hintOf(A35.pg);
+        if (cv.state !== "away" || cv.dis !== "true") fail(`${Q} c: ${VA} (A's own vacation) should read 'away' (aria-disabled), got ${JSON.stringify(cv)}`);
+        else if (h !== `${appMd(VA)} is on your vacation - change the vacation first.` || appSaves().length !== s0) fail(`${Q} c: a tap on ${VA} should only say '${appMd(VA)} is on your vacation - change the vacation first.' and send nothing: hint '${h}', ${appSaves().length - s0} save(s)`);
+        else ok(`${Q} c: a shift on A's own vacation day - '${h}', nothing sent`);
+        await A35.pg.fill("[data-testid=appvac-mine] [data-testid=appvac-start]", E1);
+        await A35.pg.fill("[data-testid=appvac-mine] [data-testid=appvac-end]", E1);
+        await A35.pg.click("[data-testid=appvac-mine] [data-testid=appvac-add]");
+        await A35.pg.waitForSelector("[data-testid=appvac-mine] [data-testid=appvac-error]", { timeout: 8000 });
+        const ve = await A35.pg.$eval("[data-testid=appvac-mine] [data-testid=appvac-error]", el => el.textContent.trim());
+        // the subject is the client's on the APP's own card - "You hold ..." or the APP's own name "Pat Appleton holds ..." (never
+        // "You holds"); the shift, the rule and "nothing sent" are pinned
+        if (!/^(You hold|Pat Appleton holds) /.test(ve) || !ve.endsWith(` ${appMd(E1)} ${TY} - remove the shift first.`) || vacSaves().length !== v0) fail(`${Q} c: a vacation over A's own ${E1} shift should be refused before any request ('You hold ${appMd(E1)} ${TY} - remove the shift first.' or 'Pat Appleton holds ...'): '${ve}', ${vacSaves().length - v0} POST(s)`);
+        else ok(`${Q} c: a vacation over A's own shift - '${ve}', nothing sent`);
+        // the database's refusal: the scheduler sets A on VA (his editor does not pre-check APP vacations)
+        sc35 = await context.newPage();
+        watchPage(sc35, "p35-scheduler");
+        settleSc35 = restReadsSettled(sc35);
+        await sc35.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+        await sc35.route((url) => url.hostname === SUPABASE_HOST, routeSupabase);
+        sc35.on("dialog", (d) => d.dismiss().catch(() => {}));
+        await loadApp(sc35, "P35 scheduler page");
+        await showM(sc35);
+        await sc35.click(`[data-day="${VA}"]`);
+        await sc35.waitForSelector("[data-testid=editor-app-block]", { timeout: 8000 });
+        await sc35.waitForTimeout(200);
+        const off = await sc35.$eval("[data-testid=editor-app-off]", el => el.textContent.trim()).catch(() => "");
+        await sc35.selectOption("[data-testid=editor-app]", APP_A_UID);
+        const s1 = appSaves().length;
+        await sc35.click("[data-testid=editor-app-set]");
+        await sc35.waitForSelector("[data-testid=editor-app-error]", { timeout: 10000 });
+        const errT = await sc35.$eval("[data-testid=editor-app-error]", el => el.textContent.trim());
+        const sv = appSaves().slice(s1);
+        const want = `${appMd(VA)} ${TY} is on Pat Appleton's vacation - change the vacation first (nothing was saved)`;
+        await sc35.keyboard.press("Escape");
+        await sc35.waitForSelector("[data-testid=day-editor]", { state: "detached", timeout: 3000 }).catch(() => {});
+        if (off !== "APPs off: Pat Appleton") fail(`${Q} c: the scheduler's day editor on ${VA} should say 'APPs off: Pat Appleton', got '${off}'`);
+        else if (sv.length !== 1 || !sameJson(saveBody(sv[0]), { p_profile: APP_A_UID, p_add: shf(VA), p_clear: [], p_replace: null })) fail(`${Q} c: Set APP should send ONE POST { p_profile: A, p_add: [{ ${VA}, ${TY} }] }, got ${JSON.stringify(sv.map(w => w.body))}`);
+        else if (errT !== want) fail(`${Q} c: the editor should show the database's AP010 words '${want}', got '${errT}'`);
+        else if (appDayStore.some(r => r.day === VA)) fail(`${Q} c: ${VA} landed in the store although the function refused it`);
+        else ok(`${Q} c: the scheduler's Set APP of A on ${VA} - 400 AP010 '${errT}', nothing stored; the editor said '${off}'`);
+      } catch (e) { fail(`${Q} c (a shift on the APP's own vacation): ` + errLine(e)); try { if (A35) await A35.pg.screenshot({ path: path.join(OUT, "failure-p35-c.png"), fullPage: true }); } catch (e2) {} }
+      // ---- d. The office adds an APP vacation for APP B (Time off > APP vacations, 390 px) ----
+      {
+        const rc = await context.newPage();
+        watchPage(rc, "p35-office");
+        const settleRc = restReadsSettled(rc);
+        try {
+          await rc.setViewportSize({ width: 390, height: 844 });
+          await rc.addInitScript((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, COORD_JWT);
+          await rc.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+          await rc.route((url) => url.hostname === SUPABASE_HOST, routeSupabaseAs(COORD_PROFILE));
+          const asked35 = [];
+          rc.on("dialog", (d) => { asked35.push(d.message()); d.accept().catch(() => {}); });
+          await loadApp(rc, "P35 office page");
+          await clickTab(rc, "timeoff");
+          await rc.waitForSelector("[data-testid=appvac-card][data-state=ok]", { timeout: 10000 });
+          const opts = await rc.$$eval("[data-testid=appvac-card] [data-testid=appvac-who] option", els => els.map(o => o.value));
+          await rc.selectOption("[data-testid=appvac-card] [data-testid=appvac-who]", APP_B_UID);
+          const v0 = vacSaves().length;
+          await rc.fill("[data-testid=appvac-card] [data-testid=appvac-start]", F1);
+          await rc.fill("[data-testid=appvac-card] [data-testid=appvac-end]", F1);
+          await rc.click("[data-testid=appvac-card] [data-testid=appvac-add]");
+          await rc.waitForSelector("[data-testid=appvac-card] [data-testid=appvac-error]", { timeout: 8000 });
+          const ve = await rc.$eval("[data-testid=appvac-card] [data-testid=appvac-error]", el => el.textContent.trim());
+          const vRefused = vacSaves().length - v0;
+          await rc.fill("[data-testid=appvac-card] [data-testid=appvac-start]", WA);
+          await rc.fill("[data-testid=appvac-card] [data-testid=appvac-end]", WB);
+          await rc.click("[data-testid=appvac-card] [data-testid=appvac-add]");
+          await rc.waitForSelector("[data-testid=appvac-card] [data-testid=appvac-saved]", { timeout: 10000 });
+          await rc.waitForSelector(`[data-testid=appvac-card] [data-testid="appvac-line-${APP_B_UID}-${WA}"]`, { timeout: 10000 });
+          const vs = vacSaves().slice(v0), av = lastAudit();
+          const vSaved = await rc.$eval("[data-testid=appvac-card] [data-testid=appvac-saved]", el => el.textContent.trim()).catch(() => "");
+          const sw = await rc.evaluate(() => document.documentElement.scrollWidth);
+          const wantV = { p_profile: APP_B_UID, p_add: [{ start: WA, end: WB }], p_remove: [] };
+          if (opts[0] !== "" || !opts.includes(APP_A_UID) || !opts.includes(APP_B_UID)) fail(`${Q} d: the office's APP pick list should be 'Select' + every APP account: ${JSON.stringify(opts)}`);
+          else if (ve !== `Lee Bramble holds ${appMd(F1)} ${TY} - remove the shift first.` || vRefused) fail(`${Q} d: a vacation over B's ${F1} shift should be refused before any request with 'Lee Bramble holds ${appMd(F1)} ${TY} - remove the shift first.': '${ve}', ${vRefused} POST(s)`);
+          else if (vs.length !== 1 || !sameJson(saveBody(vs[0]), wantV)) fail(`${Q} d: the office's Add vacation should send ONE POST ${JSON.stringify(wantV)}, got ${JSON.stringify(vs.map(w => w.body))}`);
+          else if (vSaved !== `Saved: vacation ${vacRng(WA, WB)}`) fail(`${Q} d: the saved note should read 'Saved: vacation ${vacRng(WA, WB)}', got '${vSaved}'`);
+          else if (!av || av.action !== "appvac.save" || av.source !== "office" || av.actor !== COORD_UID || av.summary !== `Lee Bramble: vacation ${vacRng(WA, WB)}`) fail(`${Q} d: the audit row should read 'Lee Bramble: vacation ${vacRng(WA, WB)}' with source office, got ${JSON.stringify(av)}`);
+          else if (sw > 392) fail(`${Q} d: Time off scrolls sideways at 390 px (scrollWidth ${sw})`);
+          else ok(`${Q} d: the office - over B's shift refused ('${ve}', no request); ${vacRng(WA, WB)} for Lee Bramble = ONE POST ${JSON.stringify(wantV)}, '${vSaved}', the audit row's source 'office', the line in the list (fits 390 px)`);
+          await rc.screenshot({ path: path.join(OUT, "p35-office-timeoff-390.png"), fullPage: true });
+          // the office changes it (Edit: the last day WA - ONE POST removing the old range and adding the new one, one audit row) and
+          // then removes it (Remove asks first - ONE POST p_remove [id]); a vacation that has not started may be changed by the office
+          const lineSel = `[data-testid=appvac-card] [data-testid="appvac-line-${APP_B_UID}-${WA}"]`;
+          const idOf = () => (appVacStore.find(v => v.profile_id === APP_B_UID && v.start_date === WA) || {}).id || null;
+          const sawText = (want) => rc.waitForFunction((w) => { const el = document.querySelector("[data-testid=appvac-card] [data-testid=appvac-saved]"); return !!el && el.textContent.trim() === w; }, want, { timeout: 10000 }).then(() => true).catch(() => false);
+          const id1 = idOf(), v1 = vacSaves().length;
+          await rc.click(`${lineSel} [data-testid=appvac-edit]`);
+          await rc.fill(`${lineSel} [data-testid=appvac-edit-end]`, WA);
+          await rc.click(`${lineSel} [data-testid=appvac-edit-save]`);
+          const wantC = `Saved: vacation ${appMd(WA)}; removed vacation ${vacRng(WA, WB)}`;
+          const sawC = await sawText(wantC);
+          const vc = vacSaves().slice(v1), ac = lastAudit();
+          if (!id1 || vc.length !== 1 || !sameJson(saveBody(vc[0]), { p_profile: APP_B_UID, p_add: [{ start: WA, end: WA }], p_remove: [id1] })) fail(`${Q} d: the office's change of ${vacRng(WA, WB)} to ${appMd(WA)} should send ONE POST { p_profile: B, p_add: [{ ${WA}, ${WA} }], p_remove: [its id] }, got ${JSON.stringify(vc.map(w => w.body))}`);
+          else if (!sawC) fail(`${Q} d: the change's saved note should read '${wantC}'`);
+          else if (!ac || ac.source !== "office" || ac.summary !== `Lee Bramble: vacation ${appMd(WA)}; removed vacation ${vacRng(WA, WB)}`) fail(`${Q} d: the change's ONE audit row should read 'Lee Bramble: vacation ${appMd(WA)}; removed vacation ${vacRng(WA, WB)}' (source office), got ${JSON.stringify(ac)}`);
+          else ok(`${Q} d: the office changes Bramble's vacation to ${appMd(WA)} - ONE POST (remove + add), '${wantC}', one audit row`);
+          await rc.waitForSelector(`${lineSel} [data-testid=appvac-remove]`, { timeout: 8000 });
+          const id2 = idOf(), v2 = vacSaves().length, n2 = asked35.length;
+          await rc.click(`${lineSel} [data-testid=appvac-remove]`);
+          const wantR35 = `Saved: removed vacation ${appMd(WA)}`;
+          const sawR = await sawText(wantR35);
+          await rc.waitForSelector(lineSel, { state: "detached", timeout: 8000 }).catch(() => {});
+          const vr = vacSaves().slice(v2), ar = lastAudit();
+          if (asked35.length !== n2 + 1 || asked35[n2] !== `Remove the vacation ${appMd(WA)} of Lee Bramble?`) fail(`${Q} d: Remove should ask 'Remove the vacation ${appMd(WA)} of Lee Bramble?' once, got ${JSON.stringify(asked35.slice(n2))}`);
+          else if (!id2 || vr.length !== 1 || !sameJson(saveBody(vr[0]), { p_profile: APP_B_UID, p_add: [], p_remove: [id2] })) fail(`${Q} d: Remove should send ONE POST { p_profile: B, p_add: [], p_remove: [its id] }, got ${JSON.stringify(vr.map(w => w.body))}`);
+          else if (!sawR || (await rc.$(lineSel)) || appVacStore.some(v => v.profile_id === APP_B_UID)) fail(`${Q} d: after Remove the note should read '${wantR35}' and the line and the row be gone (note seen ${sawR})`);
+          else if (!ar || ar.summary !== `Lee Bramble: removed vacation ${appMd(WA)}`) fail(`${Q} d: the removal's audit row should read 'Lee Bramble: removed vacation ${appMd(WA)}', got ${JSON.stringify(ar)}`);
+          else ok(`${Q} d: the office removes it - asked '${asked35[n2]}', ONE POST p_remove [its id], '${wantR35}', the line gone`);
+        } catch (e) { fail(`${Q} d (the office adds an APP vacation): ` + errLine(e)); try { await rc.screenshot({ path: path.join(OUT, "failure-p35-d.png"), fullPage: true }); } catch (e2) {} }
+        try { await settleRc(); await rc.close(); } catch (e) {}
+        // the main page's own session token back (the office page stored its own in the shared origin storage)
+        await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
+      }
+      // ---- e. ?public=1 and the share page show nothing of it ----
+      {
+        const pp = await context.newPage();
+        const ppErrors = [], ppApp = [];
+        pp.on("pageerror", (e) => ppErrors.push(String(e && e.message || e)));
+        await pp.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+          const req = route.request();
+          const u = new URL(req.url());
+          if (APP_PATH_RE.test(u.pathname)) { ppApp.push(req.method() + " " + u.pathname); return route.fulfill({ status: 403, contentType: "application/json", body: '{"code":"42501","message":"permission denied"}' }); }
+          if (req.method() !== "GET") { writes.push({ method: req.method(), path: u.pathname, body: req.postData() || "", public: true }); return route.fulfill({ status: 200, contentType: "application/json", body: "[]" }); }
+          const fx = fixtureAnswer(u);
+          if (fx) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(fx) });
+          const headers = { ...req.headers() }; headers["authorization"] = "Bearer " + ANON_KEY;
+          return route.continue({ headers });
+        });
+        await pp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+        try {
+          const pubW0 = writes.filter(w => w.public).length;
+          await loadWithRetry(pp, BASE + "?public=1", "[data-testid=cal-month]", 20000, "P35 public page");
+          await pp.waitForFunction(() => !/Loading schedule/i.test(document.body.innerText || "") && !!document.querySelector("[data-testid=cal-grid] .cal-cell"), null, { timeout: 20000 });
+          await showM(pp);
+          await pp.waitForTimeout(800);
+          const pv = await pp.evaluate(() => ({ app: document.querySelectorAll("[data-testid=cal-app]").length, vac: document.querySelectorAll("[data-appvac], .cal-vac-app-tag").length, legend: ["legend-app", "legend-appvac", "legend-app-failed", "legend-app-unread"].filter(t => document.querySelector(`[data-testid=${t}]`)), cards: ["appvac-card", "appvac-mine", "appdays-card"].filter(t => document.querySelector(`[data-testid=${t}]`)), text: document.body.innerText || "" }));
+          if (pv.app || pv.vac || pv.legend.length || pv.cards.length) fail(`${Q} e: ?public=1 shows APP information: ${pv.app} A line(s), ${pv.vac} APP vacation mark(s), legend ${pv.legend.join(",")}, cards ${pv.cards.join(",")}`);
+          else if (/Appleton|Bramble/.test(pv.text)) fail(`${Q} e: ?public=1 page text names an APP`);
+          else if (ppApp.length) fail(`${Q} e: ?public=1 requested the APP paths: ${ppApp.join(", ")}`);
+          else if (writes.filter(w => w.public).length !== pubW0) fail(`${Q} e: ?public=1 attempted a write`);
+          else ok(`${Q} e: ?public=1 on ${MLABEL} (both APPs' shifts and A's vacation in the stores) - no A line, no APP vacation, no APP legend line, no APP name, ZERO requests to the five APP paths, no write`);
+          if (ppErrors.length) fail(`${Q} e: public page errors: ${ppErrors.join(" | ")}`);
+        } catch (e) { fail(`${Q} e (?public=1): ` + errLine(e)); }
+        try { await pp.close(); } catch (e) {}
+        try {
+          if (!sc35) throw new Error("the P35 scheduler page did not open");
+          await showM(sc35);
+          await sc35.waitForSelector(`[data-testid=cal-grid] [data-appvac="${APP_A_UID}"]`, { timeout: 10000 }).catch(() => {});
+          const shown = await sc35.evaluate(() => ({ lines: document.querySelectorAll("[data-testid=cal-grid] [data-testid=cal-app]").length, vac: document.querySelectorAll("[data-testid=cal-grid] [data-appvac]").length }));
+          if (!(await sc35.$("[data-testid=calendar-tools]"))) { await sc35.click("text=Calendar tools (exports)"); await sc35.waitForSelector("[data-testid=calendar-tools]", { timeout: 3000 }); }
+          const [dl] = await Promise.all([sc35.waitForEvent("download", { timeout: 8000 }), sc35.click("[data-testid=share-download]")]);
+          const target = path.join(OUT, "p35-" + dl.suggestedFilename());
+          await dl.saveAs(target);
+          const html = fs.readFileSync(target, "utf8");
+          if (!shown.lines || !shown.vac) fail(`${Q} e: the scheduler's grid should show the A lines and the APP vacations (${JSON.stringify(shown)}) - the share check would prove nothing`);
+          else if (/Appleton|Bramble|cal-app|legend-app|data-appvac|cal-vac-app-tag/.test(html)) fail(`${Q} e: the share page (${path.basename(target)}) carries APP information`);
+          else ok(`${Q} e: the scheduler's share page (${path.basename(target)}, ${html.length} bytes) names no APP while his grid shows ${shown.lines} A line(s) and ${shown.vac} APP vacation mark(s)`);
+        } catch (e) { fail(`${Q} e (share page): ` + errLine(e)); }
+      }
+      // ---- f. Setup > APP shifts (types): the served type's row, Retire refused while it has shifts from today on, Add + Revert ----
+      try {
+        if (!sc35) throw new Error("the P35 scheduler page did not open");
+        await clickTab(sc35, "setup");
+        await sc35.waitForSelector("[data-testid=card-setup_app_shifts]", { timeout: 8000 });
+        if ((await sc35.getAttribute("[data-testid=card-setup_app_shifts]", "data-open")) !== "1") { await sc35.click("[data-testid=card-toggle-setup_app_shifts]"); await sc35.waitForTimeout(200); }
+        await sc35.waitForSelector(`[data-testid=appshift-row-${TY}]`, { timeout: 8000 });
+        const hhmm = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+        const row = await sc35.evaluate((ty) => {
+          const r = document.querySelector(`[data-testid=appshift-row-${ty}]`), q = (s) => r.querySelector(s), ret = q("[data-testid=appshift-retire]");
+          return { label: q("[data-testid=appshift-label]").value, start: q("[data-testid=appshift-start]").value, end: q("[data-testid=appshift-end]").value, perDay: q("[data-testid=appshift-perday]").value, holidays: q("[data-testid=appshift-holidays]").checked,
+            wd: [0, 1, 2, 3, 4, 5, 6].filter(w => q(`[data-testid=appshift-wd-${w}]`).getAttribute("aria-pressed") === "true"), retire: ret ? { disabled: ret.disabled, title: ret.getAttribute("title") } : null,
+            rows: document.querySelectorAll("[data-testid^=appshift-row-]").length, save: document.querySelector("[data-testid=appshift-save]").disabled };
+        }, TY);
+        const nFuture = appDayStore.filter(r => r.shift_type === TY && r.day >= todayCentral).length;
+        const w0 = writes.length;
+        await sc35.click("[data-testid=appshift-add]");
+        await sc35.waitForTimeout(150);
+        const added = await sc35.evaluate(() => ({ rows: document.querySelectorAll("[data-testid^=appshift-row-]").length, idInput: !!document.querySelector("[data-testid=appshift-id]"), save: document.querySelector("[data-testid=appshift-save]").disabled }));
+        await sc35.click("[data-testid=appshift-revert]");
+        await sc35.waitForTimeout(150);
+        const reverted = await sc35.evaluate(() => ({ rows: document.querySelectorAll("[data-testid^=appshift-row-]").length, save: document.querySelector("[data-testid=appshift-save]").disabled }));
+        const blobW = writes.slice(w0).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
+        if (!P29T || row.label !== TL || row.start !== hhmm(P29T.startMin) || row.end !== hhmm(P29T.endMin) || row.perDay !== String(P29T.perDay) || row.holidays !== P29T.holidays || row.wd.join(",") !== P29T.weekdays.join(",")) fail(`${Q} f: the ${TY} row should show the served type (${TL} ${P29T ? hhmm(P29T.startMin) + "-" + hhmm(P29T.endMin) : "?"}), got ${JSON.stringify(row)}`);
+        else if (!row.retire || !row.retire.disabled || row.retire.title !== `${nFuture} shift${nFuture === 1 ? "" : "s"} from today on - clear them first`) fail(`${Q} f: Retire should be refused while ${TY} has ${nFuture} shift(s) from today on, got ${JSON.stringify(row.retire)}`);
+        else if (!row.save || added.rows !== row.rows + 1 || !added.idInput || added.save || reverted.rows !== row.rows || !reverted.save || blobW.length) fail(`${Q} f: Add a type should draft a row with its id field (Save enabled) and Revert drop it (Save disabled), with no write: ${JSON.stringify({ row, added, reverted, blobWrites: blobW.length })}`);
+        else ok(`${Q} f: Setup > APP shifts - the ${TY} row as served (${row.label} ${row.start}-${row.end}, weekdays ${row.wd.join(",")}, perDay ${row.perDay}); Retire refused ('${row.retire.title}'); Add drafts a row, Revert drops it - no write`);
+        await sc35.locator("[data-testid=card-setup_app_shifts]").screenshot({ path: path.join(OUT, "p35-setup-app-shifts.png") });
+      } catch (e) { fail(`${Q} f (Setup > APP shifts): ` + errLine(e)); try { if (sc35) await sc35.screenshot({ path: path.join(OUT, "failure-p35-f.png"), fullPage: true }); } catch (e2) {} }
+      if (sc35) { try { await settleSc35(); await sc35.close(); } catch (e) {} }
+      for (const X of [A35, B35]) { if (X) { try { await X.settle(); await X.ctx.close(); } catch (e) {} } }
+      await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);
+    }
     // ---- 9. Reset ----
     await new Promise(r => setTimeout(r, 600));
     if (p29xLines.length) fail(`${P} 9: ${p29xLines.length} answer(s) forced by the interplay steps never produced their console line: ${JSON.stringify(p29xLines)}`); else ok(`${P} 9: every answer the interplay steps forced produced its console line (${p29xConsumed})`);
     if (appForcedLines.length) fail(`${P} 9: ${appForcedLines.length} forced APP answer(s) never produced their console line: ${JSON.stringify(appForcedLines)}`); else ok(`${P} 9: every forced APP answer's console line was consumed (${appForcedConsumed} so far)`);
     const p29Writes = writes.slice(w0all);
-    const clientAudit = p29Writes.map(saveBody).filter(b => b && typeof b.action === "string" && /^appdays/.test(b.action));
+    const clientAudit = p29Writes.map(saveBody).filter(b => b && typeof b.action === "string" && /^app(days|vac)/.test(b.action));
     const notifPosts = p29Writes.filter(w => /^\/rest\/v1\/notifications/.test(w.path));
     const emailPosts = p29Writes.filter(w => /^\/functions\/v1\//.test(w.path));
     if (clientAudit.length || notifPosts.length || emailPosts.length) fail(`${P} 9: the client wrote an audit row (${clientAudit.length}), a notification (${notifPosts.length}) or an e-mail call (${emailPosts.length}) during the APP steps`);
     else ok(`${P} 9: no client audit row, no notification row, no e-mail call during the APP steps (the save function writes the audit row: ${appAudit.length - audit0} recorded)`);
-    appDayStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appSlowHold = null; appColumnFixture = false;
+    appDayStore = []; appVacStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appSlowHold = null; appColumnFixture = false;
     if (sc) { try { await settleSc(); await sc.close(); } catch (e) {} }
     if (A) { try { await A.ctx.close(); } catch (e) {} }
     await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);

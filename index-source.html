@@ -109,6 +109,11 @@
     /* Spec H (10/3): on a phone the name gives way to a short label (helpers.appGridLabels - at most four letters, distinct
        between the APPs: "Appl" / "Bram", "P.App" / "J.App" when two start alike), like a surgeon's pill gives way to his code */
     .cal-app-code { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Prompt 35 (Faraz 11/17: "A <name> 7a-5p"): the shift's hours after the name - upright, never cut (the name gives way first);
+       on a phone (below) they take a line of their own under "A <code>" so both stay readable at 390 px */
+    .cal-app-hours { margin-left: 3px; font-style: normal; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+    /* Prompt 35: an APP on vacation, in the vacation bar - its short name after an upright "A", like the A line */
+    .cal-vac-app-tag { font-weight: 800; margin-right: 2px; }
     .week-rows td, .week-rows th { vertical-align: top; }
     /* Generate preview (Prompt 6 Slice E): a previewed day is drawn with a
        dashed violet outline and a light hatch so it can never pass for a
@@ -196,12 +201,16 @@
       .cal-chip-all { min-height: 44px; }
       .cal-onlyopen { min-height: 44px; margin-left: 0 !important; white-space: nowrap; }
       .cal-app { font-size: 9px; }
-      /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - a week with an APP day is as
-         tall as one without (it was 70 px against 66 since Prompt 29); the smoke compares whole weeks */
+      /* spec H review (10/3): the APP line fits the 66 px cell (no top margin, a 9.5 px line) - the name line never grows its
+         row (it was 70 px against 66 since Prompt 29). Prompt 35 (Faraz 11/17: the hours readable at 390 px): "A <code> 7a-5p" does
+         not fit a ~48 px cell, so the hours take one 9.5 px line of their own under the name - a week with APP shifts is taller by
+         that line per shift in its fullest cell, never more (the smoke compares whole weeks); weeks without one stay 66 px */
       .cal-line.cal-app { margin-top: 0; line-height: 9.5px; }
       .cal-app-tag { margin-right: 1px; }
       .cal-app-name { display: none; }
       .cal-app-code { display: inline; }
+      .cal-line.cal-app { flex-wrap: wrap; }
+      .cal-app-hours { margin-left: 0; flex-basis: 100%; font-size: 8.5px; line-height: 9.5px; }
       .cal-legend { font-size: 10px !important; }
       /* Day-click summary (9/27): the day editor's "Esc closes - arrow keys move a day" hint means nothing on a touch screen. */
       .editor-kbd-hint { display: none; }
@@ -1674,8 +1683,17 @@ function CallSchedule() {
   // collector's sentence rides on it and nothing bumps appSeqRef, so the answer of the read out is never dropped (a SUBSCRIBED
   // refreshAll used to supersede the load's read and lose its toast); an explicit reload (true) always reads anew. loadAppDays
   // answers the state it adopted ("ok" | "unavailable" | "failed" | "skipped"), "dropped" (overtaken) or "none" (not allowed).
+  // Prompt 35 (Faraz 11/17; revision ac - sql/migrations/2026-11-17-app-shifts.sql, report-first): the APPs' shifts are TYPED (Setup
+  // data: groupRules.appShiftTypes - today one, Inbox 7a-5p Mon-Fri, not on holidays, one APP a day; perDay enforced by the
+  // database) and the APPs enter their own vacations (their own authenticated-only table - never time_off, which anon reads). The
+  // same read (appDaysDb.load) brings the shifts, the vacations and the names; the same state covers all three. Writes: the APP's
+  // My APP shifts and My vacations (one Save each, one request each), the scheduler's day-editor lines (shifts), and the scheduler's
+  // and the office's Time off card (vacations, for any APP) - the two save functions write the audit rows; the client writes none.
+  // Everyone signed in sees both (the calendar's A lines with their hours, the vacation bar's APP names, the day summary, Time off);
+  // ?public=1, share, print and every anon-readable table never do.
   // ====================================================================
   const [appDayRows, setAppDayRows] = useState([]);
+  const [appVacRows, setAppVacRows] = useState([]);
   const [appNameRows, setAppNameRows] = useState([]);
   const [appDaysState, setAppDaysState] = useState("unread");
   const [appDaysBusy, setAppDaysBusy] = useState(false);
@@ -1702,15 +1720,15 @@ function CallSchedule() {
       let r;
       try { r = await appDaysDb.load(); } finally { if (appFlightRef.current === flight) appFlightRef.current = null; }
       if (gen !== appGenRef.current || seq !== appSeqRef.current || !appDaysAllowedRef.current) return "dropped";
-      if (r.state === "ok") { setAppDayRows(r.rows); setAppNameRows(r.names); setAppDaysState("ok"); return "ok"; }
-      if (r.state === "unavailable") { setAppDayRows([]); setAppNameRows([]); setAppDaysState("unavailable"); return "unavailable"; }
+      if (r.state === "ok") { setAppDayRows(r.rows); setAppVacRows(Array.isArray(r.vacations) ? r.vacations : []); setAppNameRows(r.names); setAppDaysState("ok"); return "ok"; }
+      if (r.state === "unavailable") { setAppDayRows([]); setAppVacRows([]); setAppNameRows([]); setAppDaysState("unavailable"); return "unavailable"; }
       if (r.state === "failed") {
         console.warn("APP days read failed", r.error || "");
         setAppDaysState("failed");
         // Do first 4 (the merge with main, 10/2): the mount load's collector (a function - its own, or one that joined this read)
         // takes the sentence for its ONE combined toast; a quiet read (false) stays quiet; an explicit reload (true) toasts alone
         if (typeof flight.say === "function") flight.say(APP_DAYS_LOAD_FAIL_TEXT);
-        else if (explicit === true) showToast("Couldn't load the APP days - the last loaded days are kept.", "error");
+        else if (explicit === true) showToast("Couldn't load the APP shifts and vacations - the last loaded ones are kept.", "error");
         return "failed";
       }
       // "skipped" (no fresh token): the rows stay; the first read of this account says so (the legend, the summary, the editor,
@@ -1731,14 +1749,19 @@ function CallSchedule() {
   // a load run that follows while it is out joins it (ship review 10/2: one read in flight per account, never two at once).
   useEffect(() => {
     appGenRef.current++;
-    setAppDayRows([]); setAppNameRows([]); setAppDaysState("unread");
+    setAppDayRows([]); setAppVacRows([]); setAppNameRows([]); setAppDaysState("unread");
     if (!appDaysAllowed) { appReadOwedRef.current = 0; return; }
     const gen = appGenRef.current;
     appReadOwedRef.current = gen;
     const t = setTimeout(() => { if (appReadOwedRef.current === gen && appGenRef.current === gen) loadAppDays(false); }, 0);
     return () => clearTimeout(t);
   }, [appDaysAllowed, authUser && authUser.id]); // eslint-disable-line
-  const appByDay = useMemo(() => isPublicMode ? {} : appDaysByDay(appDayRows, appNameRows), [isPublicMode, appDayRows, appNameRows]);
+  // Prompt 35: the shift types (Setup data, absent = the decided Inbox), the day's shifts as a list per day (the types' order), the
+  // APP vacations, the stored holiday days the types read - all {} / [] on ?public=1
+  const appTypes = useMemo(() => appShiftTypesOf(groupRules), [groupRules]);
+  const appByDay = useMemo(() => isPublicMode ? {} : appShiftDayMap(appDayRows, appNameRows, appTypes), [isPublicMode, appDayRows, appNameRows, appTypes]);
+  const appVacs = useMemo(() => isPublicMode ? [] : appVacationRows(appVacRows, appNameRows), [isPublicMode, appVacRows, appNameRows]);
+  const appHolidayDays = useMemo(() => holidayNameByDay(holidays), [holidays]);
   const appGridLabel = useMemo(() => appGridLabels(appByDay), [appByDay]); // spec H: the phone grid's distinct short names
   // The name the names function gave a profile ("APP" when it gave none).
   const appNameOf = (profileId) => { const n = appNameRows.find(x => x && x.profile_id === profileId); return n && typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP"; };
@@ -1747,37 +1770,62 @@ function CallSchedule() {
   // outcome is unknown - no connection, or a 5xx without a PostgREST code (helpers.appDaysSaveUnsure; ship review 10/2: the save
   // is idempotent, so the reloaded calendar shows what is true and the words say whether it was reloaded). Answers
   // { ok, note } / { ok: false, words }.
+  // Prompt 35: the lists are typed shifts [{ day, type }]; a refusal that says the picture was stale (AP002 / AP005 / AP006 / AP007 /
+  // AP008 / AP009 / AP010 - a shift filled up, a type changed, a vacation or a shift of mine arrived) reloads it.
   const saveMyAppDays = async (add, clear) => {
-    if (!isApp || !authUser) return { ok: false, words: "Only an APP account adds or removes its own APP days." };
+    if (!isApp || !authUser) return { ok: false, words: "Only an APP account adds or removes its own APP shifts." };
     const a = Array.isArray(add) ? add : [], c = Array.isArray(clear) ? clear : [];
-    if (a.length + c.length > APP_DAYS_MAX_SAVE) return { ok: false, words: "at most " + APP_DAYS_MAX_SAVE + " days in one save - nothing was saved" };
-    if (!a.length && !c.length) return { ok: true, note: appSavedNote(a, c) };
+    if (a.length + c.length > APP_DAYS_MAX_SAVE) return { ok: false, words: "at most " + APP_DAYS_MAX_SAVE + " shifts in one save - nothing was saved" };
+    if (!a.length && !c.length) return { ok: true, note: appShiftSavedNote(a, c) };
     setAppDaysBusy(true);
     try {
-      const r = await appDaysDb.save(authUser.id, a, c, false);
-      if (r.ok) { await loadAppDays(true); return { ok: true, note: appSavedNote(a, c) }; }
-      console.warn("APP days save refused", r.status, r.error);
+      const r = await appDaysDb.save(authUser.id, a, c, null);
+      if (r.ok) { await loadAppDays(true); return { ok: true, note: appShiftSavedNote(a, c) }; }
+      console.warn("APP shifts save refused", r.status, r.error);
       const code = appDaysErrorCode(r.error);
       let reload = null;
-      if (code === "AP002" || code === "AP005" || code === "AP006" || code === "AP007" || appDaysSaveUnsure(r.error, r.status)) reload = await loadAppDays(true);
+      if (["AP002", "AP005", "AP006", "AP007", "AP008", "AP009", "AP010"].indexOf(code) >= 0 || appDaysSaveUnsure(r.error, r.status)) reload = await loadAppDays(true);
       const words = appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, reloaded: reload === "ok" });
       // spec F review: the APP left Mine while this save was running - the card that shows a refusal is gone, so say it here
-      if (viewRef.current !== "myschedule") showToast("My APP days: " + words, "error");
+      if (viewRef.current !== "myschedule") showToast("My APP shifts: " + words, "error");
       return { ok: false, words };
     } finally { setAppDaysBusy(false); }
   };
-  // saveAppDayFromEditor(day, mode, profileId, holderId) - the scheduler's APP line in the day editor, saved at once (apart
-  // from the day's own Save): set = put profileId on the free day; change = replace the holder (p_replace); clear = take the
-  // holder off. Past days are allowed (the function exempts the scheduler). Answers { ok, words }. The words of a refused save
-  // are the editor's own (where "editor": no "My APP days"), and say whether the reload after it landed (ship review 10/2).
-  const saveAppDayFromEditor = async (day, mode, profileId, holderId) => {
-    if (!isScheduler || isPublicMode) return { ok: false, words: "Only the scheduler sets the APP of a day." };
+  // saveAppVacation(profileId, add, remove) - an APP vacation saved at once: My vacations (the APP, its own), Time off (the scheduler
+  // and the office, any APP). add = [{ start, end }], remove = [ids] (a change = both, ONE request, one audit row). A stale refusal
+  // (AV002 / AV005 / AV006 / AV007 / AV008) or an unknown outcome reloads the picture. Answers { ok, note } / { ok: false, words }.
+  const saveAppVacation = async (profileId, add, remove) => {
+    if (isPublicMode || !authUser || !(isApp || isScheduler || isCoordinator)) return { ok: false, words: "Only an APP account (its own), the scheduler or the office enters APP vacations." };
+    if (isApp && !isScheduler && !isCoordinator && profileId !== authUser.id) return { ok: false, words: "An APP enters, changes or removes only their own vacations - ask the scheduler or the office." };
+    const a = Array.isArray(add) ? add : [], rm = Array.isArray(remove) ? remove : [];
+    if (a.length + rm.length > APP_VACATIONS_MAX_SAVE) return { ok: false, words: "at most " + APP_VACATIONS_MAX_SAVE + " vacations in one save - nothing was saved" };
+    if (!a.length && !rm.length) return { ok: true, note: appVacSavedNote([], []) };
+    const removed = appVacs.filter(v => rm.indexOf(v.id) >= 0).map(v => ({ start: v.start, end: v.end }));
     setAppDaysBusy(true);
     try {
-      const r = mode === "clear" ? await appDaysDb.save(holderId, [], [day], false) : await appDaysDb.save(profileId, [day], [], mode === "change");
+      const r = await appDaysDb.saveVacations(profileId, a, rm);
+      if (r.ok) { await loadAppDays(true); return { ok: true, note: appVacSavedNote(a, removed) }; }
+      console.warn("APP vacation save refused", r.status, r.error);
+      const code = appDaysErrorCode(r.error);
+      let reload = null;
+      if (["AV002", "AV005", "AV006", "AV007", "AV008"].indexOf(code) >= 0 || appDaysSaveUnsure(r.error, r.status)) reload = await loadAppDays(true);
+      return { ok: false, words: appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, reloaded: reload === "ok", kind: "vacation" }) };
+    } finally { setAppDaysBusy(false); }
+  };
+  // saveAppDayFromEditor(day, typeId, mode, profileId, holderId) - one shift line of the scheduler's day editor, saved at once
+  // (apart from the day's own Save): set = put profileId on the shift; change = put profileId on it in holderId's place (p_replace);
+  // clear = take holderId off it. Past days are allowed (the function exempts the scheduler). Answers { ok, words }. The words of a
+  // refused save are the editor's own (where "editor"), and say whether the reload after it landed (ship review 10/2).
+  const saveAppDayFromEditor = async (day, typeId, mode, profileId, holderId) => {
+    if (!isScheduler || isPublicMode) return { ok: false, words: "Only the scheduler sets the APPs of a day." };
+    const item = [{ day, type: typeId }];
+    setAppDaysBusy(true);
+    try {
+      const r = mode === "clear" ? await appDaysDb.save(holderId, [], item, null) : await appDaysDb.save(profileId, item, [], mode === "change" ? holderId : null);
       const reload = await loadAppDays(true);
-      if (!r.ok) { console.warn("APP day save refused", r.status, r.error); return { ok: false, words: appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, where: "editor", reloaded: reload === "ok" }) }; }
-      const words = mode === "clear" ? "APP cleared for " + fmtMD(day) : "APP for " + fmtMD(day) + ": " + appNameOf(profileId);
+      if (!r.ok) { console.warn("APP shift save refused", r.status, r.error); return { ok: false, words: appDaysErrorWords(r.error, r.status, { sessionExpired: !!auth.sessionExpired, where: "editor", reloaded: reload === "ok" }) }; }
+      const t = appTypes.find(x => x.id === typeId), label = t ? t.label : typeId;
+      const words = mode === "clear" ? label + " cleared for " + fmtMD(day) + " (" + appNameOf(holderId) + ")" : label + " " + fmtMD(day) + ": " + appNameOf(profileId);
       showToast(words, "success");
       return { ok: true, words };
     } finally { setAppDaysBusy(false); }
@@ -6575,9 +6623,18 @@ function CallSchedule() {
   // East ranges for everyone signed in but the scheduler) and, for the scheduler, his East people while away or unreviewed
   // (eastVacByDay; a home day is not a vacation). calVacKey says whether two days show the same people (the bar joins them) - keyed on
   // what the bar shows, so his time_off day and his East-away day join; "Khan?" and "Khan" do not.
+  // Prompt 35: the APPs on vacation on each visible day (appVacs is [] on ?public=1 - share, print and the public page draw time_off
+  // only); their bar entries come after the surgeons', each keyed "app:<profile id>" so a bar joins only the same people
+  const appVacByDay = useMemo(() => {
+    const map = {};
+    if (!appVacs.length || !gridDays.length) return map;
+    gridDays.forEach(d => { const on = appVacationsOn(appVacs, d); if (on.length) map[d] = on; });
+    return map;
+  }, [appVacs, gridDays]);
   const calVac = (d) => {
     const out = (vacByDay[d] || []).map(id => ({ id, east: null }));
     (eastVacByDay[d] || []).forEach(m => { if (m.state !== "home" && !out.some(v => v.id === m.id)) out.push({ id: m.id, east: m.state }); });
+    (appVacByDay[d] || []).forEach(v => out.push({ id: "app:" + v.profileId, east: null, app: v }));
     return out;
   };
   const calVacKey = (d) => calVac(d).map(v => v.id + (v.east === "unreviewed" ? "?" : "")).sort().join(",");
@@ -7988,6 +8045,12 @@ function CallSchedule() {
             </Collapsible>
           )}
 
+          {/* Prompt 35 (Faraz 11/17): the APP shift types - Setup data (groupRules.appShiftTypes), saved like the group rules */}
+          <Collapsible css={css} ck="setup_app_shifts" defaultOpen={false} title="APP shifts (types)"
+            summary={cardSummary(appTypes.filter(t => !t.retired).map(t => t.label + " " + appShiftHours(t)).join(", ") || "none offered")}>
+            <AppShiftTypesCard css={css} dk={dk} groupRules={groupRules} appByDay={appByDay} appState={appDaysState} today={todayStr} onSave={(list) => saveGroupRules({ ...(groupRules || {}), appShiftTypes: list })} showToast={showToast}/>
+          </Collapsible>
+
           <Collapsible css={css} ck="setup_rules" defaultOpen={false} title="Rules (per surgeon, and group rules)"
             summary={cardSummary(rulesImported ? "" : "Not imported yet")}>
             {!rulesImported ? <div style={css.warnBox}>Rules are not imported yet - use Import seed below, then edit here.</div> :
@@ -8116,7 +8179,11 @@ function CallSchedule() {
           const legendExtH = gridDays.map(gd => dayHolder(gridRow(gd), "primary")).find(h => typeof h === "string" && h.indexOf("ext:") === 0);
           const legendExt = legendExtH ? legendExtH.slice(4) : "";
           const legendHol = rulesCtx ? gridDays.map(gd => isHolidayDay(rulesCtx, gd)).filter(Boolean).map(u => u.name).filter((n, i, all) => all.indexOf(n) === i) : [];
-          const legendVac = gridDays.some(gd => calVac(gd).length > 0);
+          const legendVac = gridDays.some(gd => calVac(gd).some(v => !v.app));
+          // Prompt 35: an APP on vacation has its own legend line - only while this month's bar draws one (signed-in; never ?public=1)
+          const legendAppVac = gridDays.some(gd => (appVacByDay[gd] || []).length > 0);
+          // Prompt 35: the A line's legend names the hours of the shifts this month draws ("7a\u20135p", or two when two types show)
+          const legendAppHours = gridDays.reduce((acc, gd) => { (appByDay[gd] || []).forEach(e => { if (e.hours && acc.indexOf(e.hours) < 0) acc.push(e.hours); }); return acc; }, []);
           // Item 2 (Faraz 11/1): the ring's legend line - only while this month's grid draws a ring (the rows the cells read: gridRow)
           const legendMine = gridDays.some(gd => { const g = gridRow(gd); return isMine(dayHolder(g, "primary")) || isMine(dayHolder(g, "backup")); });
           // Faraz 11/12: the held pill's legend line - only while this month's grid draws one (its first holder lends the swatch its colour)
@@ -8302,9 +8369,10 @@ function CallSchedule() {
                 // The hover title follows the cell: a past unassigned slot reads "-", not OPEN (holderLabel itself stays as the publish diff needs it).
                 const titleBits = [DAY_HDR[dow] + " " + fmtMD(d), "P " + (heldP ? "held for " + nameOf(heldP) : pH || openP ? holderLabel(pH, nameOf) : "-"), "B " + (heldB ? "held for " + nameOf(heldB) : bH || openB ? holderLabel(bH, nameOf) : "-")];
                 if (hol) titleBits.push(hol.name + " (holiday unit)"); const noteT = a && a.note ? (isScheduler ? a.note : dayNoteShown(a.note)) : ""; if (noteT) titleBits.push("note: " + noteT); // 10/30: the importer's provenance is the scheduler's (dayNoteShown)
-                // Prompt 29: the APP on call that day (signed-in sessions only - appByDay is {} on ?public=1)
-                const appE = !isPublicMode ? appByDay[d] || null : null;
-                if (appE) titleBits.push("APP " + appE.name);
+                // Prompt 29 / 35: the day's APP shifts, one A line each with the shift's hours (signed-in sessions only - appByDay is {}
+                // on ?public=1)
+                const appEs = !isPublicMode ? appByDay[d] || [] : [];
+                if (appEs.length) titleBits.push(appEs.map(e => "APP " + e.label + (e.hours ? " " + e.hours : "") + ": " + e.name).join(", "));
                 // Prompt 32 step 4: the day's primary is over its holder's soft limit this month (overSoftByDay is {} on ?public=1)
                 const ovS = overSoftByDay[d] || null;
                 if (ovS) titleBits.push(overSoftLimitTitle(ovS, nameOf));
@@ -8320,7 +8388,7 @@ function CallSchedule() {
                 const pvAt = (dd) => !!(previewGen && previewGen.schedule && previewGen.schedule[dd]);
                 const dPrev = fmt(addD(dt, -1)), dNext = fmt(addD(dt, 1));
                 const vacJoin = { l: vacHere.length > 0 && col > 0 && pvAt(dPrev) === isPreview && calVacKey(dPrev) === calVacKey(d), r: vacHere.length > 0 && col < 6 && pvAt(dNext) === isPreview && calVacKey(dNext) === calVacKey(d) };
-                const vacTitle = [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : ""].filter(Boolean).join(" | ");
+                const vacTitle = [(vacByDay[d] || []).length ? "On vacation: " + vacByDay[d].map(nameOf).join(", ") : "", (eastVacByDay[d] || []).length ? "East vacation: " + eastVacByDay[d].map(m => nameOf(m.id) + " (" + m.state + (m.feedBusy ? ", feed says busy" : "") + ")").join(", ") : "", (appVacByDay[d] || []).length ? "APP on vacation: " + appVacByDay[d].map(v => v.name).join(", ") : ""].filter(Boolean).join(" | ");
                 return (
                   <div key={d} className={"cal-cell" + (isPreview ? " cal-preview" : "")} role="button" tabIndex={0} data-day={d} data-preview={isPreview ? "1" : ""} data-primary={(a && a.primary) || ""} data-backup={bH || ""} data-ext={(a && a.externalCover) || ""} data-open={(openP ? "P" : "") + (openB ? "B" : "")} data-held={(heldP ? "P" : "") + (heldB ? "B" : "")}
                     onClick={()=>openCellDay(d)} onKeyDown={e=>{ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCellDay(d); } }}
@@ -8336,8 +8404,9 @@ function CallSchedule() {
                     </div>
                     <SlotLine role="P" day={d} holder={pH} locked={!!(a && a.primaryLocked)} held={heldP}/>
                     <SlotLine role="B" day={d} holder={bH} locked={!!(a && a.backupLocked)} held={heldB}/>
-                    {/* Prompt 29: the third line "A <name>" - the APP on call (italic, no pill, appText); the full name is in the hover and the day summary */}
-                    {appE && <div className="cal-line cal-app" data-testid="cal-app" data-app-profile={appE.profileId} data-app-day={d} title={"APP: " + appE.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{appE.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[appE.profileId] || appE.short}</span></div>}
+                    {/* Prompt 29 / 35: one line per APP shift "A <name> <hours>" (italic, no pill, appText; the hours upright); the shift's
+                        label and the full name are in the hover and the day summary */}
+                    {appEs.map(e => <div key={e.type + "|" + e.profileId} className="cal-line cal-app" data-testid="cal-app" data-app-profile={e.profileId} data-app-type={e.type} data-app-day={d} title={"APP " + e.label + (e.hours ? " " + e.hours : "") + ": " + e.name} style={{color:T.appText}}><span className="cal-app-tag">A</span><span className="cal-app-name">{e.short}</span><span className="cal-app-code" data-testid="cal-app-code">{appGridLabel[e.profileId] || e.short}</span>{e.hours && <span className="cal-app-hours" data-testid="cal-app-hours">{e.hours}</span>}</div>)}
                     {/* 10/21: the vacation bar (calVac above) - who is off that day, at the bottom of the cell, joined to the next day's bar when
                         the same people are off; no dots or diamonds any more. The scheduler's East people show while away or unreviewed
                         ("?" = not reviewed yet), never while home; their hover keeps the review state. */}
@@ -8345,7 +8414,9 @@ function CallSchedule() {
                       <div className={"cal-vac" + (vacJoin.l ? " cal-vac-l" : "") + (vacJoin.r ? " cal-vac-r" : "")} data-testid="cal-vac" data-vac-ids={vacHere.map(v => v.id).join(",")}
                         title={vacTitle} style={{background:T.vacBar,color:T.vacText}}>
                         <span className="cal-vac-icon" aria-hidden="true">&#x1F3D6;&#xFE0F;&nbsp;</span>
-                        {vacHere.map((v, i) => <React.Fragment key={v.id}>{i ? " " : ""}<span className="cal-vac-who" data-vac={v.east ? undefined : v.id} data-eastvac={v.east ? v.id : undefined} data-eastvac-state={v.east ? v.east : undefined}><span className="cal-name">{nameOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span><span className="cal-code">{codeOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span>{i < vacHere.length - 1 ? "," : ""}</span></React.Fragment>)}
+                        {vacHere.map((v, i) => <React.Fragment key={v.id}>{i ? " " : ""}{v.app
+                          ? <span className="cal-vac-who" data-appvac={v.app.profileId} title={"APP " + v.app.name + " on vacation"}><span className="cal-vac-app-tag">A</span><span className="cal-name">{v.app.short}</span><span className="cal-code">{appGridLabel[v.app.profileId] || v.app.short}</span>{i < vacHere.length - 1 ? "," : ""}</span>
+                          : <span className="cal-vac-who" data-vac={v.east ? undefined : v.id} data-eastvac={v.east ? v.id : undefined} data-eastvac-state={v.east ? v.east : undefined}><span className="cal-name">{nameOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span><span className="cal-code">{codeOf(v.id)}{v.east === "unreviewed" ? "?" : ""}</span>{i < vacHere.length - 1 ? "," : ""}</span>}</React.Fragment>)}
                       </div>
                     )}
                     {isPreview && <span className="cal-preview-tag" title="Generated preview - not saved">PREVIEW</span>}
@@ -8381,7 +8452,8 @@ function CallSchedule() {
               {!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn't be loaded - the A lines may be missing</span>}
               {/* ship review 10/2: a first read with no fresh token ("skipped") read nothing - said too, never the look of "no APP days" */}
               {!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP days not loaded yet - the A lines may be missing</span>}
-              {!isPublicMode && gridDays.some(gd => appByDay[gd]) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name = APP on call</span>}
+              {!isPublicMode && gridDays.some(gd => (appByDay[gd] || []).length > 0) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name {legendAppHours.join(" / ") || "hours"} = APP shift (its hours)</span>}
+              {!isPublicMode && legendAppVac && <span data-testid="legend-appvac"><span style={{background:T.vacBar,color:T.vacText,borderRadius:4,padding:"0 5px",fontWeight:600}}><span className="cal-vac-app-tag">A</span>name</span> = APP on vacation</span>}
               {/* Item E3 (9/25): the East-vacation legend line follows the vacation bar's "name?" - the scheduler's only; 10/30: only in a month that shows one */}
               {eastDetailsVisible && eastVacPeople.length > 0 && gridDays.some(gd => calVac(gd).some(v => v.east === "unreviewed")) && <span style={{display:"inline-flex",alignItems:"center",gap:5}} title="A Davenport vacation of the person with the East code, not reviewed yet - decide it in Setup > East feed. An away range shows as a plain name, a home range not at all; the day's hover keeps the state."><strong>name?</strong> = an East vacation not reviewed yet</span>}
             </div>
@@ -8461,7 +8533,7 @@ function CallSchedule() {
             vacationNames={vacNamesOn(editorDay)} focusExternal={editorFocus === "external"}
             held={heldFor(editorDay)}
             eastVacWarn={eastDetailsVisible ? (eastVacWarnByDay[editorDay] || []) : []}
-            appEntry={!isPublicMode ? appByDay[editorDay] || null : null} appChoices={appPickList(appNameRows)} appState={appDaysState} myProfileId={authUser && authUser.id} onSetApp={saveAppDayFromEditor}
+            appEntries={!isPublicMode ? appByDay[editorDay] || [] : []} appTypes={appTypes} appHolidayDays={appHolidayDays} appVacNames={!isPublicMode ? appVacationsOn(appVacs, editorDay).map(v => v.name) : []} appChoices={appPickList(appNameRows)} appState={appDaysState} myProfileId={authUser && authUser.id} onSetApp={saveAppDayFromEditor}
             onGive={proposeGiveForDay} onOpenShifts={openShiftsBoard} openOnBoard={(d, r) => boardKeys.has(openSlotKey(d, r))}
             onSave={(next, meta) => { if (saveDayEdit(editorDay, next, meta)) setEditorDay(null); }}
             onCancel={() => setEditorDay(null)} onNav={editorNav} onTrade={proposeTradeForDay}
@@ -8751,7 +8823,9 @@ function CallSchedule() {
             ));
           // Prompt 29: an APP - My APP days (its own call days: tap to add / remove, one Save), then the Following cards if any.
           if (!pid && isApp) return <>
-            <AppDaysCard css={css} dk={dk} profileId={authUser ? authUser.id : ""} byDay={appByDay} state={appDaysState} today={todayStr} weekStartsOn={weekStartsOn} busy={appDaysBusy} onSave={saveMyAppDays} onRetry={() => loadAppDays(true)} onDirty={(n) => { appDaysDirtyRef.current = n; }}/>
+            <AppDaysCard css={css} dk={dk} profileId={authUser ? authUser.id : ""} byDay={appByDay} types={appTypes} holidayDays={appHolidayDays} myVacs={appVacs.filter(v => authUser && v.profileId === authUser.id)} state={appDaysState} today={todayStr} weekStartsOn={weekStartsOn} busy={appDaysBusy} onSave={saveMyAppDays} onRetry={() => loadAppDays(true)} onDirty={(n) => { appDaysDirtyRef.current = n; }}/>
+            {/* Prompt 35: the APP's own vacations - self-entered, no approval; one Save each (helpers / AppVacationsCard) */}
+            <AppVacationsCard css={css} dk={dk} mode="mine" vacs={appVacs} picks={[]} me={authUser ? authUser.id : ""} isScheduler={false} isCoordinator={false} isApp={isApp} today={todayStr} state={appDaysState} busy={appDaysBusy} byDay={appByDay} types={appTypes} onSave={saveAppVacation}/>
             {followingCards()}
           </>;
           if (following.length) return <>{followingCards()}</>; // end of the Following view
@@ -8863,6 +8937,12 @@ function CallSchedule() {
               </>
             )}
           </div>
+          {/* Prompt 35 (Faraz 11/17): the APP vacations, beside the surgeons' - every signed-in role reads them (appDaysAllowed: never
+              ?public=1); the scheduler and the office add one for any APP; an APP's own lines (Mine has its form) - shown to a surgeon,
+              a viewer or a follower only when there is an APP vacation to show */}
+          {appDaysAllowed && (isScheduler || isCoordinator || isApp || appVacs.length > 0) && (
+            <AppVacationsCard css={css} dk={dk} mode="all" vacs={appVacs} picks={appPickList(appNameRows)} me={authUser ? authUser.id : ""} isScheduler={isScheduler} isCoordinator={isCoordinator} isApp={isApp} today={todayStr} state={appDaysState} busy={appDaysBusy} byDay={appByDay} types={appTypes} onSave={saveAppVacation}/>
+          )}
           {/* Prompt 16 A7: the office relays a surgeon's offered dates (an e-mail, a call) into the painter - the sheet saves
               through save_offers / set_offer_mode with p_person; the function stamps entered_by = this account, source
               'office-relay'; the surgeon's rules, vacations and the period's freeze apply exactly as when they paint themselves. */}
@@ -10729,13 +10809,16 @@ function offersLoadVerdict(st) {
   return { verdict: "ok" };
 }
 
-// --- My APP days (Prompt 29, Faraz 10/1) ---
-// An APP's own call days, phone-first: a month of day buttons; a tap adds a free day to the draft or takes one of his own
-// off; a day another APP holds shows that APP's name and cannot be picked; a past day (Central) stays as it is. Range (two
-// taps) and Paste dates (helpers.suParseDateList) add every free day between / listed and name what they skipped. Nothing is
-// written while tapping: Save sends the whole draft as ONE request (onSave(add, clear) -> CallSchedule.saveMyAppDays ->
-// the save function, which writes the one audit row); a refusal keeps the draft and shows the function's own words. Module
-// scope on purpose: a parent re-render (the 60 s poll) must not drop the draft. THEME tokens only, no opacity.
+// --- My APP shifts (Prompt 29, Faraz 10/1; typed since Prompt 35, Faraz 11/17) ---
+// An APP's own shifts, phone-first: a month of day buttons for ONE shift type at a time (the type picker shows once a second type
+// is offered - today there is one, Inbox 7a-5p Mon-Fri, not on holidays); a tap adds a free shift to the draft or takes one of the
+// APP's own off; a shift other APPs fill (perDay) shows who holds it and cannot be picked, and so does a day the type does not run
+// (a weekday it skips, a holiday, retired), a day on the APP's own vacation and a shift overlapping another of its own; a past day
+// (Central) stays as it is. Range (two taps) and Paste dates (helpers.suParseDateList) add every free day between / listed and
+// name what they skipped. Nothing is written while tapping: Save sends the whole draft - every type - as ONE request
+// (onSave(add, clear) -> CallSchedule.saveMyAppDays -> the save function, which writes the one audit row "<APP>: inbox 11/18,
+// 11/19"); a refusal keeps the draft and shows the function's own words. Module scope on purpose: a parent re-render (the 60 s poll)
+// must not drop the draft. THEME tokens only, no opacity.
 // fix/painter-dark-mode (10/3): the day cells and the month arrow carry data-surface (their dark T.surface is #13294B, which the
 // dark sheet's active-navy rule otherwise lifts to #2E5090, dropping the "+ You" / removal / today outlines); a drafted day shows
 // the unsaved mark "*" (T.paintText, the painters' orange) with a key line under the grid. Unsaved taps are never lost silently
@@ -10746,11 +10829,14 @@ function offersLoadVerdict(st) {
 // the words say Save first. APP_DAYS_UNLOAD.confirmed (set by CallSchedule.reloadForUpdate after its own question was
 // answered OK) switches that question off, so a confirmed update reload is not asked about twice.
 const APP_DAYS_UNLOAD = { confirmed: false };
-function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {
+function AppDaysCard({ css, dk, profileId, byDay, types, holidayDays, myVacs, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {
   const T = THEME[dk ? "dark" : "light"];
   const todayC = todayOrCentral(today);
   const curY = Number(todayC.slice(0, 4)), curM = Number(todayC.slice(5, 7)) - 1;
+  const typeList = Array.isArray(types) ? types : [];
+  const offered = typeList.filter(t => !t.retired);
   const [ym, setYm] = React.useState({ y: curY, m: curM });
+  const [typeId, setTypeId] = React.useState(offered.length ? offered[0].id : "");
   const [draft, setDraft] = React.useState({});
   const [hint, setHint] = React.useState("");
   const [saved, setSaved] = React.useState("");
@@ -10761,18 +10847,21 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
   const [pasteText, setPasteText] = React.useState("");
   const [pasteYear, setPasteYear] = React.useState(null);   // null = the year of the month in view
   const [saving, setSaving] = React.useState(false);
+  // the picked type follows the list: a type renamed keeps its id; one retired or gone falls back to the first offered
+  React.useEffect(() => { if (!offered.some(t => t.id === typeId)) setTypeId(offered.length ? offered[0].id : ""); }, [offered.map(t => t.id).join(",")]); // eslint-disable-line
   const held = byDay || {};
-  const ctx = { byDay: held, me: profileId, today: todayC };
+  const type = typeList.find(t => t.id === typeId) || null;
+  const ctx = { byDay: held, me: profileId, today: todayC, types: typeList, holidayDays: holidayDays || {}, myVacs: Array.isArray(myVacs) ? myVacs : [] };
   // a reload (the poll, a refused Save) that made a drafted change impossible drops it, and so does midnight (Central) for a
-  // drafted day that became past - review 10/2 (helpers.appDaysDraftPrune)
-  React.useEffect(() => { setDraft(d => appDaysDraftPrune(d, held, profileId, todayC)); }, [byDay, profileId, todayC]); // eslint-disable-line
+  // drafted day that became past - review 10/2 (helpers.appShiftDraftPrune)
+  React.useEffect(() => { setDraft(d => appShiftDraftPrune(d, ctx)); }, [byDay, profileId, todayC, types, holidayDays]); // eslint-disable-line
   const ok = state === "ok";
-  const locked = !ok || !!busy || saving;
+  const locked = !ok || !!busy || saving || !type;
   const atStart = ym.y < curY || (ym.y === curY && ym.m <= curM);
   const move = (n) => { setYm(p => { const d = new Date(p.y, p.m + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
   const monthPrefix = ym.y + "-" + String(ym.m + 1).padStart(2, "0") + "-";
   const days = monthGridDays(ym.y, ym.m, weekStartsOn);
-  const diff = appDaysDraftDiff(draft, held, profileId, todayC);   // a drafted day that became past never counts (review 10/2)
+  const diff = appShiftDraftDiff(draft, held, profileId, todayC);   // a drafted day that became past never counts (review 10/2)
   // Spec F (10/3): the parent's leave guard reads the count; the card going away (a confirmed leave, a sign-out) reports 0
   React.useEffect(() => { if (typeof onDirty === "function") onDirty(diff.count); }, [diff.count]); // eslint-disable-line
   React.useEffect(() => () => { if (typeof onDirty === "function") onDirty(0); }, []); // eslint-disable-line
@@ -10784,13 +10873,14 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
   }, [diff.count > 0]); // eslint-disable-line
   const listOf = (items, n) => items.length > n ? items.slice(0, n).join("; ") + "; and " + (items.length - n) + " more" : items.join("; ");
   const applyPlan = (list, label, bad) => {
-    const plan = appDaysPlan(list, ctx);
-    if (plan.go.length) setDraft(dr => { const n = { ...dr }; plan.go.forEach(x => { n[x] = true; }); return n; });
-    const bits = [plan.go.length ? label + ": " + plan.go.length + " day" + (plan.go.length === 1 ? "" : "s") + " added to your changes" : label + ": nothing to add"];
+    const plan = appShiftPlan(list, typeId, { ...ctx, draft });
+    if (plan.go.length) setDraft(dr => { const n = { ...dr }; plan.go.forEach(x => { n[appShiftKey(x, typeId)] = true; }); return n; });
+    const bits = [plan.go.length ? label + ": " + plan.go.length + " shift" + (plan.go.length === 1 ? "" : "s") + " added to your changes" : label + ": nothing to add"];
     if (plan.skipped.length) bits.push("skipped " + listOf(plan.skipped.map(s => s.why), 6));
     if (bad && bad.length) bits.push("not a date: " + listOf(bad, 6));
     setHint(bits.join(" - "));
   };
+  const othersOn = (d) => (held[d] || []).filter(e => e.type === typeId && e.profileId !== profileId);
   const tap = (d) => {
     if (locked) return;
     setSaved(""); setError("");
@@ -10804,10 +10894,9 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
       applyPlan(list, "Range " + fmtMD(a) + "-" + fmtMD(b));
       return;
     }
-    const st = appDaysCellState(d, { ...ctx, draft });
-    if (st === "taken") { setHint(fmtMD(d) + " already has " + held[d].name); return; }
-    if (st === "past" || st === "past-mine") { setHint(fmtMD(d) + " is past - a past day stays as it was (ask the scheduler)."); return; }
-    setDraft(dr => appDaysToggle(dr, d, ctx));
+    const st = appShiftCellState(d, typeId, { ...ctx, draft });
+    if (st !== "free" && st !== "mine" && st !== "add" && st !== "remove") { setHint(appShiftCellWords(st, d, othersOn(d), type)); return; }
+    setDraft(dr => appShiftToggle(dr, d, typeId, ctx));
     setHint("");
   };
   const pasteAdd = () => {
@@ -10824,25 +10913,38 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
     try {
       const r = await onSave(diff.add, diff.clear);
       if (r && r.ok) { setDraft({}); setSaved(r.note || "Saved"); }
-      else setError((r && r.words) || "Couldn't save the APP days - nothing was saved.");
+      else setError((r && r.words) || "Couldn't save the APP shifts - nothing was saved.");
     } finally { setSaving(false); }
   };
-  const upcoming = Object.keys(held).filter(d => d >= todayC && held[d].profileId === profileId).sort().slice(0, 10);
-  const stateLine = state === "unread" ? "Loading" : state === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : state === "failed" ? "Couldn't load the APP days - the calendar below may be out of date." : state === "skipped" ? "Sign in again to load the APP days." : "";
+  const upcoming = Object.keys(held).filter(d => d >= todayC).sort().reduce((acc, d) => acc.concat((held[d] || []).filter(e => e.profileId === profileId).map(e => ({ day: d, type: e.type }))), []).slice(0, 10);
+  const stateLine = state === "unread" ? "Loading" : state === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : state === "failed" ? "Couldn't load the APP shifts - the calendar below may be out of date." : state === "skipped" ? "Sign in again to load the APP shifts." : "";
   const small = { fontSize: 12, color: T.muted, lineHeight: 1.5 };
   const cellLook = (st) => {
     if (st === "mine") return { bg: T.appTint, border: "1px solid " + T.appText, fg: T.text, line: "You", lineFg: T.appText, strike: false };
     if (st === "add") return { bg: T.surface, border: "2px dashed " + T.appText, fg: T.text, line: "+ You", lineFg: T.appText, strike: false };
     if (st === "remove") return { bg: T.surface, border: "2px dashed " + T.muted, fg: T.text, line: "You", lineFg: T.muted, strike: true };
     if (st === "taken") return { bg: T.raised, border: "1px solid " + T.border, fg: T.muted, line: null, lineFg: T.muted, strike: false };
+    if (st === "away") return { bg: T.raised, border: "1px solid " + T.border, fg: T.muted, line: "away", lineFg: T.muted, strike: false };
+    if (st === "clash") return { bg: T.raised, border: "1px solid " + T.border, fg: T.muted, line: "busy", lineFg: T.muted, strike: false };
+    if (st === "off") return { bg: T.raised, border: "1px solid " + T.border, fg: T.muted, line: "", lineFg: T.muted, strike: false };
     if (st === "past-mine") return { bg: T.raised, border: "1px solid " + T.border, fg: T.muted, line: "You", lineFg: T.muted, strike: false };
     if (st === "past") return { bg: T.raised, border: "1px solid " + T.border, fg: T.muted, line: "", lineFg: T.muted, strike: false };
     return { bg: T.surface, border: "1px solid " + T.border, fg: T.text, line: "", lineFg: T.muted, strike: false };
   };
+  const words = type ? type.label + " (" + appShiftHours(type) + ", " + appShiftWeekdayWords(type) + (type.holidays ? "" : ", not on holidays") + (type.perDay > 1 ? ", " + type.perDay + " APPs a day" : ", one APP a day") + ")" : "";
   return (
     <div style={{...css.card, background: T.surface, borderColor: T.border}} data-testid="appdays-card" data-state={state}>
-      <div style={{...css.cardT, color: T.title}}>My APP days</div>
-      <p style={{...small, margin: "0 0 10px"}}>Tap a day to put yourself on call as the APP; tap it again to take it off. One APP per day - a day with a name on it is taken. Save sends all your changes at once. Past days stay as they are (ask the scheduler).</p>
+      <div style={{...css.cardT, color: T.title}}>My APP shifts</div>
+      <p style={{...small, margin: "0 0 10px"}}>Tap a day to put yourself on the shift; tap it again to take it off. A day with a name on it is taken, and a grey day has no shift for you. Save sends all your changes at once. Past days stay as they are (ask the scheduler).</p>
+      {offered.length > 1 && (
+        <label style={{...small, display: "flex", alignItems: "center", gap: 8, marginBottom: 8, color: T.text}}>Shift
+          <select data-testid="appdays-type" value={typeId} onChange={e => { setTypeId(e.target.value); setHint(""); setRangeStart(null); }} style={{minHeight: 36, padding: "4px 8px", borderRadius: 6, background: T.inputBg, color: T.text, border: "1px solid " + T.inputBorder, fontSize: 14}}>
+            {offered.map(t => <option key={t.id} value={t.id}>{t.label} {appShiftHours(t)}</option>)}
+          </select>
+        </label>
+      )}
+      {type && <div data-testid="appdays-type-note" style={{...small, color: T.text, marginBottom: 8}}>{words}</div>}
+      {ok && !offered.length && <div data-testid="appdays-type-note" style={{...small, marginBottom: 8}}>No APP shift is offered right now (the scheduler sets them up in Setup).</div>}
       {state !== "ok" && (
         <div data-testid="appdays-state" style={{...small, color: state === "failed" ? T.open : T.muted, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10}}>
           <span>{stateLine}</span>
@@ -10858,28 +10960,31 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
         {weekdayLabels(weekStartsOn).map(h => <div key={h} style={{fontSize: 10, fontWeight: 700, textAlign: "center", color: T.muted, padding: "2px 0", textTransform: "uppercase"}}>{h}</div>)}
         {days.map(d => {
           if (d.indexOf(monthPrefix) !== 0) return <div key={d} aria-hidden="true"/>;
-          const st = appDaysCellState(d, { ...ctx, draft });
+          const st = appShiftCellState(d, typeId, { ...ctx, draft });
           const lk = cellLook(st);
-          const holder = held[d] && held[d].profileId !== profileId ? held[d] : null;
-          const off = st === "taken" || st === "past" || st === "past-mine";
+          const others = othersOn(d);
+          const holder = others.length ? others[0] : null;
+          const holderText = holder ? holder.short + (others.length > 1 ? "+" + (others.length - 1) : "") : "";
+          const off = !(st === "free" || st === "mine" || st === "add" || st === "remove");
           const isToday = d === todayC;
           const unsaved = st === "add" || st === "remove"; // spec G (10/3): a drafted day carries the unsaved mark
+          const own = st === "mine" || st === "add" || st === "remove" || st === "past-mine";
           return (
             <button key={d} type="button" data-testid="appdays-cell" data-day={d} data-state={st} data-holder={holder ? holder.short : undefined} data-surface="1" aria-disabled={off ? "true" : undefined} aria-pressed={st === "mine" || st === "add" ? "true" : "false"}
-              title={holder ? fmtMD(d) + ": " + holder.name : st === "past" || st === "past-mine" ? fmtMD(d) + " is past" : fmtMD(d) + (unsaved ? " - unsaved" : "")}
+              title={holder ? fmtMD(d) + ": " + others.map(e => e.name).join(", ") : off ? appShiftCellWords(st, d, others, type) : fmtMD(d) + (unsaved ? " - unsaved" : "")}
               onClick={() => tap(d)}
               style={{position: "relative", minHeight: 44, minWidth: 0, padding: "3px 1px", borderRadius: 6, background: lk.bg, border: isToday ? "2px solid " + T.accent : lk.border, cursor: locked || off ? "default" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, fontFamily: font, overflow: "hidden"}}>
               {unsaved && <span data-testid="appdays-unsaved" aria-hidden="true" style={{position: "absolute", top: 1, right: 3, fontSize: 13, fontWeight: 800, lineHeight: 1, color: T.paintText, fontFamily: font}}>*</span>}
               <span style={{fontSize: 12, fontWeight: isToday ? 800 : 600, color: lk.fg, fontFamily: mono}}>{Number(d.slice(8, 10))}</span>
-              <span style={{fontSize: 10, fontWeight: 700, color: lk.lineFg, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: lk.strike ? "line-through" : "none"}}>{holder ? holder.short : lk.line ? lk.line : <>&nbsp;</>}</span>
+              <span style={{fontSize: 10, fontWeight: 700, color: lk.lineFg, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: lk.strike ? "line-through" : "none"}}>{own ? lk.line : holderText ? holderText : lk.line ? lk.line : <>&nbsp;</>}</span>
             </button>
           );
         })}
       </div>
       {diff.count > 0 && <div data-testid="appdays-unsaved-key" style={{...small, color: T.paintText, fontWeight: 600, marginTop: 6}}>* = unsaved - tap Save to keep these changes; leaving Mine asks first.</div>}
       <div style={{display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10}}>
-        <button type="button" data-testid="appdays-range" aria-pressed={rangeOn ? "true" : "false"} disabled={!ok} onClick={() => { setRangeOn(v => !v); setRangeStart(null); setHint(rangeOn ? "" : "Range: tap the first day, then the last - every free day between joins your changes."); }} style={{...css.mini(rangeOn), minHeight: 36, padding: "6px 12px"}}>Range</button>
-        <button type="button" data-testid="appdays-paste-toggle" aria-pressed={pasteOpen ? "true" : "false"} disabled={!ok} onClick={() => setPasteOpen(v => !v)} style={{...css.mini(pasteOpen), minHeight: 36, padding: "6px 12px"}}>Paste dates</button>
+        <button type="button" data-testid="appdays-range" aria-pressed={rangeOn ? "true" : "false"} disabled={!ok || !type} onClick={() => { setRangeOn(v => !v); setRangeStart(null); setHint(rangeOn ? "" : "Range: tap the first day, then the last - every free shift between joins your changes."); }} style={{...css.mini(rangeOn), minHeight: 36, padding: "6px 12px"}}>Range</button>
+        <button type="button" data-testid="appdays-paste-toggle" aria-pressed={pasteOpen ? "true" : "false"} disabled={!ok || !type} onClick={() => setPasteOpen(v => !v)} style={{...css.mini(pasteOpen), minHeight: 36, padding: "6px 12px"}}>Paste dates</button>
         {rangeOn && rangeStart && <button type="button" data-testid="appdays-range-cancel" onClick={() => { setRangeStart(null); setHint(""); }} style={{...css.mini(false), minHeight: 36, padding: "6px 12px"}}>x cancel start</button>}
       </div>
       {pasteOpen && (
@@ -10900,7 +11005,230 @@ function AppDaysCard({ css, dk, profileId, byDay, state, today, weekStartsOn, bu
       </div>
       {saved && <div role="status" data-testid="appdays-saved" style={{...small, color: T.success, fontWeight: 600, marginTop: 8}}>{saved}</div>}
       {error && <div role="alert" data-testid="appdays-error" style={{...small, color: T.open, fontWeight: 700, marginTop: 8}}>{error}</div>}
-      <div data-testid="appdays-upcoming" style={{...small, marginTop: 10}}>{upcoming.length ? "Your next APP days: " + upcoming.map(fmtMD).join(", ") : "No APP days on file from today on."}</div>
+      <div data-testid="appdays-upcoming" style={{...small, marginTop: 10}}>{upcoming.length ? "Your next APP shifts: " + appShiftSummary(upcoming) : "No APP shifts on file from today on."}</div>
+    </div>
+  );
+}
+
+// --- Setup > APP shifts (Prompt 35, Faraz 11/17: "shift types are data in Setup, not code") ---
+// The scheduler's list of APP shift types { id, label, start, end, weekdays, holidays, perDay[, retired] } in
+// groupRules.appShiftTypes (the blob - helpers.appShiftTypesOf reads it, the database's silvis_app_shift_types the same way; absent =
+// the one decided type, Inbox 07:00-17:00 Mon-Fri, not on holidays, one APP a day). Add a type; rename one; change its hours, weekdays,
+// holidays or perDay; retire one that has no shift from today on (a retired type stays in the list - its past shifts keep their label
+// and hours - and is offered no more; Restore offers it again). An id is the type's key in every shift row: it is set when the type
+// is added and never changes after the type is saved (a rename changes the label only). Saved through the group rules' path
+// (saveGroupRules: the blob write, the rules.edit audit row, the "Group rules saved." toast). What changes for shifts already held:
+// nothing - the database checks a type's hours, weekdays, holidays and perDay when a shift is ADDED. Module scope; THEME tokens only.
+function AppShiftTypesCard({ css, dk, groupRules, appByDay, appState, today, onSave, showToast }) {
+  const T = THEME[dk ? "dark" : "light"];
+  const todayC = todayOrCentral(today);
+  const stored = groupRules && Array.isArray(groupRules.appShiftTypes) ? groupRules.appShiftTypes : null;
+  // the list as the app and the database read it (helpers.appShiftTypesOf = silvis_app_shift_types): an entry neither can read (a hand
+  // edit of the group rules) is left out - shown as a count, dropped by the next Save - so a saved row is always one Save accepts
+  const readable = appShiftTypesOf({ appShiftTypes: stored || APP_SHIFT_TYPES_DEFAULT });
+  const unreadable = stored ? stored.length - readable.length : 0;
+  const fromBlob = () => readable.map(t => ({ id: t.id, label: t.label, start: t.start, end: t.end, weekdays: t.weekdays.slice(), holidays: t.holidays, perDay: t.perDay, retired: t.retired, saved: true }));
+  const [draft, setDraft] = React.useState(fromBlob);
+  const [dirty, setDirty] = React.useState(false);
+  const [err, setErr] = React.useState("");
+  React.useEffect(() => { if (!dirty) setDraft(fromBlob()); }, [JSON.stringify(stored)]); // eslint-disable-line
+  const future = (id) => Object.keys(appByDay || {}).filter(d => d >= todayC).reduce((n, d) => n + (appByDay[d] || []).filter(e => e.type === id).length, 0);
+  const edit = (i, patch) => { setDraft(d => d.map((t, j) => j === i ? { ...t, ...patch } : t)); setDirty(true); setErr(""); };
+  const add = () => {
+    const taken = new Set(draft.map(t => t.id));
+    let n = draft.length + 1, id = "shift-" + n;
+    while (taken.has(id)) { n++; id = "shift-" + n; }
+    setDraft(d => d.concat([{ id, label: "", start: "17:00", end: "07:00", weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 1, retired: false, saved: false }]));
+    setDirty(true); setErr("");
+  };
+  const problems = () => {
+    const out = [], seen = {};
+    draft.forEach((t, i) => {
+      const at = "Row " + (i + 1) + (t.label.trim() ? " (" + t.label.trim() + ")" : "");
+      if (!APP_SHIFT_ID_RE.test(t.id)) out.push(at + ": the id must be lower-case letters, digits and dashes, starting with a letter (at most 24)");
+      else if (seen[t.id]) out.push(at + ": the id " + t.id + " is used twice");
+      seen[t.id] = true;
+      if (!t.label.trim()) out.push(at + ": give it a name");
+      if (!APP_HHMM_RE.test(t.start) || !APP_HHMM_RE.test(t.end)) out.push(at + ": the hours are HH:MM (24-hour)");
+      if (!t.weekdays.length) out.push(at + ": pick at least one weekday");
+      if (!Number.isInteger(t.perDay) || t.perDay < 1 || t.perDay > APP_SHIFT_PER_DAY_MAX) out.push(at + ": APPs a day is a whole number 1-" + APP_SHIFT_PER_DAY_MAX);
+    });
+    return out;
+  };
+  const save = () => {
+    const p = problems();
+    if (p.length) { setErr(p.join("; ")); return; }
+    const list = draft.map(t => { const o = { id: t.id, label: t.label.trim(), start: t.start, end: t.end, weekdays: t.weekdays.slice().sort((a, b) => a - b), holidays: !!t.holidays, perDay: t.perDay }; if (t.retired) o.retired = true; return o; });
+    onSave(list);
+    setDraft(list.map(t => ({ ...t, retired: t.retired === true, saved: true })));
+    setDirty(false);
+  };
+  const small = { fontSize: 12, color: T.muted, lineHeight: 1.5 };
+  const inp = { minHeight: 32, padding: "3px 6px", borderRadius: 6, background: T.inputBg, color: T.text, border: "1px solid " + T.inputBorder, fontSize: 13 };
+  return (
+    <div data-testid="appshift-types">
+      <p style={{...small, margin: "0 0 8px"}}>The shifts an APP can put themselves on (My APP shifts) and the scheduler can set in the day editor. Each shows on the calendar as "A name" with its hours. A shift that ends at or before its start runs into the next day (5p-7a); the same start and end is 24 hours. APPs a day is how many APPs can hold that shift on one day - the database enforces it. Changing a type changes nothing already booked; the rules apply to new shifts.{stored ? "" : " (Nothing saved yet - this is the default, Inbox 7a-5p Mon-Fri; Save writes it into the shared setup.)"}</p>
+      {appState !== "ok" && <p data-testid="appshift-types-state" style={{...small, color: T.open}}>{appState === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : "The APP shifts are not loaded - Retire is off until they load."}</p>}
+      {unreadable > 0 && <p data-testid="appshift-types-unreadable" style={{...small, color: T.open}}>{unreadable} {unreadable === 1 ? "entry" : "entries"} in the saved list cannot be read (a missing or malformed id, hours or weekdays, or a repeated id) and {unreadable === 1 ? "is" : "are"} left out - the database ignores {unreadable === 1 ? "it" : "them"} too, and the next Save drops {unreadable === 1 ? "it" : "them"}.</p>}
+      <div style={css.tableWrap}>
+        <table className="setup-table" data-testid="appshift-table" style={{width: "100%", borderCollapse: "collapse", fontSize: 12}}>
+          <thead><tr style={{color: T.muted, textAlign: "left"}}><th>Id</th><th>Name</th><th>Start</th><th>End</th><th>Weekdays</th><th>Holidays</th><th>APPs a day</th><th/></tr></thead>
+          <tbody>
+            {draft.map((t, i) => {
+              const n = future(t.id);
+              const canRetire = appState === "ok" && n === 0;
+              return (
+                <tr key={i} data-testid={"appshift-row-" + t.id} data-retired={t.retired ? "1" : undefined} style={{borderTop: "1px solid " + T.border, color: t.retired ? T.muted : T.text}}>
+                  <td>{t.saved ? <span style={{fontFamily: mono}}>{t.id}</span> : <input data-testid="appshift-id" value={t.id} onChange={e => edit(i, { id: e.target.value.toLowerCase() })} style={{...inp, width: 100, fontFamily: mono}}/>}</td>
+                  <td><input data-testid="appshift-label" value={t.label} onChange={e => edit(i, { label: e.target.value })} style={{...inp, width: 110}}/></td>
+                  <td><input type="time" data-testid="appshift-start" value={t.start} onChange={e => edit(i, { start: e.target.value })} style={{...inp, width: 96}}/></td>
+                  <td><input type="time" data-testid="appshift-end" value={t.end} onChange={e => edit(i, { end: e.target.value })} style={{...inp, width: 96}}/></td>
+                  <td><span style={{display: "inline-flex", gap: 2, flexWrap: "wrap"}}>{[1, 2, 3, 4, 5, 6, 0].map(w => { const on = t.weekdays.indexOf(w) >= 0; return <button key={w} type="button" data-testid={"appshift-wd-" + w} aria-pressed={on ? "true" : "false"} onClick={() => edit(i, { weekdays: on ? t.weekdays.filter(x => x !== w) : t.weekdays.concat([w]) })} style={{...css.mini(on), minWidth: 34, minHeight: 32, padding: "2px 4px", fontSize: 11}}>{APP_WEEKDAY_SHORT[w]}</button>; })}</span></td>
+                  <td><label style={{display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12}}><input type="checkbox" data-testid="appshift-holidays" checked={t.holidays} onChange={e => edit(i, { holidays: e.target.checked })}/> runs</label></td>
+                  <td><input type="number" min={1} max={APP_SHIFT_PER_DAY_MAX} data-testid="appshift-perday" value={t.perDay} onChange={e => edit(i, { perDay: Math.floor(Number(e.target.value)) })} style={{...inp, width: 56}}/></td>
+                  <td>{t.retired
+                    ? <button type="button" data-testid="appshift-restore" onClick={() => edit(i, { retired: false })} style={{...css.mini(false), minHeight: 32}}>Restore</button>
+                    : !t.saved ? <button type="button" data-testid="appshift-drop" onClick={() => { setDraft(d => d.filter((x, j) => j !== i)); setDirty(true); }} style={{...css.mini(false), minHeight: 32}}>Remove</button>
+                    : <button type="button" data-testid="appshift-retire" disabled={!canRetire} title={canRetire ? "Offered no more; its past shifts keep their label" : n ? n + " shift" + (n === 1 ? "" : "s") + " from today on - clear them first" : "Wait until the APP shifts load"} onClick={() => edit(i, { retired: true })} style={{...css.mini(false), minHeight: 32}}>Retire</button>}
+                    {t.retired && <span style={{...small, marginLeft: 6}}>retired</span>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {err && <div role="alert" data-testid="appshift-error" style={{...small, color: T.open, fontWeight: 700, marginTop: 6}}>{err}</div>}
+      <div style={{display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8}}>
+        <button type="button" data-testid="appshift-add" onClick={add} style={{...css.btn(false), minHeight: 36}}>Add a type</button>
+        <span style={{flex: 1}}/>
+        <button type="button" data-testid="appshift-revert" disabled={!dirty} onClick={() => { setDraft(fromBlob()); setDirty(false); setErr(""); }} style={{...css.btn(false), minHeight: 36}}>Revert</button>
+        <button type="button" data-testid="appshift-save" disabled={!dirty} onClick={save} style={{...css.btn(dirty), minHeight: 36}}>Save APP shifts</button>
+      </div>
+    </div>
+  );
+}
+
+// --- APP vacations (Prompt 35, Faraz 11/17) ---
+// One card, two places: Mine's "My vacations" for an APP (mode "mine": its own, with its own form) and Time off's "APP vacations"
+// (mode "all": every APP's, read by every signed-in role; the scheduler and the office add one for any APP). Self-entered, no
+// approval, no vacation guard (the surgeons' minimum counts surgeons only). Each Save is ONE request (onSave(profileId, add, remove)
+// -> CallSchedule.saveAppVacation -> save_app_vacations, which writes the one audit row); a change is a remove plus an add in that
+// one request. What a line may do follows the surgeons' Time off rule (helpers.appVacationEditable): the scheduler always; the
+// office and the APP itself only before the vacation starts. The client checks what it can see first (helpers.appVacationCheck:
+// the range, another vacation of that APP, one of its shifts - "remove the shift first"); the database checks again. The lines
+// reuse the surgeons' Time off pieces (helpers.groupVacationRows over helpers.appVacationMap, vacRangeLabel). Module scope (a
+// parent re-render must not drop a typed date); THEME tokens only, no opacity.
+function AppVacationsCard({ css, dk, mode, vacs, picks, me, isScheduler, isCoordinator, isApp, today, state, busy, byDay, types, onSave }) {
+  const T = THEME[dk ? "dark" : "light"];
+  const todayC = todayOrCentral(today);
+  const all = Array.isArray(vacs) ? vacs : [];
+  const mine = mode === "mine";
+  const list = mine ? all.filter(v => v.profileId === me) : all;
+  const choices = Array.isArray(picks) ? picks : [];
+  const canAddAny = !mine && (isScheduler || isCoordinator);
+  const canAdd = state === "ok" && (mine ? !!isApp : canAddAny);
+  const [who, setWho] = React.useState(mine ? me : "");
+  const [start, setStart] = React.useState(todayC);
+  const [end, setEnd] = React.useState(todayC);
+  const [edit, setEdit] = React.useState(null);   // { id, profileId, start, end }
+  const [showPast, setShowPast] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [saved, setSaved] = React.useState("");
+  const [error, setError] = React.useState("");
+  const locked = state !== "ok" || !!busy || saving;
+  const nameOfP = (pid) => { const v = all.find(x => x.profileId === pid); if (v) return v.name; const c = choices.find(x => x.profileId === pid); return c ? c.name : "APP"; };
+  const check = (pid, a, b, excludeId) => appVacationCheck(pid, a, b, { vacs: all, byDay: byDay || {}, types: types || [], excludeId, name: nameOfP(pid), self: !!(mine && pid === me) });
+  const run = async (pid, add, remove, after) => {
+    if (locked || typeof onSave !== "function") return;
+    setSaving(true); setSaved(""); setError("");
+    try {
+      const r = await onSave(pid, add, remove);
+      if (r && r.ok) { setSaved(r.note || "Saved"); if (after) after(); }
+      else setError((r && r.words) || "Couldn't save the APP vacation - nothing was saved.");
+    } finally { setSaving(false); }
+  };
+  const addVac = () => {
+    const pid = mine ? me : who;
+    if (!pid) { setError("Pick the APP first."); return; }
+    const why = check(pid, start, end, null);
+    if (why) { setError(why); setSaved(""); return; }
+    run(pid, [{ start, end }], [], () => { setStart(todayC); setEnd(todayC); });
+  };
+  const saveEdit = () => {
+    if (!edit) return;
+    const why = check(edit.profileId, edit.start, edit.end, edit.id);
+    if (why) { setError(why); setSaved(""); return; }
+    run(edit.profileId, [{ start: edit.start, end: edit.end }], [edit.id], () => setEdit(null));
+  };
+  const removeVac = (v) => { if (window.confirm("Remove the vacation " + appVacRange(v.start, v.end) + (mine ? "" : " of " + v.name) + "?")) run(v.profileId, [], [v.id], null); };
+  const ids = Array.from(new Set(list.map(v => v.profileId))).sort((a, b) => { const na = nameOfP(a), nb = nameOfP(b); return na < nb ? -1 : na > nb ? 1 : a < b ? -1 : 1; });
+  const groups = groupVacationRows(appVacationMap(list), ids, todayC, showPast, null);
+  const small = { fontSize: 12, color: T.muted, lineHeight: 1.5 };
+  const inp = { minHeight: 36, padding: "4px 8px", borderRadius: 6, background: T.inputBg, color: T.text, border: "1px solid " + T.inputBorder, fontSize: 14 };
+  const stateLine = state === "unread" ? "Loading" : state === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : state === "failed" ? "Couldn't load the APP vacations - the list may be out of date." : state === "skipped" ? "Sign in again to load the APP vacations." : "";
+  const ctxEdit = { isScheduler: !!isScheduler, isCoordinator: !!isCoordinator, isApp: !!isApp, me, today: todayC };
+  return (
+    <div style={{...css.card, background: T.surface, borderColor: T.border}} data-testid={mine ? "appvac-mine" : "appvac-card"} data-state={state}>
+      <div style={{...css.cardT, color: T.title}}>{mine ? "My vacations" : "APP vacations"}</div>
+      <p style={{...small, margin: "0 0 10px"}}>{mine
+        ? "Your vacations need no approval. A vacation over one of your shifts is refused - remove the shift first. Once a vacation starts it stays on record (ask the scheduler)."
+        : canAddAny
+          ? "The APPs enter their own vacations in Mine; " + (isScheduler ? "as the scheduler you can enter, change or remove any APP's vacation." : "as the office you can enter one for any APP, and change or remove one that has not started.") + " A vacation over the APP's own shift is refused - remove the shift first."
+          : "The APPs enter their own vacations (no approval); this list shows them to everyone signed in."}</p>
+      {state !== "ok" && <div data-testid="appvac-state" style={{...small, color: state === "failed" ? T.open : T.muted, marginBottom: 8}}>{stateLine}</div>}
+      {canAdd && (
+        <div style={{display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10}}>
+          {!mine && (
+            <label style={{...small, display: "flex", flexDirection: "column", gap: 2}}>APP
+              <select data-testid="appvac-who" value={who} onChange={e => { setWho(e.target.value); setError(""); setSaved(""); }} style={{...inp, minWidth: 150}}>
+                <option value="">Select</option>
+                {choices.map(c => <option key={c.profileId} value={c.profileId}>{c.name}</option>)}
+              </select>
+            </label>
+          )}
+          <label style={{...small, display: "flex", flexDirection: "column", gap: 2}}>First day
+            <input type="date" data-testid="appvac-start" value={start} onChange={e => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); setError(""); setSaved(""); }} style={{...inp, width: 150}}/>
+          </label>
+          <label style={{...small, display: "flex", flexDirection: "column", gap: 2}}>Last day
+            <input type="date" data-testid="appvac-end" value={end} onChange={e => { setEnd(e.target.value); setError(""); setSaved(""); }} style={{...inp, width: 150}}/>
+          </label>
+          <button type="button" data-testid="appvac-add" disabled={locked} onClick={addVac} style={{...css.btn(!locked), minHeight: 36, padding: "6px 14px"}}>{saving ? "Saving" : "Add vacation"}</button>
+        </div>
+      )}
+      <label style={{...small, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6, color: T.text}}><input type="checkbox" data-testid="appvac-show-past" checked={showPast} onChange={e => setShowPast(e.target.checked)}/> Show past</label>
+      {groups.length === 0 && <div data-testid="appvac-none" style={small}>No {showPast ? "" : "upcoming "}APP vacations.</div>}
+      {groups.map(g => (
+        <div key={g.pid} style={{marginBottom: 6}}>
+          {!mine && <div data-testid={"appvac-group-" + g.pid} data-upcoming={g.upcoming} style={{fontSize: 12, fontWeight: 700, color: T.text, margin: "4px 0 2px"}}><span style={{color: T.appText, fontStyle: "italic"}}>{nameOfP(g.pid)}</span> <span style={{fontWeight: 400, color: T.muted}}>{g.upcoming} upcoming{showPast && g.past ? " +" + g.past + " past" : ""}</span></div>}
+          {g.rows.map(r => {
+            const v = list.find(x => x.id === r.id) || null;
+            const editing = edit && v && edit.id === v.id;
+            const may = appVacationEditable(v, ctxEdit);
+            return (
+              <div key={r.id} data-testid={"appvac-line-" + r.pid + "-" + r.vs} data-start={r.vs} data-end={r.ve} style={{display: "flex", alignItems: "center", gap: 8, padding: "4px 10px", background: T.raised, borderRadius: 6, border: "1px solid " + T.border, flexWrap: "wrap", marginLeft: mine ? 0 : 8, marginTop: 3}}>
+                {editing ? (
+                  <>
+                    <input type="date" data-testid="appvac-edit-start" value={edit.start} onChange={e => setEdit(x => ({ ...x, start: e.target.value }))} style={{...inp, width: 140}}/>
+                    <input type="date" data-testid="appvac-edit-end" value={edit.end} onChange={e => setEdit(x => ({ ...x, end: e.target.value }))} style={{...inp, width: 140}}/>
+                    <button type="button" data-testid="appvac-edit-save" disabled={locked} onClick={saveEdit} style={{...css.btn(true), minHeight: 36, padding: "4px 12px"}}>Save</button>
+                    <button type="button" data-testid="appvac-edit-cancel" onClick={() => { setEdit(null); setError(""); }} style={{...css.btn(false), minHeight: 36, padding: "4px 12px"}}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <span title={r.vs + " - " + r.ve} style={{fontFamily: mono, fontSize: 12, color: T.text}}>{vacRangeLabel(r.vs, r.ve, todayC)}</span>
+                    {r.past && <span style={{...small, fontSize: 11}}>past</span>}
+                    <span style={{flex: 1}}/>
+                    {may && <button type="button" data-testid="appvac-edit" disabled={locked} onClick={() => { setEdit({ id: v.id, profileId: v.profileId, start: v.start, end: v.end }); setError(""); setSaved(""); }} style={{...css.btn(false), minHeight: 36, padding: "4px 10px", fontSize: 12}}>Edit</button>}
+                    {may && <button type="button" data-testid="appvac-remove" disabled={locked} onClick={() => removeVac(v)} style={{...css.btn(false), minHeight: 36, padding: "4px 10px", fontSize: 12, color: T.open}}>Remove</button>}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {saved && <div role="status" data-testid="appvac-saved" style={{...small, color: T.success, fontWeight: 600, marginTop: 8}}>{saved}</div>}
+      {error && <div role="alert" data-testid="appvac-error" style={{...small, color: T.open, fontWeight: 700, marginTop: 8}}>{error}</div>}
     </div>
   );
 }
@@ -10922,7 +11250,12 @@ function DayEditor(props) {
   const { day, entry, roster, ctxInputs, ctxError, canEdit, eastDetailsVisible, rulesImported, isPublicMode, nameOf, codeOf, colorOf, mySurgeon, vacationNames, onSave, onCancel, onNav, onTrade, suggestTrade, css, dk, focusExternal, onGive, onOpenShifts, openOnBoard, eastVacWarn } = props;
   // Prompt 29: the APP of this day (appEntry from helpers.appDaysByDay, or null), the scheduler's pick list (appChoices =
   // helpers.appPickList), the load state, the viewer's own profile id (the summary's You chip) and the scheduler's save.
-  const { appEntry, appChoices, appState, myProfileId, onSetApp } = props;
+  // Prompt 35: the day's shifts (appEntries - helpers.appShiftDayMap's list, [] without one), the shift types and the stored holiday
+  // days (the scheduler's lines: every type that runs that day, and any type a holder holds), the APPs on vacation that day (names)
+  const { appChoices, appState, myProfileId, onSetApp } = props;
+  const appList = Array.isArray(props.appEntries) ? props.appEntries : [];
+  const appTypeList = Array.isArray(props.appTypes) ? props.appTypes : [];
+  const appVacNames = Array.isArray(props.appVacNames) ? props.appVacNames : [];
   // Faraz 11/12 (held initials): held = App's heldFor(day) - { primary, backup }, the derived surgeon of an open slot the
   // next Generate fills (null each on ?public=1, before the reads, on a past day). The SUMMARY words such a slot as the
   // grid's pill does; the scheduler's editor keeps OPEN - it edits the row, and its East lines say whose week it is.
@@ -10951,12 +11284,13 @@ function DayEditor(props) {
   const [info, setInfo] = React.useState("");   // M: the hand-written outside-surgeon note (an info line, never the red error hint)
   // Prompt 29: the scheduler's APP line - its pick, a busy flag and the inline status / error. Saved at once through onSetApp;
   // it never touches the day draft or dirty. The pick follows the holder after a save reloads the picture.
-  const appHolderId = appEntry ? appEntry.profileId : "";
-  const [appPick, setAppPick] = React.useState(appHolderId);
+  // Prompt 35: one pick per shift type ({ typeId: profileId }); a reload after a save resets them
+  const appHoldKey = appList.map(e => e.type + ":" + e.profileId).join(",");
+  const [appPicks, setAppPicks] = React.useState({});
   const [appBusy, setAppBusy] = React.useState(false);
   const [appStatus, setAppStatus] = React.useState("");
   const [appError, setAppError] = React.useState("");
-  React.useEffect(() => { setAppPick(appHolderId); }, [appHolderId]);
+  React.useEffect(() => { setAppPicks({}); }, [appHoldKey]);
   const extInfo = (name) => name + " is an outside surgeon - written in by hand and locked; the generator never moves it.";
   const norm = (a) => JSON.stringify(assignmentToDayRow(day, a));
   const dirty = norm(draft) !== norm(opened);
@@ -11266,11 +11600,17 @@ function DayEditor(props) {
   // list of every APP, Set APP (set / change) and Clear APP, saved at once apart from the day's own Save. Nothing while the
   // read is unread, and nothing at all while no APP account exists and the day has no holder. A first read with no fresh token
   // ("skipped") says "APP days not loaded yet" in both (ship review 10/2 - never the look of "no APP that day").
-  const appSummaryLine = () => (!canEdit && appEntry && !isPublicMode) ? (
-    <div data-testid="editor-app-line" data-app-profile={appEntry.profileId} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"8px 0",borderBottom:"1px solid " + border}}>
-      <span style={{...label,marginBottom:0,minWidth:60}}>APP</span>
-      <span data-testid="editor-app-name" style={{color:T.appText,fontStyle:"italic",fontWeight:700,fontSize:12.5}}>{appEntry.name}</span>
-      {myProfileId && appEntry.profileId === myProfileId && <span data-testid="editor-app-you" style={{background:T.surface,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
+  // Prompt 35: one line per shift - "APP  Inbox 7a-5p  <name>" (+ You on the APP's own shift)
+  const appSummaryLine = () => (!canEdit && appList.length && !isPublicMode) ? (
+    <div data-testid="editor-app-lines" style={{padding:"4px 0",borderBottom:"1px solid " + border}}>
+      {appList.map(e => (
+        <div key={e.type + "|" + e.profileId} data-testid="editor-app-line" data-app-profile={e.profileId} data-app-type={e.type} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"4px 0"}}>
+          <span style={{...label,marginBottom:0,minWidth:60}}>APP</span>
+          <span data-testid="editor-app-shift" style={{fontSize:12,color:sub,fontWeight:600}}>{e.label}{e.hours ? " " + e.hours : ""}</span>
+          <span data-testid="editor-app-name" style={{color:T.appText,fontStyle:"italic",fontWeight:700,fontSize:12.5}}>{e.name}</span>
+          {myProfileId && e.profileId === myProfileId && <span data-testid="editor-app-you" style={{background:T.surface,color:T.accentText,border:"1px solid " + T.accent,borderRadius:10,padding:"0 8px",fontSize:11,fontWeight:700}}>You</span>}
+        </div>
+      ))}
     </div>
   ) : (!canEdit && !isPublicMode && (appState === "failed" || appState === "skipped")) ? (
     // the merge with main (10/2): a failed read (no entry to show) never reads as "no APP that day"; nor does a skipped first read
@@ -11290,32 +11630,55 @@ function DayEditor(props) {
         {appError && <div role="alert" data-testid="editor-app-error" style={{fontSize:12,color:T.open,fontWeight:700,marginTop:5}}>{appError}</div>}
       </div>
     );
-    if (appState !== "ok" || (!choices.length && !appEntry)) return null;
-    const opts = appEntry && !choices.some(c => c.profileId === appEntry.profileId) ? choices.concat([{ profileId: appEntry.profileId, name: appEntry.name + (appEntry.isApp ? "" : " (no longer an APP)") }]) : choices;
-    const canSet = !appBusy && !!appPick && appPick !== appHolderId && typeof onSetApp === "function";
-    const run = async (mode, profileId, holderId) => {
+    // Prompt 35: one line per shift type that runs this day, and per type a holder holds (a type retired, or no longer listed);
+    // nothing to show while no APP account exists and nobody holds a shift this day
+    const lines = appTypeList.filter(t => appShiftRunsOn(t, day, props.appHolidayDays).ok || appList.some(e => e.type === t.id))
+      .map(t => ({ id: t.id, label: t.label, hours: appShiftHours(t), perDay: t.perDay, runs: appShiftRunsOn(t, day, props.appHolidayDays).ok }))
+      .concat(appList.filter(e => !appTypeList.some(t => t.id === e.type)).map(e => e.type).filter((x, i, all) => all.indexOf(x) === i).map(id => ({ id, label: id, hours: "", perDay: 1, runs: false })));
+    if (appState !== "ok" || (!choices.length && !appList.length) || !lines.length) return null;
+    const run = async (typeId, mode, profileId, holderId) => {
       if (appBusy || typeof onSetApp !== "function") return;
       setAppBusy(true); setAppStatus(""); setAppError("");
       try {
-        const r = await onSetApp(day, mode, profileId, holderId);
-        if (r && r.ok) setAppStatus(r.words || "Saved."); else setAppError((r && r.words) || "Couldn't save the APP of this day.");
+        const r = await onSetApp(day, typeId, mode, profileId, holderId);
+        if (r && r.ok) setAppStatus(r.words || "Saved."); else setAppError((r && r.words) || "Couldn't save the APP shift of this day.");
       } finally { setAppBusy(false); }
     };
     return (
       <div data-testid="editor-app-block" style={{border:"1px solid " + border,borderRadius:8,padding:"10px 12px",marginBottom:10,background: dk ? "#1a2540" : "#fafbfc"}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
-          <span style={{...label,marginBottom:0,minWidth:60}}>APP</span>
-          <span data-testid="editor-app-holder" data-app-profile={appHolderId || undefined} style={appEntry ? {color:T.appText,fontStyle:"italic",fontWeight:700,fontSize:12.5} : {color:sub,fontSize:12}}>{appEntry ? appEntry.name + (appEntry.isApp ? "" : " (no longer an APP)") : "none"}</span>
-        </div>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <select data-testid="editor-app" aria-label="APP" value={appPick} disabled={appBusy} onChange={e => { setAppPick(e.target.value); setAppStatus(""); setAppError(""); }} style={{...inp,minWidth:200,fontSize:13}}>
-            <option value="">none</option>
-            {opts.map(o => <option key={o.profileId} value={o.profileId}>{o.name}</option>)}
-          </select>
-          <button type="button" data-testid="editor-app-set" disabled={!canSet} onClick={() => run(appEntry ? "change" : "set", appPick, appHolderId)} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36,opacity:canSet ? 1 : 0.5}}>Set APP</button>
-          <button type="button" data-testid="editor-app-clear" disabled={!appEntry || appBusy} onClick={() => run("clear", "", appHolderId)} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36,opacity:(appEntry && !appBusy) ? 1 : 0.5}}>Clear APP</button>
-        </div>
-        <div style={{fontSize:11,color:sub,marginTop:5}}>Saved at once - separate from Save below.</div>
+        {lines.map(ln => {
+          const holders = appList.filter(e => e.type === ln.id);
+          const opts = choices.concat(holders.filter(h => !choices.some(c => c.profileId === h.profileId)).map(h => ({ profileId: h.profileId, name: h.name + (h.isApp ? "" : " (no longer an APP)") })));
+          const pick = appPicks[ln.id] || "";
+          const full = holders.length >= ln.perDay;
+          // set = a free place on the shift; change = the one holder of a one-APP shift is replaced (p_replace); a fuller shift: clear one first
+          const mode = !full ? "set" : ln.perDay === 1 && holders.length === 1 ? "change" : null;
+          const canSet = !appBusy && !!pick && !!mode && ln.runs && !holders.some(h => h.profileId === pick) && typeof onSetApp === "function";
+          return (
+            <div key={ln.id} data-testid="editor-app-type" data-app-type={ln.id} style={{marginBottom:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
+                <span style={{...label,marginBottom:0,minWidth:60}}>APP</span>
+                <span data-testid="editor-app-shift" style={{fontSize:12,fontWeight:700,color:text}}>{ln.label}{ln.hours ? " " + ln.hours : ""}{ln.perDay > 1 ? " (" + holders.length + " of " + ln.perDay + ")" : ""}{ln.runs ? "" : " - not offered this day"}</span>
+                {holders.length === 0 && <span data-testid="editor-app-holder" style={{color:sub,fontSize:12}}>none</span>}
+                {holders.map(h => (
+                  <span key={h.profileId} style={{display:"inline-flex",alignItems:"center",gap:6}}>
+                    <span data-testid="editor-app-holder" data-app-profile={h.profileId} style={{color:T.appText,fontStyle:"italic",fontWeight:700,fontSize:12.5}}>{h.name + (h.isApp ? "" : " (no longer an APP)")}</span>
+                    <button type="button" data-testid="editor-app-clear" data-app-profile={h.profileId} disabled={appBusy} onClick={() => run(ln.id, "clear", "", h.profileId)} style={{...css.btn(false),padding:"5px 10px",fontSize:12,minHeight:36,opacity:appBusy ? 0.5 : 1}}>Clear</button>
+                  </span>
+                ))}
+              </div>
+              {ln.runs && <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <select data-testid="editor-app" aria-label={"APP for " + ln.label} value={pick} disabled={appBusy} onChange={e => { const v = e.target.value; setAppPicks(p => ({ ...p, [ln.id]: v })); setAppStatus(""); setAppError(""); }} style={{...inp,minWidth:200,fontSize:13}}>
+                  <option value="">none</option>
+                  {opts.map(o => <option key={o.profileId} value={o.profileId}>{o.name}</option>)}
+                </select>
+                <button type="button" data-testid="editor-app-set" disabled={!canSet} onClick={() => run(ln.id, mode, pick, mode === "change" ? holders[0].profileId : "")} style={{...css.btn(false),padding:"7px 12px",fontSize:12,minHeight:36,opacity:canSet ? 1 : 0.5}}>{mode === "change" ? "Change APP" : "Set APP"}</button>
+                {full && mode === null && <span style={{fontSize:11,color:sub}}>Full ({ln.perDay} a day) - clear one first</span>}
+              </div>}
+            </div>
+          );
+        })}
+        <div style={{fontSize:11,color:sub,marginTop:2}}>Saved at once - separate from Save below.</div>
         {appStatus && <div role="status" data-testid="editor-app-status" style={{fontSize:12,color:sub,fontWeight:600,marginTop:5}}>{appStatus}</div>}
         {appError && <div role="alert" data-testid="editor-app-error" style={{fontSize:12,color:T.open,fontWeight:700,marginTop:5}}>{appError}</div>}
       </div>
@@ -11343,6 +11706,8 @@ function DayEditor(props) {
           {/* Prompt 31 Part A (A3, item 2): the East person's own range on this day breaks the vacation minimum or holds a published day here - the scheduler's warning, never a block */}
           {eastDetailsVisible && (eastVacWarn || []).map((w, i) => <div key={"evw" + i} data-testid="east-vac-warn" data-kind={w.kind} data-person={w.id} style={{color:"#a83232",fontWeight:700}}>East - {eastVacationWarnLine(w, nameOf)}</div>)}
           {canEdit ? <div data-testid="editor-vacations">Vacations: {vacationNames.length ? vacationNames.join(", ") : "nobody off"}</div> : vacationNames.length > 0 && <div data-testid="editor-off">Off: {vacationNames.join(", ")}</div>}
+          {/* Prompt 35: the APPs on vacation that day - every signed-in role (appVacNames is [] on ?public=1) */}
+          {!isPublicMode && appVacNames.length > 0 && <div data-testid="editor-app-off">APPs off: {appVacNames.join(", ")}</div>}
           {canEdit && ctxError && <div style={{color:"#a83232",fontWeight:700}}>Eligibility unavailable: {ctxError}</div>}
           {canEdit && !rulesImported && <div>Rules not imported yet - eligibility reflects locks, vacations and availability rows only.</div>}
           {/* Item E3 (9/25): a derived-week row's source "east-derived" reads "generated" (the generator wrote it) to everyone but the scheduler.

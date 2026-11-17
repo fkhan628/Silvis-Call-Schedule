@@ -123,6 +123,11 @@ report("A6c hospital staff names (roles only in a public repo)", tokenHits([
   "cf1e4b613986781992ff99a7c1b120e412a007cf5a0b1f64b677b510c4c44d47", "5b7e5cc8c743e78355d8f20081fce3f2b1d6e6b6d5935b40536a58a95c694989",
   "3392364c4b70a24cf7037515b1d6589a34bc21331e2874a74306cf7edfb835cc", "0467fa7edd5a90263f16dd4dd1e4f4ab42eae98971d502ab2f8715aaa405f8e8",
 ], "staff name"));
+// Prompt 35 (Faraz 11/17: "APP identity is data in user_profiles: no APP names in the repo, seed or docs"): the APP named in
+// his example, exact-case (Capitalised and UPPER) - the placeholders are <APP name> / "Pat Appleton"-style fakes.
+report("A6c APP account names (data in user_profiles, never in the repo)", tokenHits([
+  "4b779fdc95ab8008252ffc373fb8d94bca28b12ee979b90c5159900bc07d22ee", "6f34071b4dc79d69b7acd6640ee543dca5c3dfb6e645bdf619d5739f820f122b",
+], "APP name"));
 // B10 (9/23): the lower-case form is scanned too since the ER-panel source slug became a role slug
 // (office-er-call-panels-<date>; the live notes are updated by hand with the same replace). Two lower-case
 // digests are on file (the slug's former tokens); every token of every file is compared lower-cased against them.

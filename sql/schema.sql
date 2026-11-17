@@ -183,6 +183,23 @@
 -- role's lock on the day stays). No table, column, policy, trigger, grant, other function or anon surface changes; claim_open_slot
 -- keeps CL007 (a locked OPEN slot stays the scheduler's to assign). Letter u stays taken by the weekend pair claim; aa was the last
 -- applied before it (2026-10-22 04:50:53Z; this body is y's, applied 2026-10-20 00:41:25Z, but for check (c) and the party test).
+-- Revision 2026-11-17 ac (APP shifts and APP vacations, sql/migrations/2026-11-17-app-shifts.sql, report-first, NOT yet applied): Faraz 11/17
+-- (Prompt 35) - the APPs put themselves on shifts that have hours and enter their own vacations; shift types are Setup data
+-- (groupRules.appShiftTypes { id, label, start, end, weekdays, holidays, perDay } - today one, Inbox 07:00-17:00 Mon-Fri, not on the six
+-- holidays, perDay 1; absent = that type, the code default helpers.js APP_SHIFT_TYPES_DEFAULT). app_call_days is EXTENDED, not replaced
+-- (0 live rows; its read policy, grants, cascade and app_call_names stay): a guard refuses to type Prompt 29 rows, shift_type text not
+-- null (app_call_days_shift_type_shape) and the primary key (day, shift_type, profile_id) - perDay is save_app_days' count. ONE NEW
+-- table app_time_off (the APPs' vacations; profile_id -> user_profiles on delete cascade; source app / scheduler / office; the check
+-- app_time_off_range) - authenticated read through app_time_off_read, never anon (time_off stays the surgeons' and anon-readable).
+-- ONE NEW internal function silvis_app_shift_types(p_data) (sql, immutable, invoker; EXECUTE for service_role only - the ONE SQL reading
+-- of the shift types); save_app_days RE-CREATED with typed JSON lists and p_replace uuid (the old date-list signature dropped; AP001-AP010
+-- APP_DAY_* - perDay AP005, the type / weekday / holiday / retired AP008, overlap AP009, the APP's vacation AP010); ONE NEW function
+-- save_app_vacations(p_profile, p_add, p_remove) (security definer, volatile; the APP for itself, the scheduler and the office coordinator
+-- for any APP; AV001-AV008 APP_VACATION_* - a vacation over the APP's own shift AV005 "remove the shift first", a started vacation AV006
+-- for all but the scheduler; no vacation guard; the appvac.save audit row); app_call_names() RE-CREATED (the vacation holders too, every
+-- APP for the office coordinator). Both save functions take the one advisory lock app_call_days:save. No other table, policy, trigger,
+-- function, row or anon surface changes. Letter u stays taken by the weekend pair claim; ab was the last applied before it
+-- (2026-10-26 03:50:31Z; independent - either apply order).
 -- Two same-day migrations redefining one function are ordered by a `-- supersedes:` header line in the one applied
 -- later that names the earlier file (never by file name, never by renaming an applied file); the suite fails without it.
 -- ============================================================================
@@ -2063,6 +2080,8 @@ grant select, insert, update, delete on table public.call_pay_logs to authentica
 --   AP005 APP_DAY_TAKEN         an add on a day another APP holds (without p_replace)
 --   AP006 APP_DAY_PAST          a day before today (Central) - the APP only, adds and removals; the scheduler is exempt
 --   AP007 APP_DAY_STALE         the scheduler removes a day another profile holds (a stale picture)
+-- Revision ac (Prompt 35, the block below) re-keys the table to (day, shift_type, profile_id) and replaces app_call_names and save_app_days:
+-- the list above is Prompt 29's; revision ac's block lists its own refusals.
 create table if not exists public.app_call_days (
   day         date primary key check (isfinite(day)),                                  -- one APP per day: the database enforces it (never infinity)
   profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its days
@@ -2076,129 +2095,338 @@ revoke all on table public.app_call_days from authenticated;
 grant select on table public.app_call_days to authenticated;
 comment on table public.app_call_days is 'Prompt 29 (Faraz 10/1): the APP on call per day - ONE APP per day (day is the primary key). Read by every signed-in role, never anon (no anon policy, anon privileges revoked); written only through save_app_days() (authenticated holds SELECT only). Deleting the account removes its days (on delete cascade); the audit_log keeps the history.';
 
-create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)
-language sql stable security definer set search_path = public, pg_temp as $$
-  select p.id, nullif(btrim(p.display_name), ''), (p.is_app and p.role = 'viewer' and p.person_id is null)
-    from public.user_profiles p
-   where auth.uid() is not null
-     and (exists (select 1 from public.app_call_days a where a.profile_id = p.id)
-          or (p.is_app and p.role = 'viewer' and p.person_id is null and (p.id = auth.uid() or public.silvis_is_sched())))
-   order by p.id;
-$$;
-revoke all on function public.app_call_names() from public;
-revoke all on function public.app_call_names() from anon;
-grant execute on function public.app_call_names() to authenticated;
-comment on function public.app_call_names() is 'Prompt 29: the display names of the APP days - every profile that holds a day (any signed-in caller), the caller''s own APP profile and, for the scheduler, every APP profile (the day editor''s pick list). Display name and the APP flag only - never an email, never a role. Stable: the client calls it with GET.';
+-- ---------- APP shifts and APP vacations (Prompt 35, revision ac; sql/migrations/2026-11-17-app-shifts.sql - report-first, NOT yet applied)
+-- Faraz 11/17: the APPs put themselves on shifts that have hours and enter their own vacations. Shift types are Setup data
+-- (groupRules.appShiftTypes; absent = Inbox 07:00-17:00 Mon-Fri, not on holidays, perDay 1 - helpers.js APP_SHIFT_TYPES_DEFAULT); perDay
+-- (how many APPs may hold a shift on one day) is enforced here, in save_app_days. app_call_days keeps Prompt 29's read policy, grants and
+-- cascade, gains shift_type and the key (day, shift_type, profile_id). app_time_off holds the APPs' vacations: read by every signed-in role
+-- (app_time_off_read below), never anon (anon's privileges revoked; not in the read_all loop); authenticated keeps SELECT only -
+-- save_app_vacations() (security definer, the table owner) is the only write path. Neither table is part of the blob, snapshots, the
+-- data export or a factory reset. A shift of type T on day D runs from T.start on D to T.end (the next day when end < start; 24 hours
+-- when end = start, Central wall clock); two shifts of one APP overlap when their spans share a minute; a shift conflicts with a vacation
+-- when its span reaches into a vacation day; a holiday is a day of a stored holiday unit (call_schedule_data.data.holidays.units).
+-- save_app_days refusals (all before any write; custom SQLSTATEs, HTTP 400 through PostgREST):
+--   AP001 APP_DAY_NOT_ALLOWED   no signed-in user / neither an APP nor the scheduler; the scheduler named no APP
+--   AP002 APP_DAY_NOT_YOURS     an APP names another profile / sends p_replace / removes a shift another APP holds
+--   AP003 APP_DAY_NOT_APP       an add for a profile that is not a current APP (the scheduler too; clears stay allowed)
+--   AP004 APP_DAY_BAD_DAY       not a list, an item that is not {day, type}, not a calendar day, more than 400 shifts in one save, a
+--                               shift both added and removed, a change naming no shift or the same APP twice
+--   AP005 APP_DAY_TAKEN         an add on a shift other APPs already fill (perDay; the APP a change takes over from does not count)
+--   AP006 APP_DAY_PAST          a day before today (Central) - the APP only, adds and removals; the scheduler is exempt
+--   AP007 APP_DAY_STALE         the scheduler removes a shift another profile holds, or a change from an APP that no longer holds it
+--   AP008 APP_DAY_NO_SHIFT      an unknown or retired type, a weekday the type does not run, a holiday it does not run on
+--   AP009 APP_DAY_OVERLAP       two shifts of one APP overlapping (added against added or kept)
+--   AP010 APP_DAY_VACATION      an added shift reaching into one of the APP's vacation days
+-- save_app_vacations refusals (all before any write):
+--   AV001 APP_VACATION_NOT_ALLOWED  no signed-in user / not an APP, the scheduler or the office; no APP named
+--   AV002 APP_VACATION_NOT_YOURS    an APP names another profile
+--   AV003 APP_VACATION_NOT_APP      an add for a profile that is not a current APP
+--   AV004 APP_VACATION_BAD_RANGE    not a list, an item that is not {start, end}, an empty id, more than 50, not a calendar day, an end
+--                                   before the start, longer than a year, two adds overlapping
+--   AV005 APP_VACATION_ON_SHIFT     a vacation reaching any minute of one of the APP's own shifts (remove the shift first)
+--   AV006 APP_VACATION_PAST         removing (or changing) a vacation that has started - everyone but the scheduler
+--   AV007 APP_VACATION_STALE        an id that is gone or is not that APP's
+--   AV008 APP_VACATION_OVERLAP      an add touching a vacation the APP keeps (an equal one is kept, not refused)
+-- (0) the guard: Prompt 29's rows are whole call days, not typed shifts - never type them here
+do $$
+begin
+  if not exists (select 1 from pg_attribute a where a.attrelid = 'public.app_call_days'::regclass and a.attname = 'shift_type' and not a.attisdropped)
+     and exists (select 1 from public.app_call_days) then
+    raise exception 'APP_SHIFTS_MIGRATION: app_call_days holds % Prompt 29 call day(s) - nothing was changed; export them (select * from public.app_call_days order by day;), clear them in the day editor, then run this file again',
+      (select count(*) from public.app_call_days);
+  end if;
+end $$;
 
-create or replace function public.save_app_days(p_profile uuid, p_add date[], p_clear date[], p_replace boolean default false) returns jsonb
+-- (1) app_call_days: one row per APP per shift per day; perDay is save_app_days' count, not the key
+alter table public.app_call_days add column if not exists shift_type text not null;
+alter table public.app_call_days drop constraint if exists app_call_days_shift_type_shape;
+alter table public.app_call_days add constraint app_call_days_shift_type_shape check (shift_type ~ '^[a-z][a-z0-9-]{0,23}$');
+alter table public.app_call_days drop constraint if exists app_call_days_pkey;
+alter table public.app_call_days add constraint app_call_days_pkey primary key (day, shift_type, profile_id);
+comment on table public.app_call_days is 'Prompt 29 (Faraz 10/1) / revision ac (Prompt 35, Faraz 11/17): the APP shifts - one row per APP per shift type per day (primary key day, shift_type, profile_id); how many APPs a shift may hold on one day is its type''s perDay (groupRules.appShiftTypes), counted by save_app_days. Read by every signed-in role, never anon (no anon policy, anon privileges revoked); written only through save_app_days() (authenticated holds SELECT only). Deleting the account removes its shifts (on delete cascade); the audit_log keeps the history.';
+
+-- (2) app_time_off: the APPs' vacations - never in time_off, which anon reads
+create table if not exists public.app_time_off (
+  id          uuid primary key default gen_random_uuid(),
+  profile_id  uuid not null references public.user_profiles(id) on delete cascade,     -- deleting the account removes its vacations
+  start_date  date not null check (isfinite(start_date)),
+  end_date    date not null check (isfinite(end_date)),
+  source      text not null check (source in ('app', 'scheduler', 'office')),          -- the APP itself / the scheduler / the office coordinator
+  created_by  uuid,                                                                    -- auth.uid() of the writer (no FK)
+  created_at  timestamptz not null default now(),
+  constraint app_time_off_range check (end_date >= start_date and end_date - start_date <= 365)
+);
+create index if not exists app_time_off_profile_idx on public.app_time_off (profile_id, start_date);
+revoke all on table public.app_time_off from anon;
+revoke all on table public.app_time_off from authenticated;
+grant select on table public.app_time_off to authenticated;
+comment on table public.app_time_off is 'Revision ac (Prompt 35, Faraz 11/17): the APPs'' vacations - self-entered, no approval; the scheduler and the office coordinator for any APP. Read by every signed-in role, never anon (no anon policy, anon privileges revoked; time_off stays the surgeons'' and anon-readable); written only through save_app_vacations() (authenticated holds SELECT only). Deleting the account removes its vacations (on delete cascade).';
+
+-- (3) the shift types the database reads: groupRules.appShiftTypes of the blob it is given (absent / not a list = the one decided type)
+create or replace function public.silvis_app_shift_types(p_data jsonb)
+returns table (id text, label text, start_min int, end_min int, weekdays int[], holidays boolean, per_day int, retired boolean)
+language sql immutable security invoker set search_path = public, pg_temp as $$
+  with list as (
+    select case when jsonb_typeof(p_data #> '{groupRules,appShiftTypes}') = 'array' then p_data #> '{groupRules,appShiftTypes}'
+                else '[{"id":"inbox","label":"Inbox","start":"07:00","end":"17:00","weekdays":[1,2,3,4,5],"holidays":false,"perDay":1}]'::jsonb end as l
+  ),
+  valid as (
+    select e.t, e.ord
+      from list, jsonb_array_elements(list.l) with ordinality as e(t, ord)
+     where jsonb_typeof(e.t) = 'object'
+       and jsonb_typeof(e.t -> 'id') = 'string' and (e.t ->> 'id') ~ '^[a-z][a-z0-9-]{0,23}$'
+       and jsonb_typeof(e.t -> 'start') = 'string' and (e.t ->> 'start') ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+       and jsonb_typeof(e.t -> 'end') = 'string' and (e.t ->> 'end') ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+       and jsonb_typeof(e.t -> 'weekdays') = 'array' and jsonb_array_length(e.t -> 'weekdays') > 0
+       and not exists (select 1 from jsonb_array_elements(e.t -> 'weekdays') w
+                        where jsonb_typeof(w) <> 'number' or (w #>> '{}')::numeric not in (0, 1, 2, 3, 4, 5, 6))
+  ),
+  firsts as (
+    select distinct on (v.t ->> 'id') v.t, v.ord from valid v order by v.t ->> 'id', v.ord
+  )
+  select f.t ->> 'id',
+         coalesce(nullif(btrim(case when jsonb_typeof(f.t -> 'label') = 'string' then f.t ->> 'label' end), ''), f.t ->> 'id'),
+         split_part(f.t ->> 'start', ':', 1)::int * 60 + split_part(f.t ->> 'start', ':', 2)::int,
+         split_part(f.t ->> 'end', ':', 1)::int * 60 + split_part(f.t ->> 'end', ':', 2)::int,
+         (select array_agg(distinct (w #>> '{}')::numeric::int order by (w #>> '{}')::numeric::int) from jsonb_array_elements(f.t -> 'weekdays') w),
+         coalesce(f.t -> 'holidays' = 'true'::jsonb, false),
+         case when jsonb_typeof(f.t -> 'perDay') = 'number' and (f.t ->> 'perDay')::numeric = trunc((f.t ->> 'perDay')::numeric)
+                   and (f.t ->> 'perDay')::numeric between 1 and 20 then (f.t ->> 'perDay')::numeric::int else 1 end,
+         coalesce(f.t -> 'retired' = 'true'::jsonb, false)
+    from firsts f
+   order by f.ord;
+$$;
+revoke all on function public.silvis_app_shift_types(jsonb) from public;
+revoke all on function public.silvis_app_shift_types(jsonb) from anon;
+revoke all on function public.silvis_app_shift_types(jsonb) from authenticated;
+grant execute on function public.silvis_app_shift_types(jsonb) to service_role;
+comment on function public.silvis_app_shift_types(jsonb) is 'Revision ac (Prompt 35): the APP shift types of a blob - groupRules.appShiftTypes; absent or not a list = the one decided type (Inbox 07:00-17:00 Mon-Fri, not on holidays, perDay 1 - helpers.js APP_SHIFT_TYPES_DEFAULT). One row per valid entry (id ^[a-z][a-z0-9-]{0,23}$, start / end HH:MM, a non-empty weekdays list of 0-6 with 0 = Sunday; the first entry of an id wins; label = the trimmed label, else the id; holidays only when exactly true; perDay a whole number 1-20, else 1; retired only when exactly true). Minutes from midnight; end = start is 24 hours, end < start ends the next day. Internal: EXECUTE for the service role only; save_app_days and save_app_vacations call it as their owner.';
+
+-- (4) save_app_days, re-created with typed shifts: the old date-list signature is dropped (an old build is refused, never an untyped row)
+drop function if exists public.save_app_days(uuid, date[], date[], boolean);
+create or replace function public.save_app_days(p_profile uuid, p_add jsonb, p_clear jsonb, p_replace uuid default null) returns jsonb
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   me        uuid := auth.uid();
   sched     boolean := public.silvis_is_sched();
   c_app     boolean := public.silvis_is_app();
   who       uuid := p_profile;
-  repl      boolean := coalesce(p_replace, false);
   today_c   date := (now() at time zone 'America/Chicago')::date;
-  adds      date[];
-  clears    date[];
+  blob      jsonb;
+  a_day     date[];
+  a_type    text[];
+  c_day     date[];
+  c_type    text[];
   t_app     boolean;
   t_name    text;
+  r_name    text;
   v_src     text;
   bad       text;
-  ins_days  date[] := '{}';
-  del_days  date[] := '{}';
+  ins       jsonb := '[]'::jsonb;
+  del       jsonb := '[]'::jsonb;
   replaced  jsonb := '[]'::jsonb;
   v_sum     text;
 begin
   if me is null or (not sched and not c_app) then
-    raise exception 'APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a call day' using errcode = 'AP001';
+    raise exception 'APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift' using errcode = 'AP001';
   end if;
   if who is null and c_app then who := me; end if;
   if who is null then
     raise exception 'APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)' using errcode = 'AP001';
   end if;
   if not sched and who <> me then
-    raise exception 'APP_DAY_NOT_YOURS: an APP adds or removes only their own days - ask the scheduler' using errcode = 'AP002';
+    raise exception 'APP_DAY_NOT_YOURS: an APP adds or removes only their own shifts - ask the scheduler' using errcode = 'AP002';
   end if;
-  if repl and not sched then
-    raise exception 'APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a day' using errcode = 'AP002';
+  if p_replace is not null and not sched then
+    raise exception 'APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a shift' using errcode = 'AP002';
   end if;
-  if array_position(p_add, null) is not null or array_position(p_clear, null) is not null then
-    raise exception 'APP_DAY_BAD_DAY: a day in the list is empty - nothing was saved' using errcode = 'AP004';
+  -- the lists: JSON arrays of {"day": "YYYY-MM-DD", "type": "<shift type id>"}
+  if (p_add is not null and jsonb_typeof(p_add) <> 'array') or (p_clear is not null and jsonb_typeof(p_clear) <> 'array') then
+    raise exception 'APP_DAY_BAD_DAY: the shifts must come as a list - nothing was saved' using errcode = 'AP004';
   end if;
-  -- infinity / -infinity are dates to PostgreSQL but no calendar day: to_char gives NULL, so every message below would drop them
-  if exists (select 1 from unnest(coalesce(p_add, '{}'::date[]) || coalesce(p_clear, '{}'::date[])) d where not isfinite(d)) then
+  if exists (select 1 from jsonb_array_elements(coalesce(p_add, '[]'::jsonb) || coalesce(p_clear, '[]'::jsonb)) x
+              where jsonb_typeof(x) <> 'object' or jsonb_typeof(x -> 'day') is distinct from 'string'
+                 or jsonb_typeof(x -> 'type') is distinct from 'string' or (x ->> 'type') !~ '^[a-z][a-z0-9-]{0,23}$') then
+    raise exception 'APP_DAY_BAD_DAY: a shift in the list is not a day and a shift type - nothing was saved' using errcode = 'AP004';
+  end if;
+  if exists (select 1 from jsonb_array_elements(coalesce(p_add, '[]'::jsonb) || coalesce(p_clear, '[]'::jsonb)) x
+              where (x ->> 'day') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') then
     raise exception 'APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved' using errcode = 'AP004';
   end if;
-  if coalesce(cardinality(p_add), 0) + coalesce(cardinality(p_clear), 0) > 400 then
-    raise exception 'APP_DAY_BAD_DAY: at most 400 days in one save - nothing was saved' using errcode = 'AP004';
+  if coalesce(jsonb_array_length(p_add), 0) + coalesce(jsonb_array_length(p_clear), 0) > 400 then
+    raise exception 'APP_DAY_BAD_DAY: at most 400 shifts in one save - nothing was saved' using errcode = 'AP004';
   end if;
-  select coalesce(array_agg(distinct d order by d), '{}') into adds from unnest(coalesce(p_add, '{}'::date[])) d;
-  select coalesce(array_agg(distinct d order by d), '{}') into clears from unnest(coalesce(p_clear, '{}'::date[])) d;
-  select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds) d where d = any(clears);
+  begin
+    select coalesce(array_agg(s.d order by s.d, s.t), '{}'), coalesce(array_agg(s.t order by s.d, s.t), '{}') into a_day, a_type
+      from (select distinct (x ->> 'day')::date as d, x ->> 'type' as t from jsonb_array_elements(coalesce(p_add, '[]'::jsonb)) x) s;
+    select coalesce(array_agg(s.d order by s.d, s.t), '{}'), coalesce(array_agg(s.t order by s.d, s.t), '{}') into c_day, c_type
+      from (select distinct (x ->> 'day')::date as d, x ->> 'type' as t from jsonb_array_elements(coalesce(p_clear, '[]'::jsonb)) x) s;
+  exception when invalid_datetime_format or datetime_field_overflow then
+    raise exception 'APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved' using errcode = 'AP004';
+  end;
+  select string_agg(to_char(a.d, 'FMMM/FMDD') || ' ' || a.t, ', ' order by a.d, a.t) into bad
+    from unnest(a_day, a_type) a(d, t)
+   where exists (select 1 from unnest(c_day, c_type) c(d, t) where c.d = a.d and c.t = a.t);
   if bad is not null then
     raise exception 'APP_DAY_BAD_DAY: % is both added and removed in one save - nothing was saved', bad using errcode = 'AP004';
   end if;
+  if p_replace is not null and (p_replace = who or cardinality(a_day) = 0) then
+    raise exception 'APP_DAY_BAD_DAY: a change takes a shift over from another APP - name the shift and that APP (nothing was saved)' using errcode = 'AP004';
+  end if;
   select (p.is_app and p.role = 'viewer' and p.person_id is null), nullif(btrim(p.display_name), '')
     into t_app, t_name from public.user_profiles p where p.id = who;
-  if cardinality(adds) > 0 and not coalesce(t_app, false) then
+  if cardinality(a_day) > 0 and not coalesce(t_app, false) then
     raise exception 'APP_DAY_NOT_APP: % is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)', coalesce(t_name, 'that account') using errcode = 'AP003';
   end if;
-  -- One APP-day write at a time, across every profile (a conflict is cross-profile): every read below sees the other's commit.
+  -- One APP write at a time - shifts AND vacations (save_app_vacations takes the same lock): every read below sees the other's commit.
   perform pg_advisory_xact_lock(hashtext('app_call_days:save'));
   if not sched then
-    select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) into bad from unnest(adds || clears) d where d < today_c;
+    select string_agg(to_char(x.d, 'FMMM/FMDD'), ', ' order by x.d) into bad
+      from (select distinct d from unnest(a_day || c_day) d where d < today_c) x;
     if bad is not null then
       raise exception 'APP_DAY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'AP006';
     end if;
   end if;
-  select string_agg(to_char(a.day, 'FMMM/FMDD') || ' is ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP') || '''s day', ', ' order by a.day)
+  select c.data into blob from public.call_schedule_data c where c.id = 'main';
+  -- every added shift's type: known, not retired, running that weekday and - unless it runs on holidays - not on a holiday unit's day
+  select string_agg(x.msg, ', ' order by x.d, x.t) into bad
+    from (select a.d, a.t,
+                 case when st.id is null then 'there is no ' || a.t || ' shift type'
+                      when st.retired then 'the ' || a.t || ' shift is retired'
+                      when not (extract(dow from a.d)::int = any(st.weekdays))
+                        then to_char(a.d, 'FMMM/FMDD') || ' is a ' || trim(to_char(a.d, 'Day')) || ' (' || st.label || ' does not run that day)'
+                      when not st.holidays and exists (
+                        select 1
+                          from jsonb_each(case when jsonb_typeof(blob #> '{holidays,units}') = 'object' then blob #> '{holidays,units}' else '{}'::jsonb end) y(k, v),
+                               jsonb_array_elements(case when jsonb_typeof(y.v) = 'array' then y.v else '[]'::jsonb end) u,
+                               jsonb_array_elements(case when jsonb_typeof(u) = 'object' and jsonb_typeof(u -> 'days') = 'array' then u -> 'days' else '[]'::jsonb end) hd
+                         where hd = to_jsonb(to_char(a.d, 'YYYY-MM-DD')))
+                        then to_char(a.d, 'FMMM/FMDD') || ' is a holiday (' || st.label || ' does not run on holidays)'
+                 end as msg
+            from unnest(a_day, a_type) a(d, t)
+            left join public.silvis_app_shift_types(blob) st on st.id = a.t) x
+   where x.msg is not null;
+  if bad is not null then
+    raise exception 'APP_DAY_NO_SHIFT: % - nothing was saved', bad using errcode = 'AP008';
+  end if;
+  -- a clear names the APP's own shift: one that another APP holds instead (and this one does not) is a stale picture
+  select string_agg(to_char(c.d, 'FMMM/FMDD') || ' ' || c.t || ' is ' || h.names || ' shift', ', ' order by c.d, c.t)
     into bad
-    from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
-   where a.day = any(clears) and a.profile_id <> who;
+    from unnest(c_day, c_type) c(d, t)
+    cross join lateral (select string_agg(coalesce(nullif(btrim(p.display_name), ''), 'another APP') || '''s', ' and '
+                                          order by coalesce(nullif(btrim(p.display_name), ''), 'another APP')) as names
+                          from public.app_call_days x left join public.user_profiles p on p.id = x.profile_id
+                         where x.day = c.d and x.shift_type = c.t and x.profile_id <> who) h
+   where h.names is not null
+     and not exists (select 1 from public.app_call_days x where x.day = c.d and x.shift_type = c.t and x.profile_id = who);
   if bad is not null then
     if sched then
       raise exception 'APP_DAY_STALE: % - reload the calendar (nothing was saved)', bad using errcode = 'AP007';
     end if;
     raise exception 'APP_DAY_NOT_YOURS: % - only that APP or the scheduler can remove it (nothing was saved)', bad using errcode = 'AP002';
   end if;
-  if not repl then
-    select string_agg(to_char(a.day, 'FMMM/FMDD') || ' already has ' || coalesce(nullif(btrim(p.display_name), ''), 'another APP'), '; ' order by a.day)
-      into bad
-      from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
-     where a.day = any(adds) and a.profile_id <> who;
+  -- the scheduler's change: the APP it takes over from must still hold every shift added
+  if p_replace is not null then
+    select nullif(btrim(p.display_name), '') into r_name from public.user_profiles p where p.id = p_replace;
+    select string_agg(to_char(a.d, 'FMMM/FMDD') || ' ' || a.t, ', ' order by a.d, a.t) into bad
+      from unnest(a_day, a_type) a(d, t)
+     where not exists (select 1 from public.app_call_days x where x.day = a.d and x.shift_type = a.t and x.profile_id = p_replace);
     if bad is not null then
-      raise exception 'APP_DAY_TAKEN: % - nothing was saved', bad using errcode = 'AP005';
+      raise exception 'APP_DAY_STALE: % is no longer %''s shift - reload the calendar (nothing was saved)', bad, coalesce(r_name, 'another APP') using errcode = 'AP007';
     end if;
+  end if;
+  -- perDay: an added shift that other APPs already fill (the one taken over from does not count) is refused, naming them
+  select string_agg(to_char(a.d, 'FMMM/FMDD') || ' ' || a.t || ' already has ' || h.names
+                    || case when st.per_day > 1 then ' (' || st.per_day || ' a day)' else '' end, '; ' order by a.d, a.t)
+    into bad
+    from unnest(a_day, a_type) a(d, t)
+    join public.silvis_app_shift_types(blob) st on st.id = a.t
+    cross join lateral (select count(*) as n,
+                               string_agg(coalesce(nullif(btrim(p.display_name), ''), 'another APP'), ' and '
+                                          order by coalesce(nullif(btrim(p.display_name), ''), 'another APP')) as names
+                          from public.app_call_days x left join public.user_profiles p on p.id = x.profile_id
+                         where x.day = a.d and x.shift_type = a.t and x.profile_id <> who and x.profile_id is distinct from p_replace) h
+   where h.n >= st.per_day
+     and not exists (select 1 from public.app_call_days x where x.day = a.d and x.shift_type = a.t and x.profile_id = who);
+  if bad is not null then
+    raise exception 'APP_DAY_TAKEN: % - nothing was saved', bad using errcode = 'AP005';
+  end if;
+  -- an added shift reaching into one of the APP's own vacation days (any minute of it) is refused
+  select string_agg(to_char(x.d, 'FMMM/FMDD') || ' ' || x.t, ', ' order by x.d, x.t) into bad
+    from (select distinct a.d, a.t
+            from unnest(a_day, a_type) a(d, t)
+            join public.silvis_app_shift_types(blob) st on st.id = a.t
+            join public.app_time_off v on v.profile_id = who
+           where (a.d - date '2000-01-01') * 1440 + st.start_min < (v.end_date - date '2000-01-01' + 1) * 1440
+             and (v.start_date - date '2000-01-01') * 1440 < (a.d - date '2000-01-01') * 1440 + st.start_min
+                   + case when st.end_min > st.start_min then st.end_min - st.start_min else st.end_min - st.start_min + 1440 end) x;
+  if bad is not null then
+    raise exception 'APP_DAY_VACATION: % is on %''s vacation - change the vacation first (nothing was saved)', bad, coalesce(t_name, 'the APP') using errcode = 'AP010';
+  end if;
+  -- two shifts of one APP may not overlap: the added ones against each other and against the shifts the APP keeps
+  -- (a kept row whose type the blob no longer lists counts as its whole calendar day)
+  with mine as (
+    select a.d, a.t, true as added from unnest(a_day, a_type) a(d, t)
+    union all
+    select x.day, x.shift_type, false from public.app_call_days x
+     where x.profile_id = who
+       and not exists (select 1 from unnest(c_day, c_type) c(d, t) where c.d = x.day and c.t = x.shift_type)
+       and not exists (select 1 from unnest(a_day, a_type) a(d, t) where a.d = x.day and a.t = x.shift_type)
+  ),
+  iv as (
+    select m.d, m.t, m.added,
+           (m.d - date '2000-01-01') * 1440 + coalesce(st.start_min, 0) as s,
+           (m.d - date '2000-01-01') * 1440 + coalesce(st.start_min, 0)
+             + coalesce(case when st.end_min > st.start_min then st.end_min - st.start_min else st.end_min - st.start_min + 1440 end, 1440) as e
+      from mine m left join public.silvis_app_shift_types(blob) st on st.id = m.t
+  )
+  select string_agg(to_char(p.d, 'FMMM/FMDD') || ' ' || p.t || ' overlaps ' || to_char(q.d, 'FMMM/FMDD') || ' ' || q.t, ', ' order by p.d, p.t, q.d, q.t)
+    into bad
+    from iv p join iv q on p.added and (q.d, q.t) <> (p.d, p.t) and (not q.added or (p.d, p.t) < (q.d, q.t)) and p.s < q.e and q.s < p.e;
+  if bad is not null then
+    raise exception 'APP_DAY_OVERLAP: % - one APP holds one shift at a time (nothing was saved)', bad using errcode = 'AP009';
   end if;
 
   v_src := case when who = me then 'app' else 'scheduler' end;
-  if repl then
-    select coalesce(jsonb_agg(jsonb_build_object('day', a.day, 'profile_id', a.profile_id, 'name', coalesce(nullif(btrim(p.display_name), ''), 'another APP')) order by a.day), '[]'::jsonb)
-      into replaced
-      from public.app_call_days a left join public.user_profiles p on p.id = a.profile_id
-     where a.day = any(adds) and a.profile_id <> who;
-    delete from public.app_call_days a where a.day = any(adds) and a.profile_id <> who;
+  if p_replace is not null then
+    with d as (
+      delete from public.app_call_days x using unnest(a_day, a_type) a(d, t)
+       where x.day = a.d and x.shift_type = a.t and x.profile_id = p_replace
+      returning x.day, x.shift_type
+    ) select coalesce(jsonb_agg(jsonb_build_object('day', d.day, 'type', d.shift_type, 'profile_id', p_replace, 'name', coalesce(r_name, 'another APP')) order by d.day, d.shift_type), '[]'::jsonb)
+        into replaced from d;
   end if;
-  with del as (
-    delete from public.app_call_days a where a.profile_id = who and a.day = any(clears) returning a.day
-  ) select coalesce(array_agg(del.day order by del.day), '{}') into del_days from del;
-  with ins as (
-    insert into public.app_call_days (day, profile_id, source, created_by)
-    select d, who, v_src, me from unnest(adds) d
-    on conflict (day) do nothing
-    returning day
-  ) select coalesce(array_agg(ins.day order by ins.day), '{}') into ins_days from ins;
-  if exists (select 1 from public.app_call_days a where a.day = any(adds) and a.profile_id <> who) then
-    raise exception 'APP_DAY_TAKEN: a day changed hands during this save - reload and try again (nothing was saved)' using errcode = 'AP005';
+  with d as (
+    delete from public.app_call_days x using unnest(c_day, c_type) c(d, t)
+     where x.day = c.d and x.shift_type = c.t and x.profile_id = who
+    returning x.day, x.shift_type
+  ) select coalesce(jsonb_agg(jsonb_build_object('day', d.day, 'type', d.shift_type) order by d.day, d.shift_type), '[]'::jsonb) into del from d;
+  with i as (
+    insert into public.app_call_days (day, shift_type, profile_id, source, created_by)
+    select a.d, a.t, who, v_src, me from unnest(a_day, a_type) a(d, t)
+    on conflict (day, shift_type, profile_id) do nothing
+    returning day, shift_type
+  ) select coalesce(jsonb_agg(jsonb_build_object('day', i.day, 'type', i.shift_type) order by i.day, i.shift_type), '[]'::jsonb) into ins from i;
+  -- defence in depth (the lock makes it unreachable through this function): no shift this save inserted may now hold more APPs than
+  -- its perDay (a shift the APP already held is not counted again: a perDay lowered in Setup keeps a day's holders)
+  if exists (select 1 from jsonb_array_elements(ins) x join public.silvis_app_shift_types(blob) st on st.id = x ->> 'type'
+              where (select count(*) from public.app_call_days d where d.day = (x ->> 'day')::date and d.shift_type = x ->> 'type') > st.per_day) then
+    raise exception 'APP_DAY_TAKEN: a shift filled up during this save - reload and try again (nothing was saved)' using errcode = 'AP005';
   end if;
 
-  if cardinality(ins_days) + cardinality(del_days) > 0 then
+  if jsonb_array_length(ins) + jsonb_array_length(del) > 0 then
     v_sum := coalesce(t_name, 'APP') || ': ' || concat_ws('; ',
-      case when cardinality(ins_days) > 0 then 'on call ' || (select string_agg(to_char(d, 'FMMM/FMDD')
-             || coalesce(' (was ' || (select x ->> 'name' from jsonb_array_elements(replaced) x where (x ->> 'day')::date = d limit 1) || ')', ''),
-             ', ' order by d) from unnest(ins_days) d) end,
-      case when cardinality(del_days) > 0 then 'removed ' || (select string_agg(to_char(d, 'FMMM/FMDD'), ', ' order by d) from unnest(del_days) d) end);
+      (select string_agg(g.txt, '; ' order by g.first_day, g.t)
+         from (select x ->> 'type' as t, min((x ->> 'day')::date) as first_day,
+                      (x ->> 'type') || ' ' || string_agg(to_char((x ->> 'day')::date, 'FMMM/FMDD')
+                        || coalesce(' (was ' || (select r ->> 'name' from jsonb_array_elements(replaced) r
+                                                  where r ->> 'day' = x ->> 'day' and r ->> 'type' = x ->> 'type' limit 1) || ')', ''),
+                        ', ' order by (x ->> 'day')::date) as txt
+                 from jsonb_array_elements(ins) x group by x ->> 'type') g),
+      (select string_agg('removed ' || g.txt, '; ' order by g.first_day, g.t)
+         from (select x ->> 'type' as t, min((x ->> 'day')::date) as first_day,
+                      (x ->> 'type') || ' ' || string_agg(to_char((x ->> 'day')::date, 'FMMM/FMDD'), ', ' order by (x ->> 'day')::date) as txt
+                 from jsonb_array_elements(del) x group by x ->> 'type') g));
     insert into public.audit_log (actor_id, actor_name, action, detail)
     values (coalesce(public.silvis_person_id(), me::text),
             coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
@@ -2206,16 +2434,192 @@ begin
                        where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
                      'Unknown'),
             'appdays.save',
-            jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', to_jsonb(ins_days), 'removed', to_jsonb(del_days), 'replaced', replaced, 'source', v_src));
+            jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', ins, 'removed', del, 'replaced', replaced, 'source', v_src));
   end if;
-  return jsonb_build_object('ok', true, 'profile_id', who, 'added', cardinality(ins_days), 'removed', cardinality(del_days),
-                            'kept', cardinality(adds) - cardinality(ins_days), 'absent', cardinality(clears) - cardinality(del_days),
-                            'replaced', jsonb_array_length(replaced), 'source', v_src, 'audit', cardinality(ins_days) + cardinality(del_days) > 0);
+  return jsonb_build_object('ok', true, 'profile_id', who, 'added', jsonb_array_length(ins), 'removed', jsonb_array_length(del),
+                            'kept', cardinality(a_day) - jsonb_array_length(ins), 'absent', cardinality(c_day) - jsonb_array_length(del),
+                            'replaced', jsonb_array_length(replaced), 'source', v_src, 'audit', jsonb_array_length(ins) + jsonb_array_length(del) > 0);
 end $$;
-revoke all on function public.save_app_days(uuid, date[], date[], boolean) from public;
-revoke all on function public.save_app_days(uuid, date[], date[], boolean) from anon;
-grant execute on function public.save_app_days(uuid, date[], date[], boolean) to authenticated;
-comment on function public.save_app_days(uuid, date[], date[], boolean) is 'Prompt 29: the only write path into app_call_days - an APP for its own profile, the scheduler (admin / scheduler) for any APP profile (adds) or any holder (clears; p_replace takes a day over). All or nothing; refusals before any write: AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN, AP006 APP_DAY_PAST (not the scheduler), AP007 APP_DAY_STALE. Writes one appdays.save audit row per Save that changed something (the client writes none); no notification row, no e-mail.';
+revoke all on function public.save_app_days(uuid, jsonb, jsonb, uuid) from public;
+revoke all on function public.save_app_days(uuid, jsonb, jsonb, uuid) from anon;
+grant execute on function public.save_app_days(uuid, jsonb, jsonb, uuid) to authenticated;
+comment on function public.save_app_days(uuid, jsonb, jsonb, uuid) is 'Prompt 29 / revision ac (Prompt 35): the only write path into app_call_days - typed shifts, the lists JSON arrays of {day, type}. An APP for its own profile, the scheduler (admin / scheduler) for any APP (adds) or any holder (clears; p_replace = the APP a change takes a shift over from). All or nothing; refusals before any write: AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN (perDay), AP006 APP_DAY_PAST (not the scheduler), AP007 APP_DAY_STALE, AP008 APP_DAY_NO_SHIFT (type, weekday, holiday, retired), AP009 APP_DAY_OVERLAP, AP010 APP_DAY_VACATION. Writes one appdays.save audit row per Save that changed something (the client writes none); no notification row, no e-mail.';
+
+-- (5) save_app_vacations: the only write path into app_time_off
+create or replace function public.save_app_vacations(p_profile uuid, p_add jsonb, p_remove uuid[]) returns jsonb
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  me        uuid := auth.uid();
+  sched     boolean := public.silvis_is_sched();
+  coord     boolean := public.silvis_is_coord();
+  c_app     boolean := public.silvis_is_app();
+  who       uuid := p_profile;
+  today_c   date := (now() at time zone 'America/Chicago')::date;
+  blob      jsonb;
+  a_s       date[];
+  a_e       date[];
+  rm        uuid[];
+  t_app     boolean;
+  t_name    text;
+  v_src     text;
+  bad       text;
+  ins       jsonb := '[]'::jsonb;
+  del       jsonb := '[]'::jsonb;
+  n_kept    int := 0;
+  v_sum     text;
+begin
+  if me is null or not (sched or coord or c_app) then
+    raise exception 'APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation' using errcode = 'AV001';
+  end if;
+  if who is null and c_app then who := me; end if;
+  if who is null then
+    raise exception 'APP_VACATION_NOT_ALLOWED: name the APP (pick one in Time off)' using errcode = 'AV001';
+  end if;
+  if not (sched or coord) and who <> me then
+    raise exception 'APP_VACATION_NOT_YOURS: an APP enters, changes or removes only their own vacations - ask the scheduler or the office' using errcode = 'AV002';
+  end if;
+  -- the lists: p_add a JSON array of {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}, p_remove the ids of the APP's vacations to remove
+  if p_add is not null and jsonb_typeof(p_add) <> 'array' then
+    raise exception 'APP_VACATION_BAD_RANGE: the vacations must come as a list - nothing was saved' using errcode = 'AV004';
+  end if;
+  if array_position(p_remove, null) is not null then
+    raise exception 'APP_VACATION_BAD_RANGE: a vacation in the remove list is empty - nothing was saved' using errcode = 'AV004';
+  end if;
+  if exists (select 1 from jsonb_array_elements(coalesce(p_add, '[]'::jsonb)) x
+              where jsonb_typeof(x) <> 'object' or jsonb_typeof(x -> 'start') is distinct from 'string' or jsonb_typeof(x -> 'end') is distinct from 'string') then
+    raise exception 'APP_VACATION_BAD_RANGE: a vacation in the list is not a first and a last day - nothing was saved' using errcode = 'AV004';
+  end if;
+  if coalesce(jsonb_array_length(p_add), 0) + coalesce(cardinality(p_remove), 0) > 50 then
+    raise exception 'APP_VACATION_BAD_RANGE: at most 50 vacations in one save - nothing was saved' using errcode = 'AV004';
+  end if;
+  if exists (select 1 from jsonb_array_elements(coalesce(p_add, '[]'::jsonb)) x
+              where (x ->> 'start') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' or (x ->> 'end') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') then
+    raise exception 'APP_VACATION_BAD_RANGE: a day in the list is not a calendar day - nothing was saved' using errcode = 'AV004';
+  end if;
+  begin
+    select coalesce(array_agg(s.a order by s.a, s.b), '{}'), coalesce(array_agg(s.b order by s.a, s.b), '{}') into a_s, a_e
+      from (select distinct (x ->> 'start')::date as a, (x ->> 'end')::date as b from jsonb_array_elements(coalesce(p_add, '[]'::jsonb)) x) s;
+  exception when invalid_datetime_format or datetime_field_overflow then
+    raise exception 'APP_VACATION_BAD_RANGE: a day in the list is not a calendar day - nothing was saved' using errcode = 'AV004';
+  end;
+  select string_agg(to_char(a.s, 'FMMM/FMDD') || '-' || to_char(a.e, 'FMMM/FMDD'), ', ' order by a.s, a.e) into bad
+    from unnest(a_s, a_e) a(s, e) where a.e < a.s;
+  if bad is not null then
+    raise exception 'APP_VACATION_BAD_RANGE: % ends before it starts - nothing was saved', bad using errcode = 'AV004';
+  end if;
+  select string_agg(to_char(a.s, 'FMMM/FMDD') || '-' || to_char(a.e, 'FMMM/FMDD'), ', ' order by a.s, a.e) into bad
+    from unnest(a_s, a_e) a(s, e) where a.e - a.s > 365;
+  if bad is not null then
+    raise exception 'APP_VACATION_BAD_RANGE: % is longer than a year - nothing was saved', bad using errcode = 'AV004';
+  end if;
+  select string_agg(to_char(p.s, 'FMMM/FMDD') || case when p.e > p.s then '-' || to_char(p.e, 'FMMM/FMDD') else '' end || ' and '
+                    || to_char(q.s, 'FMMM/FMDD') || case when q.e > q.s then '-' || to_char(q.e, 'FMMM/FMDD') else '' end, ', ' order by p.s, p.e, q.s, q.e)
+    into bad
+    from unnest(a_s, a_e) with ordinality p(s, e, i) join unnest(a_s, a_e) with ordinality q(s, e, i) on p.i < q.i and p.s <= q.e and q.s <= p.e;
+  if bad is not null then
+    raise exception 'APP_VACATION_BAD_RANGE: % overlap - nothing was saved', bad using errcode = 'AV004';
+  end if;
+  select coalesce(array_agg(distinct r), '{}') into rm from unnest(coalesce(p_remove, '{}'::uuid[])) r;
+  select (p.is_app and p.role = 'viewer' and p.person_id is null), nullif(btrim(p.display_name), '')
+    into t_app, t_name from public.user_profiles p where p.id = who;
+  if cardinality(a_s) > 0 and not coalesce(t_app, false) then
+    raise exception 'APP_VACATION_NOT_APP: % is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)', coalesce(t_name, 'that account') using errcode = 'AV003';
+  end if;
+  -- One APP write at a time - the same lock as save_app_days (a vacation and a shift of one APP are checked against each other).
+  perform pg_advisory_xact_lock(hashtext('app_call_days:save'));
+  if exists (select 1 from unnest(rm) r where not exists (select 1 from public.app_time_off v where v.id = r and v.profile_id = who)) then
+    raise exception 'APP_VACATION_STALE: a vacation in the list is gone or is not %''s - reload Time off (nothing was saved)', coalesce(t_name, 'this APP') using errcode = 'AV007';
+  end if;
+  if not sched then
+    select string_agg(to_char(v.start_date, 'FMMM/FMDD') || case when v.end_date > v.start_date then '-' || to_char(v.end_date, 'FMMM/FMDD') else '' end,
+                      ', ' order by v.start_date, v.end_date)
+      into bad
+      from public.app_time_off v where v.id = any(rm) and v.start_date <= today_c;
+    if bad is not null then
+      raise exception 'APP_VACATION_PAST: % has started or passed (today is % in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'AV006';
+    end if;
+  end if;
+  -- an add equal to a vacation the APP keeps is kept (a re-sent Save); any other add touching a kept vacation is refused
+  select count(*) into n_kept
+    from unnest(a_s, a_e) a(s, e)
+   where exists (select 1 from public.app_time_off v where v.profile_id = who and not (v.id = any(rm)) and v.start_date = a.s and v.end_date = a.e);
+  select string_agg(x.txt, ', ' order by x.s, x.e) into bad
+    from (select distinct v.start_date as s, v.end_date as e,
+                 to_char(v.start_date, 'FMMM/FMDD') || case when v.end_date > v.start_date then '-' || to_char(v.end_date, 'FMMM/FMDD') else '' end as txt
+            from unnest(a_s, a_e) a(s, e)
+            join public.app_time_off v on v.profile_id = who and not (v.id = any(rm)) and v.start_date <= a.e and a.s <= v.end_date
+           where not (v.start_date = a.s and v.end_date = a.e)) x;
+  if bad is not null then
+    raise exception 'APP_VACATION_OVERLAP: % is already away % - change that vacation instead (nothing was saved)', coalesce(t_name, 'the APP'), bad using errcode = 'AV008';
+  end if;
+  -- the APP's own shifts: a vacation reaching any minute of one is refused (a shift whose type the blob no longer lists counts as its day)
+  select c.data into blob from public.call_schedule_data c where c.id = 'main';
+  select string_agg(x.txt, ', ' order by x.day, x.shift_type) into bad
+    from (select distinct s.day, s.shift_type, to_char(s.day, 'FMMM/FMDD') || ' ' || s.shift_type as txt
+            from public.app_call_days s
+            left join public.silvis_app_shift_types(blob) st on st.id = s.shift_type
+            join unnest(a_s, a_e) a(s, e) on true
+           where s.profile_id = who
+             and (s.day - date '2000-01-01') * 1440 + coalesce(st.start_min, 0) < (a.e - date '2000-01-01' + 1) * 1440
+             and (a.s - date '2000-01-01') * 1440 < (s.day - date '2000-01-01') * 1440 + coalesce(st.start_min, 0)
+                   + coalesce(case when st.end_min > st.start_min then st.end_min - st.start_min else st.end_min - st.start_min + 1440 end, 1440)) x;
+  if bad is not null then
+    raise exception 'APP_VACATION_ON_SHIFT: % holds % - remove the shift first (nothing was saved)', coalesce(t_name, 'the APP'), bad using errcode = 'AV005';
+  end if;
+
+  v_src := case when who = me then 'app' when sched then 'scheduler' else 'office' end;
+  with d as (
+    delete from public.app_time_off v where v.id = any(rm) and v.profile_id = who returning v.id, v.start_date, v.end_date
+  ) select coalesce(jsonb_agg(jsonb_build_object('id', d.id, 'start', d.start_date, 'end', d.end_date) order by d.start_date, d.end_date), '[]'::jsonb) into del from d;
+  with i as (
+    insert into public.app_time_off (profile_id, start_date, end_date, source, created_by)
+    select who, a.s, a.e, v_src, me from unnest(a_s, a_e) a(s, e)
+     where not exists (select 1 from public.app_time_off v where v.profile_id = who and v.start_date = a.s and v.end_date = a.e)
+    returning id, start_date, end_date
+  ) select coalesce(jsonb_agg(jsonb_build_object('id', i.id, 'start', i.start_date, 'end', i.end_date) order by i.start_date, i.end_date), '[]'::jsonb) into ins from i;
+  if jsonb_array_length(ins) + jsonb_array_length(del) > 0 then
+    v_sum := coalesce(t_name, 'APP') || ': ' || concat_ws('; ',
+      (select 'vacation ' || string_agg(to_char((x ->> 'start')::date, 'FMMM/FMDD')
+                 || case when (x ->> 'end')::date > (x ->> 'start')::date then '-' || to_char((x ->> 'end')::date, 'FMMM/FMDD') else '' end,
+               ', ' order by (x ->> 'start')::date)
+         from jsonb_array_elements(ins) x having count(*) > 0),
+      (select 'removed vacation ' || string_agg(to_char((x ->> 'start')::date, 'FMMM/FMDD')
+                 || case when (x ->> 'end')::date > (x ->> 'start')::date then '-' || to_char((x ->> 'end')::date, 'FMMM/FMDD') else '' end,
+               ', ' order by (x ->> 'start')::date)
+         from jsonb_array_elements(del) x having count(*) > 0));
+    insert into public.audit_log (actor_id, actor_name, action, detail)
+    values (coalesce(public.silvis_person_id(), me::text),
+            coalesce((select nullif(btrim(u.display_name), '') from public.user_profiles u where u.id = me),
+                     (select r ->> 'name' from public.call_schedule_data c, jsonb_array_elements(case when jsonb_typeof(c.data -> 'roster') = 'array' then c.data -> 'roster' else '[]'::jsonb end) r
+                       where c.id = 'main' and r ->> 'id' = public.silvis_person_id() limit 1),
+                     'Unknown'),
+            'appvac.save',
+            jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', ins, 'removed', del, 'source', v_src));
+  end if;
+  return jsonb_build_object('ok', true, 'profile_id', who, 'added', jsonb_array_length(ins), 'removed', jsonb_array_length(del),
+                            'kept', n_kept, 'source', v_src, 'audit', jsonb_array_length(ins) + jsonb_array_length(del) > 0);
+end $$;
+revoke all on function public.save_app_vacations(uuid, jsonb, uuid[]) from public;
+revoke all on function public.save_app_vacations(uuid, jsonb, uuid[]) from anon;
+grant execute on function public.save_app_vacations(uuid, jsonb, uuid[]) to authenticated;
+comment on function public.save_app_vacations(uuid, jsonb, uuid[]) is 'Revision ac (Prompt 35): the only write path into app_time_off - p_add a JSON array of {start, end}, p_remove the ids to remove (a change = remove + add in one Save). An APP for itself; the scheduler and the office coordinator for any APP (adds only for a current APP). All or nothing; refusals before any write: AV001 APP_VACATION_NOT_ALLOWED, AV002 APP_VACATION_NOT_YOURS, AV003 APP_VACATION_NOT_APP, AV004 APP_VACATION_BAD_RANGE, AV005 APP_VACATION_ON_SHIFT (remove the shift first), AV006 APP_VACATION_PAST (a started vacation; not the scheduler), AV007 APP_VACATION_STALE, AV008 APP_VACATION_OVERLAP. No vacation guard (the surgeons'' minimum does not count APPs). Writes one appvac.save audit row per Save that changed something; no notification row, no e-mail.';
+
+-- (6) app_call_names(), re-created: the holders of APP vacations too, and every APP profile for the office coordinator
+create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)
+language sql stable security definer set search_path = public, pg_temp as $$
+  select p.id, nullif(btrim(p.display_name), ''), (p.is_app and p.role = 'viewer' and p.person_id is null)
+    from public.user_profiles p
+   where auth.uid() is not null
+     and (exists (select 1 from public.app_call_days a where a.profile_id = p.id)
+          or exists (select 1 from public.app_time_off v where v.profile_id = p.id)
+          or (p.is_app and p.role = 'viewer' and p.person_id is null
+              and (p.id = auth.uid() or public.silvis_is_sched() or public.silvis_is_coord())))
+   order by p.id;
+$$;
+revoke all on function public.app_call_names() from public;
+revoke all on function public.app_call_names() from anon;
+grant execute on function public.app_call_names() to authenticated;
+comment on function public.app_call_names() is 'Prompt 29 / revision ac (Prompt 35): the display names of the APP shifts and vacations - every profile that holds a shift or a vacation (any signed-in caller), the caller''s own APP profile and, for the scheduler and the office coordinator, every APP profile (the day editor''s and Time off''s pick lists). Display name and the APP flag only - never an email, never a role. Stable: the client calls it with GET.';
 
 -- ---------- phone push (Prompt 30, revision w; sql/migrations/2026-10-03-push-notifications.sql - report-first; applied 2026-10-03 16:30:43Z)
 -- Faraz 10/2: "Davenport's look, Silvis's own push" - Web Push with VAPID keys and the app's own sw.js (no OneSignal). One row per
@@ -2448,6 +2852,7 @@ alter table public.call_periods            enable row level security;
 alter table public.call_pay_settings       enable row level security;
 alter table public.call_pay_logs           enable row level security;
 alter table public.app_call_days           enable row level security;
+alter table public.app_time_off            enable row level security;
 alter table public.push_subscriptions      enable row level security;
 
 -- Anon-readable tables (shareable page + calendar-sync need these without a JWT)
@@ -2663,6 +3068,12 @@ create policy call_pay_logs_delete on public.call_pay_logs for delete to authent
 -- policy and no write privilege for authenticated: save_app_days() is the door (an APP for its own days, the scheduler for any APP).
 drop policy if exists app_call_days_read on public.app_call_days;
 create policy app_call_days_read on public.app_call_days for select to authenticated using (true);
+
+-- app_time_off (Prompt 35, revision ac; sql/migrations/2026-11-17-app-shifts.sql - report-first, NOT yet applied): every signed-in role reads
+-- the APP vacations (surgeon, coordinator, viewer, APP, follower, scheduler - Time off, Mine and the calendar's vacation bar); never anon (not
+-- in the read_all loop; anon's privileges revoked). No write policy and no write privilege for authenticated: save_app_vacations() is the door.
+drop policy if exists app_time_off_read on public.app_time_off;
+create policy app_time_off_read on public.app_time_off for select to authenticated using (true);
 
 -- push_subscriptions (Prompt 30, revision w - report-first; applied 2026-10-03 16:30:43Z): own rows only. anon holds nothing (every privilege
 -- revoked, no policy); authenticated SELECTs the non-secret columns of its own rows and DELETEs its own rows (the sign-out cleanup,

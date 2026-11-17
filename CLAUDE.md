@@ -11,7 +11,9 @@ different shift model. Frontend on GitHub Pages, backend on Supabase project `bz
 (`https://bzhsroegtagqhutbnsrp.supabase.co`). Faraz Khan (FAK, roster `s1`) is the scheduler, admin, sole
 developer, one of the six surgeons, and the user you're working with. Live users: 6 surgeons, the office coordinator(s) and
 viewers / followers; APP accounts - viewers with `user_profiles.is_app` who put themselves on call days (Prompt 29, applied
-2026-10-02) - once Faraz switches them on. Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
+2026-10-02) - once Faraz switches them on; since Prompt 35 (Faraz 11/17; revision ac, report-first - his apply, then the client on
+his go) those days are typed shifts with hours (Setup data `groupRules.appShiftTypes`; one for now, Inbox 7a-5p Mon-Fri) and
+the APPs enter their own vacations (`app_time_off`, never `time_off`) - build guide §27. Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
 
 ## Identity model — get this right
 
@@ -67,7 +69,8 @@ rates. No $ in notifications, e-mails, calendar feeds, the public page or export
 roster ids / days / hours, never an amount.
 Carried over from Davenport on purpose: office notifications, calendar sync, refresh/version check, data management,
 every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs only put themselves on call days - Prompt 29,
-applied 2026-10-02; the generator, Totals, pay and e-mails ignore them), Fierce backup weeks, no-call days, vacation
+applied 2026-10-02; the generator, Totals, pay and e-mails ignore them - and the typed shifts and APP vacations of Prompt 35 too),
+Fierce backup weeks, no-call days, vacation
 approvals, Davenport's split-shift accounting (Silvis weighs whole days instead - the weighted load above, Prompt 32).
 The East-code surgeon (Khan today) sees a "My call - Silvis + Davenport" card in Mine (Prompt 31 Part B): Silvis days plus
 Davenport call counted by `call-totals.js`, the Davenport app's own counter ported verbatim, so both apps' cards agree.
@@ -135,7 +138,9 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   "unavailable", never as an empty list. The same contract holds for the authenticated-only RPC `silvis_derived_vacations()`
   (Prompt 31 Part A; EXECUTE for authenticated + service_role, never anon - a new function's EXECUTE is revoked from PUBLIC
   and anon, since Supabase grants it to anon by default), read through `config.js` `derivedVacDb`: a missing function (404)
-  is "unavailable".
+  is "unavailable". So for the APP tables (`app_call_days`, and `app_time_off` from revision ac): authenticated-read only,
+  written only through `save_app_days()` / `save_app_vacations()`, read through `config.js` `appDaysDb` - a missing table,
+  function or column (404, 42703) is "unavailable".
   An RLS-blocked read returns HTTP 200 + `[]` — **silent**. Reads must distinguish failure from empty (`db.query` throws on
   non-2xx; keep that). **The service-role key is server-side only — never in client code or a URL.** RLS changes apply to
   the live DB instantly — always report-first with blast radius.
@@ -222,3 +227,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   Memorial Day call; the day before a vacation was answered 11/12 - it stays his - which leaves a holiday unit ending the
   day before one). Faraz's own Prompt 34 step: the `east-feed-refresh` v3 deploy and its
   dry-run proof (`edge-functions/README.md` §3, "2026-11-11 - the East week lists") - v3 is prepared and waits for it.
+  Prompt 35 (APP shifts and APP vacations, 11/17): Faraz's own steps are the revision ac apply (`apply-app-shifts.sh`,
+  `docs/SCHEMA-REVIEW.md` "2026-11-17 - APP shifts and APP vacations") and then, on his go, the client push - apply and push the
+  same day; readings to confirm: §8 item 30.

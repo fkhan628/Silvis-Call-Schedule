@@ -4030,16 +4030,19 @@ eq(apStmts.map((st) => st.split("\n")[0].replace(/ is '.*$/, " is ...")), [
   "comment on function public.save_app_days(uuid, date[], date[], boolean) is ...",
   "notify pgrst, 'reload schema';",
 ], "the migration is exactly: the column + check, silvis_is_app + grants + comment, the two self policies, the table + index + RLS + privileges + policy + comment, app_call_names + grants + comment, save_app_days + grants + comment, the reload (in this order);");
-function checkAppDays(n, s) {
+// superseded (schema.sql since revision ac, Prompt 35): save_app_days and app_call_names are revision ac's there (pinned in its block),
+// so their Prompt 29 texts are read in the migration file only
+function checkAppDays(n, s, superseded) {
   AP_COLUMN_LINES.forEach((l) => ok(s.indexOf(l) >= 0, n + ": missing the is_app line:\n" + l));
   ok(s.indexOf(AP_SELF_INSERT) >= 0, n + ": user_profiles_self_insert must read exactly:\n" + AP_SELF_INSERT);
   ok(s.indexOf(AP_SELF_UPDATE) >= 0, n + ": user_profiles_self_update must read exactly:\n" + AP_SELF_UPDATE);
   ok(s.indexOf(AP_TABLE) >= 0, n + ": the app_call_days table must read exactly:\n" + AP_TABLE);
   ok(s.indexOf(AP_INDEX) >= 0 && s.indexOf(AP_PRIVS) >= 0 && s.indexOf(AP_READ_POLICY) >= 0 && s.indexOf("drop policy if exists app_call_days_read on public.app_call_days;\n" + AP_READ_POLICY) >= 0, n + ": the index, the three privilege lines (anon and authenticated revoked, SELECT granted back) and app_call_days_read (drop if exists first)");
   ok(s.indexOf(AP_IS_APP_FN) >= 0, n + ": silvis_is_app() must read exactly:\n" + AP_IS_APP_FN);
-  Object.keys(AP_GRANTS).forEach((f) => ok(s.indexOf(AP_GRANTS[f]) > s.indexOf("create or replace function public." + f + "("), n + ": " + f + "() grants must read exactly (after the function):\n" + AP_GRANTS[f]));
-  ["silvis_is_app()", "app_call_names()", "save_app_days(uuid, date[], date[], boolean)"].forEach((f) => ok(new RegExp("^comment on function public\\." + apEsc(f) + " is 'Prompt 29[^\\n]*';$", "m").test(s), n + ": " + f + " carries a Prompt 29 comment"));
+  Object.keys(AP_GRANTS).filter((f) => !superseded || f !== "save_app_days").forEach((f) => ok(s.indexOf(AP_GRANTS[f]) > s.indexOf("create or replace function public." + f + "("), n + ": " + f + "() grants must read exactly (after the function):\n" + AP_GRANTS[f]));
+  ["silvis_is_app()", "app_call_names()", "save_app_days(uuid, date[], date[], boolean)"].filter((f) => !superseded || !/^save_app_days/.test(f)).forEach((f) => ok(new RegExp("^comment on function public\\." + apEsc(f) + " is 'Prompt 29[^\\n]*';$", "m").test(s), n + ": " + f + " carries a Prompt 29 comment"));
   ok(/^comment on table public\.app_call_days is 'Prompt 29[^\n]*never anon[^\n]*save_app_days\(\)[^\n]*';$/m.test(s), n + ": the table comment says never anon and names the write path");
+  if (superseded) return;
   ok(/AP001 APP_DAY_NOT_ALLOWED, AP002 APP_DAY_NOT_YOURS, AP003 APP_DAY_NOT_APP, AP004 APP_DAY_BAD_DAY, AP005 APP_DAY_TAKEN, AP006 APP_DAY_PAST \(not the scheduler\), AP007 APP_DAY_STALE/.test(s), n + ": save_app_days' comment names the seven codes");
   const names = sqlFunctionText(s, "app_call_names");
   ok(names && names.startsWith(AP_NAMES_SIG) && /\n\$\$;$/.test(names), n + ": app_call_names() must read `" + AP_NAMES_SIG.trim() + "` and end at `$$;`");
@@ -4085,10 +4088,14 @@ function checkAppDays(n, s) {
 checkAppDays("APP call days migration", apMig);
 
 step("Prompt 29: schema.sql mirrors the migration (every statement byte for byte, the three functions, revision v after s), the new column in the from-scratch table, app_call_days not anon-readable, the self policies replaced in place");
-checkAppDays("schema.sql", schema);
-["silvis_is_app", "app_call_names"].forEach((name) => ok(sqlFunctionText(schema, name) === sqlFunctionText(apMig, name), name + "(): schema.sql differs from sql/migrations/" + AP_FILE));
-ok(functionText(schema, "save_app_days") === functionText(apMig, "save_app_days"), "save_app_days(): schema.sql differs from sql/migrations/" + AP_FILE);
-apStmts.filter((st) => !/^notify pgrst/.test(st) && st !== AP_ENABLE).forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this APP call days statement byte for byte:\n" + st.slice(0, 300)));
+// moved deliberately 11/17 (revision ac, Prompt 35 - prepared, NOT applied): schema.sql mirrors the NEWEST migration, so save_app_days
+// and app_call_names are revision ac's there (the revision ac block pins them); Prompt 29's other texts stay byte for byte
+checkAppDays("schema.sql", schema, true);
+ok(sqlFunctionText(schema, "silvis_is_app") === sqlFunctionText(apMig, "silvis_is_app"), "silvis_is_app(): schema.sql differs from sql/migrations/" + AP_FILE);
+ok(!schema.includes(AP_SAVE_SIG) && sqlFunctionText(schema, "app_call_names") !== sqlFunctionText(apMig, "app_call_names"), "schema.sql carries revision ac's save_app_days and app_call_names (Prompt 29's are superseded - never both)");
+const AP_SUPERSEDED_BY_AC = (st) => /public\.save_app_days\(|public\.app_call_names\(\)/.test(st);
+eq(apStmts.filter(AP_SUPERSEDED_BY_AC).length, 10, "Prompt 29's statements superseded by revision ac: app_call_names and save_app_days, each with its two revokes, its grant and its comment;");
+apStmts.filter((st) => !/^notify pgrst/.test(st) && st !== AP_ENABLE && !AP_SUPERSEDED_BY_AC(st)).forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this APP call days statement byte for byte:\n" + st.slice(0, 300)));
 ok(/^alter table public\.app_call_days +enable row level security;$/m.test(schema), "schema.sql enables RLS on app_call_days (in the RLS list)");
 {
   const at = (t) => schema.indexOf(t);
@@ -4096,7 +4103,7 @@ ok(/^alter table public\.app_call_days +enable row level security;$/m.test(schem
   ok(at(AP_COLUMN_LINES[0]) > at("alter table public.user_profiles add constraint user_profiles_follows_shape") && at(AP_COLUMN_LINES[2]) < at("create or replace function public.handle_new_auth_user()"), "the is_app lines sit right after the follows lines, before handle_new_auth_user()");
   ok(/\n  follows       jsonb not null default '\[\]'::jsonb,   -- [^\n]*\n  is_app        boolean not null default false,/.test(sliceBetween(schema, "create table if not exists public.user_profiles (", "\n);") || ""), "schema.sql's user_profiles create table carries `is_app boolean not null default false` right after follows (a from-scratch schema)");
   ok(at(AP_IS_APP_FN) > at(COORD_HELPER) && at(AP_IS_APP_FN) < at("create table if not exists public.call_schedule_data ("), "silvis_is_app() sits after silvis_is_coord(), before call_schedule_data");
-  ok(at(AP_TABLE) > at("grant select, insert, update, delete on table public.call_pay_logs to authenticated;") && at("create or replace function public.app_call_names(") > at(AP_TABLE) && at("create or replace function public.save_app_days(") > at("create or replace function public.app_call_names(") && at(AP_GRANTS.save_app_days) < rls, "the table block (table, index, privileges, comment), app_call_names and save_app_days sit after the call pay grants, before Row Level Security");
+  ok(at(AP_TABLE) > at("grant select, insert, update, delete on table public.call_pay_logs to authenticated;") && at("create or replace function public.app_call_names(") > at(AP_TABLE) && at("create or replace function public.save_app_days(") > at(AP_TABLE) && at("comment on function public.app_call_names() is") < rls, "the table block (table, index, privileges, comment) sits after the call pay grants; app_call_names and save_app_days (revision ac's since 11/17) after it, before Row Level Security");
   ok(at(AP_ENABLE) < 0 && at("alter table public.app_call_days           enable row level security;") > rls, "the enable line sits in the RLS list (not in the table block)");
   ok(at(AP_READ_POLICY) > at("create policy call_pay_logs_delete on public.call_pay_logs") && at(AP_READ_POLICY) < at("-- Seed rows"), "app_call_days_read sits after the call pay policies");
   const upRead = at("create policy user_profiles_read on public.user_profiles"), upAdmin = at("create policy user_profiles_admin on public.user_profiles");
@@ -4128,6 +4135,9 @@ ok(apProbe.includes("create temp table probe_results (k text, v text);\ngrant in
   const partAt = apProbe.indexOf("raise exception 'PROBE_SETUP: user_profiles.is_app is absent - sql/migrations/2026-10-02-app-call-days.sql is partly applied';");
   const guardAt = apProbe.indexOf("raise exception 'PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2030-12 or on 2020-05-04) - the probe fixtures would collide';");
   const usersAt = apProbe.indexOf("insert into auth.users");
+  // since revision ac (11/17): the superseded raise sits between the partly-applied check and the collision guard (it reads the catalog only)
+  const supAt = apProbe.indexOf("raise exception 'PROBE_SETUP: superseded by revision ac - app_call_days has shift_type (sql/migrations/2026-11-17-app-shifts.sql); sql/probes/app-shifts-probe.sql proves the APP shifts';");
+  ok(supAt > partAt && supAt < guardAt, "the superseded raise (revision ac) comes after the partly-applied check and before the collision guard");
   ok(absentAt > 0 && partAt > absentAt && guardAt > partAt && usersAt > guardAt, "the setup raises PROBE_SETUP absent first, then the partly-applied check, then the collision guard (it reads the table), before any fixture (" + [absentAt, partAt, guardAt, usersAt] + ")");
   const code = apProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
   ok(code.includes("if to_regclass('public.app_call_days') is null then") && code.includes("if exists (select 1 from public.app_call_days d where d.day between '2030-12-01' and '2030-12-31' or d.day = '2020-05-04') then"), "the absent check is to_regclass; the guard looks at app_call_days in 2030-12 and on 2020-05-04");
@@ -4192,7 +4202,7 @@ ok(!/SILVIS_APP_DAYS_APPLIED|APSTRICT18/.test(vr), "verify-rls.sh no longer read
 eq((s18code.match(/curl /g) || []).length, 6, "section 18 makes exactly six REST calls (18a-18d anon, 18e two as a surgeon);");
 ok(s18code.includes("\"$URL/rest/v1/app_call_days?select=day&limit=1\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Prefer: count=exact\")"), "18a: anon GET app_call_days with Prefer: count=exact");
 ok(s18code.includes("\"$URL/rest/v1/rpc/app_call_names\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\")") && !/-X POST "\$URL\/rest\/v1\/rpc\/app_call_names"/.test(s18code), "18b: anon GET rpc/app_call_names (stable: GET, never POST)");
-ok(s18code.includes("-X POST \"$URL/rest/v1/rpc/save_app_days\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_profile\":null,\"p_add\":[],\"p_clear\":[],\"p_replace\":false}'"), "18c: anon POST rpc/save_app_days with the four keys and empty lists (the schema-cache gate before the client push)");
+ok(s18code.includes("-X POST \"$URL/rest/v1/rpc/save_app_days\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_profile\":null,\"p_add\":[],\"p_clear\":[],\"p_replace\":null}'"), "18c: anon POST rpc/save_app_days with the four keys and empty lists (the schema-cache gate before the client push; p_replace null since revision ac - valid for the boolean and the uuid)");
 ok(s18code.includes("-X POST \"$URL/rest/v1/app_call_days\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"day\":\"2030-12-31\",\"profile_id\":\"00000000-0000-0000-0000-000000000000\",\"source\":\"app\"}'"), "18d: anon POST app_call_days (the zero uuid names no profile)");
 {
   const posts = s18code.match(/curl [^\n]*-X POST[^\n]*/g) || [];
@@ -4204,7 +4214,7 @@ ok((s18code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 4 && (s18co
 ok(/if \[ -n "\$\{SILVIS_SURGEON_JWT:-\}" \]; then/.test(s18code) && s18code.includes('echo "   SKIP 18e (set SILVIS_SURGEON_JWT=') && /"HTTP 400"\) if grep -q 'AP001'/.test(s18code), "18e runs only with SILVIS_SURGEON_JWT (a SKIP line otherwise): the surgeon's read 200, the surgeon's empty save 400 with AP001");
 ok(/PROBE18="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/app-call-days-probe\.sql"/.test(s18code), "18f runs sql/probes/app-call-days-probe.sql through the linked CLI");
 // pin moved deliberately 10/2 (the record step): PROBE_SETUP (absent) is a FAIL with no flag - the table exists since the apply
-ok(/bad "APP days probe: PROBE_SETUP - app_call_days is absent \(the table exists since the 2026-10-02 apply\)"/.test(s18code) && !/ok "APP days probe: app_call_days is absent/.test(s18code) && /bad "APP days probe: PROBE_SETUP - user_profiles\.is_app is absent/.test(s18code) && /bad "APP days probe: PROBE_SETUP - live app_call_days rows sit in the probe window/.test(s18code), "18f must FAIL a PROBE_SETUP (strict since the record step; it passed as the not-applied picture before); the partly-applied raise and the collision guard FAIL too");
+ok(/bad "APP days probe: PROBE_SETUP - app_call_days is absent \(the table exists since the 2026-10-02 apply\)"/.test(s18code) && !/ok "APP days probe: app_call_days is absent/.test(s18code) && /bad "APP days probe: PROBE_SETUP - user_profiles\.is_app is absent/.test(s18code) && /bad "APP days probe: PROBE_SETUP - live app_call_days rows sit in the probe window/.test(s18code) && /ok "APP days probe: superseded by revision ac - app_call_days has shift_type \(Prompt 35\); section 25 grades sql\/probes\/app-shifts-probe\.sql instead"/.test(s18code), "18f must FAIL a PROBE_SETUP (its superseded raise since revision ac is ONE PASS) (strict since the record step; it passed as the not-applied picture before); the partly-applied raise and the collision guard FAIL too");
 ok(s18code.includes("sed 's/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g'"), "section 18's case reader decodes the CLI's \\u003e / \\u003c / \\u0026 and drops the JSON backslashes before grading");
 ok(s18code.includes('lines18=$(echo "$results18" | tr \';\' \'\\n\' | sed ') && s18code.includes('case_val18()   { CV18=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV18="${l#"$1="}"; return 0;; esac; done <<< "$lines18"; }'), "section 18 decodes the results ONCE and reads each case in plain bash (no process per case)");
 AP_CASES.forEach((k) => {
@@ -4237,7 +4247,7 @@ ok(/if \[ "\$end18" = "results" \]; then\n\s+bad "APP days probe LEFT ROWS BEHIN
   const setupEnd = apProbe.indexOf("\nend $$;"), firstWin = apProbe.indexOf("r := public.save_app_days(");
   const raises = []; let at = apProbe.indexOf("raise exception 'PROBE_SETUP"); while (at >= 0) { raises.push(at); at = apProbe.indexOf("raise exception 'PROBE_SETUP", at + 1); }
   const setupBlock = setupEnd > 0 ? apProbe.slice(apProbe.lastIndexOf("\ndo $$", setupEnd), setupEnd) : "";
-  ok(setupEnd > 0 && firstWin > setupEnd && raises.length === 4 && raises.every((x) => x < setupEnd) && setupBlock.length > 0 && !/app_call_days\s*\(|into public\.app_call_days|save_app_days/.test(setupBlock), "the APP days probe raises its four PROBE_SETUP (the absent, the partly-applied, the collision guard and the profile-rows check) in its setup block, which writes no app_call_days row, and nowhere else (" + raises.length + " raises)");
+  ok(setupEnd > 0 && firstWin > setupEnd && raises.length === 5 && raises.every((x) => x < setupEnd) && setupBlock.length > 0 && !/app_call_days\s*\(|into public\.app_call_days|save_app_days/.test(setupBlock), "the APP days probe raises its five PROBE_SETUP (the absent, the partly-applied, revision ac's superseded, the collision guard and the profile-rows check) in its setup block, which writes no app_call_days row, and nowhere else (" + raises.length + " raises)");
   ok(!/PROBE_SETUP/.test(apProbe.slice(setupEnd).replace(/^--[^\n]*$/gm, "")), "... no line after the setup block (a case, the report) carries a PROBE_SETUP");
 }
 {
@@ -4323,6 +4333,13 @@ ok(/if \[ "\$end18" = "results" \]; then\n\s+bad "APP days probe LEFT ROWS BEHIN
   eq(run18('{"message": "connection refused"}').result, [5, 1], "section 18 fails a run with no sentinel-terminated PROBE_RESULTS (18a-18d and the leftover check still run);");
   const collide = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2030-12 or on 2020-05-04) - the probe fixtures would collide\\nCONTEXT:  ..."}';
   eq(run18(collide).result, [5, 1], "the probe's collision guard is a FAIL, never 'not applied';");
+  // since revision ac (11/17): Prompt 29's probe cannot run on the typed table - its superseded raise is ONE PASS (18a-18d and the leftover
+  // check still run)
+  const superseded = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: superseded by revision ac - app_call_days has shift_type (sql/migrations/2026-11-17-app-shifts.sql); sql/probes/app-shifts-probe.sql proves the APP shifts\\nCONTEXT:  ..."}';
+  const rsup = run18(superseded);
+  eq(rsup.result, [6, 0], "section 18 after revision ac's apply: the superseded probe is ONE PASS beside 18a-18d and the leftover check (" + fails(rsup) + ");");
+  ok(/PASS  APP days probe: superseded by revision ac/.test(rsup.out), "... and says so");
+  eq(run18(superseded, { surgeon: true }).result, [8, 0], "... with SILVIS_SURGEON_JWT, 18e's two calls answer as before (the read 200, the empty save 400 AP001);");
   const rc = run18(collide, { win: 2 });
   eq(rc.result, [4, 1], "a collision with live rows in the window: 18f FAILs, 18g neither passes nor fails them (the probe wrote nothing) - " + fails(rc));
   // pin moved deliberately 10/20 (the three endings): the review line says this run wrote none of them (real rows, or an earlier run's
@@ -4747,7 +4764,7 @@ ok(/^alter table public\.push_subscriptions +enable row level security;$/m.test(
   const prefsTbl = sliceBetween(schema, "create table if not exists public.notification_preferences (", "\n);") || "";
   ok(/\n  trade_updates_push        boolean not null default true,/.test(prefsTbl) && /\n  schedule_updates_push     boolean not null default true,/.test(prefsTbl), "schema.sql's notification_preferences create table carries both push columns (a from-scratch schema)");
   ok(at(PS_COLUMN_LINES[0]) > at("alter table public.notification_preferences add constraint notification_preferences_one_owner") && at(PS_COLUMN_LINES[1]) < at("create table if not exists public.audit_log ("), "the two add-column lines sit after the Prompt 20 F1 alters, before audit_log");
-  ok(at(PS_TABLE) > at("comment on function public.save_app_days(uuid, date[], date[], boolean) is") && at(PS_TABLE) < rls && at("create or replace function public.save_push_subscription(") > at(PS_TABLE) && at(psGrants(PS_FNS.push_subscription_status.sig)) < rls, "the push block (table, index, comment, the three functions) sits after the APP call days block, before Row Level Security");
+  ok(at(PS_TABLE) > at("comment on function public.app_call_names() is") && at(PS_TABLE) < rls && at("create or replace function public.save_push_subscription(") > at(PS_TABLE) && at(psGrants(PS_FNS.push_subscription_status.sig)) < rls, "the push block (table, index, comment, the three functions) sits after the APP call days block, before Row Level Security");
   ok(at(PS_ENABLE) < 0 && at("alter table public.push_subscriptions      enable row level security;") > rls, "the enable line sits in the RLS list (not in the table block)");
   ok(at(PS_PRIVS) > at("create policy app_call_days_read on public.app_call_days") && at(PS_POLICIES) > at(PS_PRIVS) && at(PS_POLICIES) < at("-- Seed rows"), "the table's privileges and the two policies sit at the end of the policy section (after app_call_days_read, before the seed rows)");
   const loop = schema.slice(schema.indexOf("-- Anon-readable tables"), schema.indexOf("end $$;", schema.indexOf("-- Anon-readable tables")));
@@ -5732,10 +5749,11 @@ step("Prompt 31 Part A (A5): docs - SCHEMA-REVIEW.md section (APPLIED 2026-10-19
   // z's (phone push follow-ups, prepared after y) - the sections after x are exactly y's, then z's, in that order (or a prefix of it);
   // widened 10/21: then revision aa's (the East reset backstop, prepared after z) - y's, z's, aa's
   {
-    // widened 10/25: then revision ab's (locked trades, prepared after aa's record)
-    const XV_FOLLOWERS = ["## 2026-10-18 - apply_trade writes the receiver's offer (revision y)", "## 2026-10-20 - phone push follow-ups (revision z)", "## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)", "## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)"];
+    // widened 10/25: then revision ab's (locked trades, prepared after aa's record); widened 11/17: then revision ac's (APP shifts and
+    // APP vacations, Prompt 35 - prepared after ab's record)
+    const XV_FOLLOWERS = ["## 2026-10-18 - apply_trade writes the receiver's offer (revision y)", "## 2026-10-20 - phone push follow-ups (revision z)", "## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)", "## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)", "## 2026-11-17 - APP shifts and APP vacations:"];
     const after = end < 0 ? [] : review.slice(end + 1).split("\n").filter((l) => l.startsWith("## "));
-    ok(at > review.indexOf("## 2026-10-03 - phone push:") && after.length <= XV_FOLLOWERS.length && after.every((l, i) => l.startsWith(XV_FOLLOWERS[i])), "the section is the last one after the Prompt 30 record (revision y's, 10/18, then revision z's, 10/20, then revision aa's, 10/21, then revision ab's, 10/25, alone may follow it): " + after.map((l) => l.slice(0, 60)).join(" | "));
+    ok(at > review.indexOf("## 2026-10-03 - phone push:") && after.length <= XV_FOLLOWERS.length && after.every((l, i) => l.startsWith(XV_FOLLOWERS[i])), "the section is the last one after the Prompt 30 record (revision y's, 10/18, then revision z's, 10/20, then revision aa's, 10/21, then revision ab's, 10/25, then revision ac's, 11/17, alone may follow it): " + after.map((l) => l.slice(0, 60)).join(" | "));
   }
   // pin moved deliberately 10/19 (the record step): the status reads APPLIED (it read PREPARED - report-first, NOT applied before)
   ok(/^\*\*Status: APPLIED 2026-10-19 22:53:18Z\*\* \(Faraz - `apply-east-vacations\.sh`, which exports `AI_AGENT`[^)]*; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\./m.test(xr) && !/^\*\*Status: PREPARED/m.test(xr) && !/w - phone push - is the last applied/.test(xr), "the status line reads '**Status: APPLIED 2026-10-19 22:53:18Z** (Faraz - `apply-east-vacations.sh`, which exports `AI_AGENT`, ...; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.'");
@@ -6236,7 +6254,7 @@ ok(s21code.includes('echo "   SKIP 21 (supabase CLI not linked at $WORKDIR)"'), 
   // record step's review): section 22 carries anon checks too (22c-22e), so the header calls it "anon checks and probe" and lists them
   // moved again 10/22 (revision aa's record step): the header names section 23 (the East reset backstop probe - no anon check of its own)
   // after section 22
-  ok(/ \+ East vacations anon checks and probe \(20\) \+ trade offers probe \(21\) \+ push follow-ups anon checks and probe \(22\) \+ East reset backstop probe \(23\) \+ locked trades probe \(24\) via the linked Supabase CLI$/m.test(head) && /anon checks \([^)]*20h, 20i, 22c-22e\)/.test(head), "verify-rls.sh's header names section 21 (the trade offers probe) after section 20, then section 22 (the push follow-ups anon checks and probe), then section 23 (the East reset backstop probe), then section 24 (the locked trades probe - revision ab's record step), and lists 22c-22e among the anon checks");
+  ok(/ \+ East vacations anon checks and probe \(20\) \+ trade offers probe \(21\) \+ push follow-ups anon checks and probe \(22\) \+ East reset backstop probe \(23\) \+ locked trades probe \(24\)( \+ APP shifts anon checks and probe \(25\))? via the linked Supabase CLI$/m.test(head) && /anon checks \([^)]*20h, 20i, 22c-22e(, 25a-25e)?\)/.test(head), "verify-rls.sh's header names section 21 (the trade offers probe) after section 20, then section 22 (the push follow-ups anon checks and probe), then section 23 (the East reset backstop probe), then section 24 (the locked trades probe - revision ab's record step), and lists 22c-22e among the anon checks");
 }
 // the record step (10/20): the 32 probe AFTER lines of the live run as Faraz's log printed them (apply-trade-offer-20261020T004005Z.log, its
 // paste-back block "probe after cases:"), read from SCHEMA-REVIEW's revision y observed block (frozen by sha256 in the docs step), not rebuilt
@@ -6376,7 +6394,9 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
   // (the East reset backstop, prepared after z) - z's, then aa's, and nothing else; widened 10/25: then revision ab's (locked trades)
   const yNext = end < 0 ? -1 : review.indexOf("\n## ", end + 1);
   const yNext2 = yNext < 0 ? -1 : review.indexOf("\n## ", yNext + 1);
-  ok(at > review.indexOf("## 2026-10-14 - East vacations:") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-20 - phone push follow-ups (revision z)") && (yNext < 0 || (review.slice(yNext + 1).startsWith("## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)") && (yNext2 < 0 || (review.slice(yNext2 + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)") && review.indexOf("\n## ", yNext2 + 1) < 0)))))), "the revision y section is the last one, after Part A's (revision z's, 10/20, then revision aa's, 10/21, then revision ab's, 10/25, alone may follow it)");
+  // widened 11/17: then revision ac's (APP shifts and APP vacations, Prompt 35 - prepared after ab's record)
+  { const Y_FOLLOWERS = ["## 2026-10-20 - phone push follow-ups (revision z)", "## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)", "## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)", "## 2026-11-17 - APP shifts and APP vacations:"], afterY = end < 0 ? [] : review.slice(end + 1).split("\n").filter((l) => l.startsWith("## "));
+    ok(at > review.indexOf("## 2026-10-14 - East vacations:") && afterY.length <= Y_FOLLOWERS.length && afterY.every((l, i) => l.startsWith(Y_FOLLOWERS[i])), "the revision y section is the last one, after Part A's (revision z's, 10/20, then revision aa's, 10/21, then revision ab's, 10/25, then revision ac's, 11/17, alone may follow it): " + afterY.map((l) => l.slice(0, 60)).join(" | ")); }
   ok(yr.includes("x - Part A - went first (applied 2026-10-19 22:53:18Z)") && !/x - Part A - is prepared and goes first/.test(yr), "revision y's sentence on the order reads as run: x - Part A - went first (applied 2026-10-19 22:53:18Z)");
   // pin moved deliberately (revision y's record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
   ok(/^\*\*Status: APPLIED 2026-10-20 00:41:25Z\*\* \(Faraz - `apply-trade-offer\.sh`, which exports `AI_AGENT`[^)]*; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(yr) && !/^\*\*Status: PREPARED/m.test(yr), "the status line reads APPLIED 2026-10-20 00:41:25Z (Faraz - apply-trade-offer.sh, which exports AI_AGENT ...; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
@@ -6468,7 +6488,11 @@ step("revision y: schema.sql's header revision y line (after x, before the same-
 // pin moved deliberately 10/26 (revision ab's record step): section 24 added after section 23 (the locked trades probe, strict from the start -
 // apply-locked-trade.sh never ran verify-rls.sh; no REST call), the header's "+ locked trades probe (24)", section 5's D graded as applied
 // with the lock cleared and section 21's A4 as the receiver's own apply; every other byte as at revision aa's record step
-eq(ySha(fs.readFileSync(VERIFY, "utf8")), "fc5938fa6fbf665f57a91727c350843697ab444995a5320a1027b0a9c4a87431", "scripts/verify-rls.sh must stay at revision ab's record-step bytes (section 24 added after section 23; 5 D and 21 A4 moved) until its next deliberate change;");
+// pin moved deliberately 11/17 (revision ac, Prompt 35 - prepared): section 25 added after section 24 (the APP shifts anon checks, the graded
+// probe, its leftovers; the not-applied picture tolerated until the record step unless SILVIS_APP_SHIFTS_APPLIED=1), section 18's 18c / 18e
+// send p_replace null and read Prompt 29's superseded probe as one PASS, the header names section 25 and the flag; every other byte as at
+// revision ab's record step
+eq(ySha(fs.readFileSync(VERIFY, "utf8")), "58dde63e5b3410ef52cc41152ef68c01dce75d588a5985bdf162d3e26f2643ce", "scripts/verify-rls.sh must stay at revision ac's prepared bytes (section 25 added after section 24; section 18's bodies and superseded arm) until its next deliberate change;");
 ok(vr.indexOf('echo "== 21. ') > 0 && vr.indexOf("trade-offer-probe.sql") > vr.indexOf('echo "== 21. '), "verify-rls.sh runs revision y's probe in section 21 only (its record step added it)");
 ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-trade-offer.sh")) && !/bash scripts\/apply-/.test(yMig + yProbe + yPre), "the apply script lives outside the repo (Faraz 10/1): no scripts/apply-trade-offer.sh, and no y file points at one");
 console.log("- revision y (2026-10-18): the trade offer migration, its mirror, the bodies undone to m / p / n, the loop, the stamps, the probe (32 cases), the pre-check, the docs (APPLIED 2026-10-20 00:41:25Z), the trailer and verify-rls.sh section 21");
@@ -7065,7 +7089,9 @@ step("revision z: docs - SCHEMA-REVIEW.md's revision z section (followed only by
   // widened 10/21: the section ends where revision aa's (prepared after z) begins - its 15 case rows are not z's
   const zr = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
   const zrFlat = zr.replace(/\s+/g, " ");
-  ok(at > review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)") && (review.indexOf("\n## ", end + 1) < 0 || (review.slice(review.indexOf("\n## ", end + 1) + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)") && review.indexOf("\n## ", review.indexOf("\n## ", end + 1) + 1) < 0)))), "the revision z section is the last one, after revision y's (revision aa's, 10/21, then revision ab's, 10/25, alone may follow it)");
+  // widened 11/17: then revision ac's (APP shifts and APP vacations, Prompt 35 - prepared after ab's record)
+  { const Z_FOLLOWERS = ["## 2026-10-21 - east_vacation_reset_stale keeps a person's reviews when the cache holds no range of his (revision aa)", "## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)", "## 2026-11-17 - APP shifts and APP vacations:"], afterZ = end < 0 ? [] : review.slice(end + 1).split("\n").filter((l) => l.startsWith("## "));
+    ok(at > review.indexOf("## 2026-10-18 - apply_trade writes the receiver's offer (revision y)") && afterZ.length <= Z_FOLLOWERS.length && afterZ.every((l, i) => l.startsWith(Z_FOLLOWERS[i])), "the revision z section is the last one, after revision y's (revision aa's, 10/21, then revision ab's, 10/25, then revision ac's, 11/17, alone may follow it): " + afterZ.map((l) => l.slice(0, 60)).join(" | ")); }
   // pin moved deliberately 10/22 (revision z's record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
   ok(/^\*\*Status: APPLIED 2026-10-22 04:33:15Z\*\* \(Faraz - `apply-push-followups\.sh`, its CLI in agent mode \(`AI_AGENT=1`\), from the main clone at `cc4cecc`; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(zr) && !/^\*\*Status: PREPARED/m.test(zr), "the status line reads APPLIED 2026-10-22 04:33:15Z (Faraz - apply-push-followups.sh, its CLI in agent mode, from the main clone at cc4cecc; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
   // review 10/22 (the order as run): D16 ordered the apply, then the client - the client shipped first (2026.10.20b) and fell back until the
@@ -7371,7 +7397,8 @@ step("revision aa: schema.sql mirrors the migration (the reset, its grants and c
   // widened 10/21 (the rebase onto revision z): z's three lines name its own file and are counted in the z block; pin moved deliberately
   // 10/22 (revision aa's record step): aa's two lines read applied - no schema.sql line says NOT yet applied any more
   // widened 10/25: revision ab's two lines (prepared, not applied; they name its own file) are counted in the ab block
-  eq(schema.split("\n").filter((l) => /NOT yet applied/.test(l) && !l.includes("sql/migrations/2026-10-25-locked-trade.sql")), [], "no schema.sql line says NOT yet applied since revision aa's record step (its header line and the derived block's line read applied) but revision ab's two (prepared 10/25);");
+  // widened 11/17: revision ac's three lines (prepared, not applied; they name its own file) are counted in the ac block
+  eq(schema.split("\n").filter((l) => /NOT yet applied/.test(l) && !l.includes("sql/migrations/2026-10-25-locked-trade.sql") && !l.includes("sql/migrations/2026-11-17-app-shifts.sql")), [], "no schema.sql line says NOT yet applied since revision aa's record step (its header line and the derived block's line read applied) but revision ab's two (prepared 10/25);");
   ok(!/east-reset-backstop\.sql[^\n]*NOT yet applied/.test(schema) && (schema.match(/sql\/migrations\/2026-10-21-east-reset-backstop\.sql[^\n]*applied 2026-10-22 04:50:53Z/g) || []).length === 2, "revision aa's two schema.sql lines name its file and read applied 2026-10-22 04:50:53Z");
   // the md5 of each body's prosrc, derived from the files (PGlite read the same; a body edit must fail here until the gate's record moves)
   const bodyMd5 = (s) => { const t = functionText(s, "east_vacation_reset_stale") || "", a = t.indexOf("$$") + 2; return crypto.createHash("md5").update(t.slice(a, t.lastIndexOf("$$"))).digest("hex"); };
@@ -7490,7 +7517,9 @@ step("revision aa: docs - SCHEMA-REVIEW.md's section (APPLIED 2026-10-22 04:50:5
   // the newest section: revision z's record (the push follow-ups, prepared in parallel - aa's records follow z's) goes before it (pin
   // moved 10/21, the rebase onto z: the x / y / z "may follow" pins above name aa's); this pin moves only if a section lands after this one
   // widened 10/25: revision ab's section (locked trades, prepared after aa's record) alone may follow it
-  ok(at > review.indexOf("## 2026-10-20 - phone push follow-ups (revision z)") && (end < 0 || (review.slice(end + 1).startsWith("## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)") && review.indexOf("\n## ", end + 1) < 0)), "the revision aa section is the last one, after revision z's (revision ab's, 10/25, alone may follow it)");
+  // widened 11/17: then revision ac's (APP shifts and APP vacations, Prompt 35 - prepared after ab's record)
+  { const AA_FOLLOWERS = ["## 2026-10-25 - apply_trade moves a locked slot once the trade is accepted (revision ab)", "## 2026-11-17 - APP shifts and APP vacations:"], afterAa = end < 0 ? [] : review.slice(end + 1).split("\n").filter((l) => l.startsWith("## "));
+    ok(at > review.indexOf("## 2026-10-20 - phone push follow-ups (revision z)") && afterAa.length <= AA_FOLLOWERS.length && afterAa.every((l, i) => l.startsWith(AA_FOLLOWERS[i])), "the revision aa section is the last one, after revision z's (revision ab's, 10/25, then revision ac's, 11/17, alone may follow it): " + afterAa.map((l) => l.slice(0, 60)).join(" | ")); }
   // pin moved deliberately 10/22 (the record step): the status reads APPLIED with the script, the clone and the order; was PREPARED until then
   ok(/^\*\*Status: APPLIED 2026-10-22 04:50:53Z\*\* \(Faraz - `apply-east-reset-backstop\.sh`, its CLI in agent mode \(`AI_AGENT=1`\), from the main clone at `cc4cecc`; the observed lines at the end\)\. Was PREPARED - report-first, NOT applied until then\.$/m.test(ar) && !/^\*\*Status: PREPARED/m.test(ar), "the status line reads APPLIED 2026-10-22 04:50:53Z (Faraz - apply-east-reset-backstop.sh, its CLI in agent mode, from the main clone at cc4cecc; the observed lines at the end). Was PREPARED - report-first, NOT applied until then.");
   ok(af.includes("Faraz ran it and pasted the log back, and the record step filled the observed lines at the end of this section and added verify-rls section 23. As run, revision z's apply went first (2026-10-22 04:33:15Z) and this one followed about 18 minutes later; z's record step (`32e9f20`) merged before this one.") && !/the record step fills the observed line/.test(ar), "the status paragraph reads as run: the log pasted back, the observed lines filled, section 23 added; z's apply first, its record step merged first");
@@ -8031,7 +8060,8 @@ const AB_OBSERVED_SHA256 = "03d3eb7ae8d83b70ddaa2a27ab7f7deb02017a28c4013f3e0c8e
   ok(rules.includes("locked slot moved only when the scheduler applied the trade (the database's rule for every lock; ⟶ **10/25 (Faraz, revision ab - applied 2026-10-26 03:50 UTC):** \"all locks, holidays included\" - since revision ab a locked slot moves like any other when either party applies an accepted trade,") && !rules.includes("revision ab - prepared, not applied yet") && !rules.includes("once revision ab is applied"), "the rules doc says since revision ab (applied 2026-10-26 03:50 UTC) a locked slot moves for either party once the trade is accepted");
   ok(guide.includes("- **Locked trades (2026-10-25, revision ab, report-first, applied 2026-10-26 03:50 UTC; `sql/migrations/" + AB_FILE + "`).**") && guide.includes("applied: 2026-10-26 03:50:31 UTC by Faraz (`apply-locked-trade.sh`, from the main clone at `2b7a293`; a `--dry-run` first applied nothing)") && guide.includes("since revision ab\n  (applied 2026-10-26 03:50 UTC) either party applies an accepted trade over a locked slot, holidays included.") && !/revision ab[^\n]*NOT applied yet|revision ab \(prepared 10\/25, not applied yet\)/.test(guide), "the build guide's revision ab bullet and its holiday-plan line read applied 2026-10-26 03:50 UTC");
   ok(read(path.join(ROOT, "docs", "ONBOARDING.md")).includes("Once the other surgeon accepts, the trade is applied at once - on a locked day too, holidays included, but for an East-derived day, which stays the scheduler's (revision ab, applied 2026-10-26; before it a locked day waited for the scheduler's Retry apply)."), "ONBOARDING tells the surgeons an accepted trade is applied at once, a locked day included");
-  eq(schema.split("\n").filter((l) => /NOT yet applied/.test(l)), [], "no schema.sql line says NOT yet applied since revision ab's record step (its header line and its block comment line read applied);");
+  // widened 11/17: revision ac's three lines (prepared, not applied; they name its own file) are counted in the ac block
+  eq(schema.split("\n").filter((l) => /NOT yet applied/.test(l) && !l.includes("sql/migrations/2026-11-17-app-shifts.sql")), [], "no schema.sql line says NOT yet applied since revision ab's record step (its header line and its block comment line read applied);");
   eq((schema.match(/sql\/migrations\/2026-10-25-locked-trade\.sql[^\n]*applied 2026-10-26 03:50:31Z/g) || []).length, 2, "revision ab's two schema.sql lines name its file and read applied 2026-10-26 03:50:31Z;");
   const aaAt = header.search(/^-- Revision 2026-10-21 aa /m), abAt = header.search(/^-- Revision 2026-10-25 ab \(locked trades, sql\/migrations\/2026-10-25-locked-trade\.sql, applied 2026-10-26 03:50:31Z after the probe\): /m);
   ok(aaAt > 0 && abAt > aaAt && abAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-10-25 ab ('applied 2026-10-26 03:50:31Z after the probe') after revision aa and before the same-day rule");
@@ -8051,7 +8081,8 @@ const AB_OBSERVED_SHA256 = "03d3eb7ae8d83b70ddaa2a27ab7f7deb02017a28c4013f3e0c8e
 step("revision ab: verify-rls.sh section 24 - the graded probe (24a: 18 cases by name + the count of 18) and its leftovers (24b: SCHEMA-REVIEW's leftover count in two columns - tagged / win; a tagged row FAILs on every ending with its DELETEs, the windows' rows FAIL only after PROBE_RESULTS and are listed for review otherwise, never with a DELETE), strict from the start (no flag - PROBE_SETUP FAILs), no REST call; graded against a faked CLI, the 2026-10-26 live picture replayed");
 ok(/^echo "== 24\. locked trades \(2026-10-25, revision ab\): apply_trade moves a locked slot once the trade is accepted; an account with no roster link applies nothing - rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 24 (locked trades)");
 const s24 = vr.slice(vr.indexOf('echo "== 24. '), vrSectionEnd('echo "== 24. '));
-ok(s24.length > 0 && vr.indexOf('echo "== 24. ') > vr.indexOf('echo "== 23. ') && vrSectionEnd('echo "== 24. ') === vr.indexOf('\necho\necho "RESULT: '), "verify-rls.sh section 24 could not be sliced out (after section 23, the last section before the RESULT line)");
+// pin moved deliberately 11/17 (revision ac, Prompt 35): section 25 (the APP shifts) follows section 24; kept intent - 24 slices out after 23
+ok(s24.length > 0 && vr.indexOf('echo "== 24. ') > vr.indexOf('echo "== 23. ') && (vrSectionEnd('echo "== 24. ') === vr.indexOf('\necho\necho "RESULT: ') || vrSectionEnd('echo "== 24. ') === vr.indexOf('\necho "== 25. ')), "verify-rls.sh section 24 could not be sliced out (after section 23, up to section 25 or the RESULT line)");
 ok(/^# Section 24 \(17 = the weekend pair claim, taken on its own branch; 23 = revision aa's East reset backstop, the section above\)\.$/m.test(s24), "section 24's comment says why it is 24 (17 is on its own branch, 23 the section above)");
 ok(/^# sql\/migrations\/2026-10-25-locked-trade\.sql \(report-first; applied 2026-10-26 03:50:31Z, revision ab\): /m.test(s24) && !/NOT applied/.test(s24), "section 24's comment says the migration is applied 2026-10-26 03:50:31Z (report-first; revision ab)");
 const s24code = s24.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
@@ -8236,5 +8267,411 @@ step("revision ab: no apply script in the repo (Faraz 10/1: apply scripts live o
   ok(vr.indexOf('echo "== 24. ') > 0 && vr.indexOf("locked-trade-probe") > vr.indexOf('echo "== 24. '), "verify-rls.sh names the locked-trade probe in section 24 only (every mention after its header)");
 }
 console.log("- revision ab (2026-10-25): locked trades - the migration (y's apply_trade minus check (c), the party test NULL-safe), its mirror, the probe (18 cases), the pre-check, the docs (APPLIED 2026-10-26 03:50:31Z), the trailer and verify-rls.sh section 24");
+
+// ---- revision ac - APP shifts and APP vacations (2026-11-17, Faraz 11/17, Prompt 35: the APPs put themselves on shifts that have hours
+// and enter their own vacations) ----
+// sql/migrations/2026-11-17-app-shifts.sql (REPORT-FIRST, NOT APPLIED; revision ac): app_call_days EXTENDED (a guard against Prompt 29
+// rows, shift_type + its shape check, the key day + shift_type + profile_id); app_time_off (the APPs' vacations; authenticated read,
+// never anon; SELECT only); silvis_app_shift_types(p_data) (internal: the shift types of the blob, absent = the decided Inbox type);
+// save_app_days re-created with typed JSON lists (AP001-AP010; the old date-list signature dropped); save_app_vacations (AV001-AV008);
+// app_call_names re-created (the vacation holders; every APP for the office too). schema.sql mirrors it; sql/probes/app-shifts-probe.sql
+// proves it (rolled back, 122 cases - it edits the blob's shift types inside its transaction), sql/probes/app-shifts-precheck.sql reads
+// the gate and the facts (read-only), verify-rls.sh section 25 grades both (not-applied picture tolerated until the record step unless
+// SILVIS_APP_SHIFTS_APPLIED=1). Faraz's apply script apply-app-shifts.sh lives OUTSIDE the repo. These pins read DB-lane files only (the
+// JS twin of the shift-type reader is pinned in test/data-layer.test.js).
+const AC_FILE = "2026-11-17-app-shifts.sql";
+const AC_MIGRATION = path.join(ROOT, "sql", "migrations", AC_FILE);
+const AC_PROBE = path.join(ROOT, "sql", "probes", "app-shifts-probe.sql");
+const AC_PRECHECK = path.join(ROOT, "sql", "probes", "app-shifts-precheck.sql");
+const AC_N = 122;
+const AC_DEFAULT_TYPES = "'[{\"id\":\"inbox\",\"label\":\"Inbox\",\"start\":\"07:00\",\"end\":\"17:00\",\"weekdays\":[1,2,3,4,5],\"holidays\":false,\"perDay\":1}]'::jsonb";
+const AC_ALTERS = [
+  "alter table public.app_call_days add column if not exists shift_type text not null;",
+  "alter table public.app_call_days drop constraint if exists app_call_days_shift_type_shape;",
+  "alter table public.app_call_days add constraint app_call_days_shift_type_shape check (shift_type ~ '^[a-z][a-z0-9-]{0,23}$');",
+  "alter table public.app_call_days drop constraint if exists app_call_days_pkey;",
+  "alter table public.app_call_days add constraint app_call_days_pkey primary key (day, shift_type, profile_id);",
+];
+const AC_VAC_PRIVS = "revoke all on table public.app_time_off from anon;\nrevoke all on table public.app_time_off from authenticated;\ngrant select on table public.app_time_off to authenticated;";
+const AC_VAC_POLICY = "create policy app_time_off_read on public.app_time_off for select to authenticated using (true);";
+const AC_VAC_ENABLE = "alter table public.app_time_off enable row level security;";
+const AC_SIGS = {
+  silvis_app_shift_types: "create or replace function public.silvis_app_shift_types(p_data jsonb)\nreturns table (id text, label text, start_min int, end_min int, weekdays int[], holidays boolean, per_day int, retired boolean)\nlanguage sql immutable security invoker set search_path = public, pg_temp as $$\n",
+  save_app_days: "create or replace function public.save_app_days(p_profile uuid, p_add jsonb, p_clear jsonb, p_replace uuid default null) returns jsonb\nlanguage plpgsql security definer set search_path = public, pg_temp as $$\n",
+  save_app_vacations: "create or replace function public.save_app_vacations(p_profile uuid, p_add jsonb, p_remove uuid[]) returns jsonb\nlanguage plpgsql security definer set search_path = public, pg_temp as $$\n",
+  app_call_names: "create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)\nlanguage sql stable security definer set search_path = public, pg_temp as $$\n",
+};
+const AC_GRANTS = {
+  silvis_app_shift_types: "revoke all on function public.silvis_app_shift_types(jsonb) from public;\nrevoke all on function public.silvis_app_shift_types(jsonb) from anon;\nrevoke all on function public.silvis_app_shift_types(jsonb) from authenticated;\ngrant execute on function public.silvis_app_shift_types(jsonb) to service_role;",
+  save_app_days: "revoke all on function public.save_app_days(uuid, jsonb, jsonb, uuid) from public;\nrevoke all on function public.save_app_days(uuid, jsonb, jsonb, uuid) from anon;\ngrant execute on function public.save_app_days(uuid, jsonb, jsonb, uuid) to authenticated;",
+  save_app_vacations: "revoke all on function public.save_app_vacations(uuid, jsonb, uuid[]) from public;\nrevoke all on function public.save_app_vacations(uuid, jsonb, uuid[]) from anon;\ngrant execute on function public.save_app_vacations(uuid, jsonb, uuid[]) to authenticated;",
+  app_call_names: AP_GRANTS.app_call_names,
+};
+// the shared contract with the app lane: each refusal's exact raise, in check order, all before the first write
+const AC_SAD_RAISES = [
+  "raise exception 'APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift' using errcode = 'AP001';",
+  "raise exception 'APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)' using errcode = 'AP001';",
+  "raise exception 'APP_DAY_NOT_YOURS: an APP adds or removes only their own shifts - ask the scheduler' using errcode = 'AP002';",
+  "raise exception 'APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a shift' using errcode = 'AP002';",
+  "raise exception 'APP_DAY_BAD_DAY: the shifts must come as a list - nothing was saved' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: a shift in the list is not a day and a shift type - nothing was saved' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: at most 400 shifts in one save - nothing was saved' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: % is both added and removed in one save - nothing was saved', bad using errcode = 'AP004';",
+  "raise exception 'APP_DAY_BAD_DAY: a change takes a shift over from another APP - name the shift and that APP (nothing was saved)' using errcode = 'AP004';",
+  "raise exception 'APP_DAY_NOT_APP: % is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)', coalesce(t_name, 'that account') using errcode = 'AP003';",
+  "raise exception 'APP_DAY_PAST: % is before today (%) in Central time - a past day stays as it was', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'AP006';",
+  "raise exception 'APP_DAY_NO_SHIFT: % - nothing was saved', bad using errcode = 'AP008';",
+  "raise exception 'APP_DAY_STALE: % - reload the calendar (nothing was saved)', bad using errcode = 'AP007';",
+  "raise exception 'APP_DAY_NOT_YOURS: % - only that APP or the scheduler can remove it (nothing was saved)', bad using errcode = 'AP002';",
+  "raise exception 'APP_DAY_STALE: % is no longer %''s shift - reload the calendar (nothing was saved)', bad, coalesce(r_name, 'another APP') using errcode = 'AP007';",
+  "raise exception 'APP_DAY_TAKEN: % - nothing was saved', bad using errcode = 'AP005';",
+  "raise exception 'APP_DAY_VACATION: % is on %''s vacation - change the vacation first (nothing was saved)', bad, coalesce(t_name, 'the APP') using errcode = 'AP010';",
+  "raise exception 'APP_DAY_OVERLAP: % - one APP holds one shift at a time (nothing was saved)', bad using errcode = 'AP009';",
+  "raise exception 'APP_DAY_TAKEN: a shift filled up during this save - reload and try again (nothing was saved)' using errcode = 'AP005';",
+];
+const AC_VAC_RAISES = [
+  "raise exception 'APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation' using errcode = 'AV001';",
+  "raise exception 'APP_VACATION_NOT_ALLOWED: name the APP (pick one in Time off)' using errcode = 'AV001';",
+  "raise exception 'APP_VACATION_NOT_YOURS: an APP enters, changes or removes only their own vacations - ask the scheduler or the office' using errcode = 'AV002';",
+  "raise exception 'APP_VACATION_BAD_RANGE: the vacations must come as a list - nothing was saved' using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: a vacation in the remove list is empty - nothing was saved' using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: a vacation in the list is not a first and a last day - nothing was saved' using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: at most 50 vacations in one save - nothing was saved' using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: a day in the list is not a calendar day - nothing was saved' using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: a day in the list is not a calendar day - nothing was saved' using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: % ends before it starts - nothing was saved', bad using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: % is longer than a year - nothing was saved', bad using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_BAD_RANGE: % overlap - nothing was saved', bad using errcode = 'AV004';",
+  "raise exception 'APP_VACATION_NOT_APP: % is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)', coalesce(t_name, 'that account') using errcode = 'AV003';",
+  "raise exception 'APP_VACATION_STALE: a vacation in the list is gone or is not %''s - reload Time off (nothing was saved)', coalesce(t_name, 'this APP') using errcode = 'AV007';",
+  "raise exception 'APP_VACATION_PAST: % has started or passed (today is % in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)', bad, to_char(today_c, 'FMMM/FMDD') using errcode = 'AV006';",
+  "raise exception 'APP_VACATION_OVERLAP: % is already away % - change that vacation instead (nothing was saved)', coalesce(t_name, 'the APP'), bad using errcode = 'AV008';",
+  "raise exception 'APP_VACATION_ON_SHIFT: % holds % - remove the shift first (nothing was saved)', coalesce(t_name, 'the APP'), bad using errcode = 'AV005';",
+];
+const AC_LOCK = "  perform pg_advisory_xact_lock(hashtext('app_call_days:save'));";
+const AC_SAD_RETURN = "  return jsonb_build_object('ok', true, 'profile_id', who, 'added', jsonb_array_length(ins), 'removed', jsonb_array_length(del),\n                            'kept', cardinality(a_day) - jsonb_array_length(ins), 'absent', cardinality(c_day) - jsonb_array_length(del),\n                            'replaced', jsonb_array_length(replaced), 'source', v_src, 'audit', jsonb_array_length(ins) + jsonb_array_length(del) > 0);";
+const AC_VAC_RETURN = "  return jsonb_build_object('ok', true, 'profile_id', who, 'added', jsonb_array_length(ins), 'removed', jsonb_array_length(del),\n                            'kept', n_kept, 'source', v_src, 'audit', jsonb_array_length(ins) + jsonb_array_length(del) > 0);";
+
+step("revision ac: migration 2026-11-17-app-shifts.sql - LF / ASCII, report-first and NOT applied; the guard, the typed app_call_days, app_time_off (authenticated read, never anon), silvis_app_shift_types, save_app_days re-created (the old signature dropped), save_app_vacations, app_call_names re-created, the reload");
+const acMig = fs.existsSync(AC_MIGRATION) ? read(AC_MIGRATION) : "";
+ok(acMig, "missing file sql/migrations/" + AC_FILE);
+ok(!/\r/.test(acMig) && /^[\x00-\x7f]*$/.test(acMig), "the APP shifts migration is LF and ASCII");
+const acHdr = acMig.slice(0, acMig.indexOf("\n-- ============================================================================\n\n", 200));
+{
+  const flat = acHdr.replace(/\n-- ?/g, " ").replace(/\s+/g, " ");
+  ok(/REPORT-FIRST, NOT APPLIED/.test(acHdr) && !/\n-- applied 20/.test(acMig) && flat.includes("Nothing in the repo applies it: Faraz runs his apply script (kept outside the repo)"), "the header says report-first, NOT applied, and that the apply script lives outside the repo (no trailer line before the record step)");
+  ok(flat.includes("for now there is one shift: the weekday inbox shift, 7a-5p") && flat.includes("shift types are data in Setup, not code") && flat.includes("perDay = how many APPs may hold that shift on one day, and the database enforces it (1 = Prompt 29's one APP per day)") && flat.includes("the surgeons' vacation guard (at least 2 around) does not apply to APPs"), "the header carries Faraz's 11/17 decisions (the one shift, types as Setup data, perDay enforced, no vacation guard)");
+  ok(flat.includes("The choice (least new machinery): EXTEND app_call_days, do not replace it.") && flat.includes("APP vacations get their OWN table, because time_off is anon-readable"), "the header states the choice (extend, not replace) and why the vacations get their own table");
+  ok(flat.includes("How a shift is placed in time.") && flat.includes("touch at 5p and do not overlap") && flat.includes("A row whose type the blob no longer lists counts as its whole calendar day") && flat.includes("a year with no stored units has none"), "the header defines a shift's span, overlap, the vacation conflict, an unlisted type and the holidays");
+  ok(flat.includes("Blast radius.") && flat.includes("apply and push the same day") && flat.includes("the first probe to edit the blob") && flat.includes("'PROBE_SETUP: superseded by revision ac'"), "the header's blast radius names the old client's refused window, the probe's blob edit and Prompt 29's superseded probe");
+  ok(acHdr.includes("\n--   bash <run folder>/apply-app-shifts.sh --dry-run      then      bash <run folder>/apply-app-shifts.sh   (the script lives OUTSIDE the repo)\n--   supabase db query --linked --workdir <dir> -f <abs>/sql/migrations/" + AC_FILE + "   (what it runs)\n"), "the header gives the one command (outside the repo) and what it runs");
+  ok(flat.includes("8. SILVIS_APP_SHIFTS_APPLIED=1 bash scripts/verify-rls.sh") && flat.includes("10. the client push on Faraz's go."), "the header's apply order ends with the flagged verify-rls run, the record step and the client push");
+  ok(!/bash scripts\/apply-|[A-Za-z]:[\\/]/.test(acMig), "no in-repo apply script path and no machine path in the migration");
+}
+const AC_ROLLBACK = ["drop function if exists public.save_app_vacations(uuid, jsonb, uuid[]);", "drop function if exists public.save_app_days(uuid, jsonb, jsonb, uuid);", "drop function if exists public.silvis_app_shift_types(jsonb);", "drop table if exists public.app_time_off;", "drop table if exists public.app_call_days;", "notify pgrst, 'reload schema';"];
+ok(acHdr.includes(AC_ROLLBACK.map((l) => "\n--   " + l).join("")) && acHdr.includes("then re-run sql/migrations/2026-10-02-app-call-days.sql (revision v, idempotent"), "the header's rollback drops the two new functions, the reader, both tables, reloads, then re-runs Prompt 29's file");
+const acBody = acMig.slice(acHdr.length + "\n-- ============================================================================\n\n".length);
+const acStmts = apTopStatements(acBody);
+eq(acStmts.map((st) => st.split("\n")[0].replace(/^(comment on [a-z]+ public\.[a-z_]+(\([^)]*\))?) is .*/, "$1 is ...")), [
+  "do $$",
+  ...AC_ALTERS.map((l) => l.split("\n")[0]),
+  "comment on table public.app_call_days is ...",
+  "create table if not exists public.app_time_off (",
+  "create index if not exists app_time_off_profile_idx on public.app_time_off (profile_id, start_date);",
+  AC_VAC_ENABLE, ...AC_VAC_PRIVS.split("\n"),
+  "drop policy if exists app_time_off_read on public.app_time_off;", AC_VAC_POLICY,
+  "comment on table public.app_time_off is ...",
+  "create or replace function public.silvis_app_shift_types(p_data jsonb)", ...AC_GRANTS.silvis_app_shift_types.split("\n"), "comment on function public.silvis_app_shift_types(jsonb) is ...",
+  "drop function if exists public.save_app_days(uuid, date[], date[], boolean);",
+  "create or replace function public.save_app_days(p_profile uuid, p_add jsonb, p_clear jsonb, p_replace uuid default null) returns jsonb", ...AC_GRANTS.save_app_days.split("\n"), "comment on function public.save_app_days(uuid, jsonb, jsonb, uuid) is ...",
+  "create or replace function public.save_app_vacations(p_profile uuid, p_add jsonb, p_remove uuid[]) returns jsonb", ...AC_GRANTS.save_app_vacations.split("\n"), "comment on function public.save_app_vacations(uuid, jsonb, uuid[]) is ...",
+  "create or replace function public.app_call_names() returns table (profile_id uuid, display_name text, is_app boolean)", ...AC_GRANTS.app_call_names.split("\n"), "comment on function public.app_call_names() is ...",
+  "notify pgrst, 'reload schema';",
+], "the migration is exactly: the guard, the five app_call_days lines and its comment, app_time_off (table, index, RLS, privileges, policy, comment), the reader, the old save_app_days dropped, the three functions with their grants and comments, the reload;");
+ok(!/^\s*(insert into|update|delete from)\s+public\./im.test(acBody.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").replace(/\$\$[\s\S]*?\$\$/g, "")), "the migration writes no row outside its function bodies");
+ok(acStmts[0].includes("if not exists (select 1 from pg_attribute a where a.attrelid = 'public.app_call_days'::regclass and a.attname = 'shift_type' and not a.attisdropped)\n     and exists (select 1 from public.app_call_days) then\n    raise exception 'APP_SHIFTS_MIGRATION: app_call_days holds % Prompt 29 call day(s) - nothing was changed;"), "the guard: before the column exists, any app_call_days row stops the file before its first change (Prompt 29 rows are never typed)");
+ok(!/^-- supersedes:/m.test(acMig) && !/^-- PREPARED FOLLOW-UP/m.test(acMig), "no supersedes line (no other 2026-11-17 file) and not a NOT-MIRRORED follow-up");
+
+function checkAc(n, s) {
+  AC_ALTERS.forEach((l) => ok(s.includes(l), n + ": missing the app_call_days line:\n" + l));
+  ok(s.includes("create table if not exists public.app_time_off (\n  id          uuid primary key default gen_random_uuid(),\n  profile_id  uuid not null references public.user_profiles(id) on delete cascade,") && s.includes("  source      text not null check (source in ('app', 'scheduler', 'office')),") && s.includes("  constraint app_time_off_range check (end_date >= start_date and end_date - start_date <= 365)\n);"), n + ": app_time_off - the uuid key, the cascading profile, the three sources, the range check");
+  ok(s.includes(AC_VAC_PRIVS) && s.includes("drop policy if exists app_time_off_read on public.app_time_off;\n" + AC_VAC_POLICY), n + ": app_time_off - anon and authenticated revoked, SELECT granted back, one read policy for authenticated (drop if exists first)");
+  Object.keys(AC_SIGS).forEach((f) => {
+    ok(s.includes(AC_SIGS[f]), n + ": " + f + " must read `" + AC_SIGS[f].split("\n").join(" ").trim() + "`");
+    ok(s.indexOf(AC_GRANTS[f]) > s.indexOf("create or replace function public." + f + "("), n + ": " + f + "'s grants must read exactly (after the function):\n" + AC_GRANTS[f]);
+  });
+  ok(s.includes("drop function if exists public.save_app_days(uuid, date[], date[], boolean);\ncreate or replace function public.save_app_days(p_profile uuid, p_add jsonb"), n + ": the old date-list save_app_days is dropped right before the new one (an old build is refused, never an untyped row)");
+  const reader = sqlFunctionText(s, "silvis_app_shift_types") || "";
+  ok(reader.includes("else " + AC_DEFAULT_TYPES + " end as l"), n + ": the reader's default is the one decided type (Inbox 07:00-17:00 Mon-Fri, not on holidays, perDay 1) - helpers.js APP_SHIFT_TYPES_DEFAULT, the same object (test/data-layer.test.js)");
+  ok(reader.includes("(e.t ->> 'id') ~ '^[a-z][a-z0-9-]{0,23}$'") && reader.includes("(e.t ->> 'start') ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'") && reader.includes("jsonb_array_length(e.t -> 'weekdays') > 0") && reader.includes("not in (0, 1, 2, 3, 4, 5, 6)") && reader.includes("select distinct on (v.t ->> 'id') v.t, v.ord from valid v order by v.t ->> 'id', v.ord") && reader.includes("between 1 and 20 then (f.t ->> 'perDay')::numeric::int else 1 end") && reader.includes("coalesce(f.t -> 'retired' = 'true'::jsonb, false)"), n + ": the reader's rules - id shape, HH:MM, a non-empty 0-6 weekday list, the first entry of an id wins, perDay 1-20 else 1, retired / holidays only when exactly true");
+  const sad = functionText(s, "save_app_days") || "", vac = functionText(s, "save_app_vacations") || "";
+  [[sad, AC_SAD_RAISES, "save_app_days", "delete from public.app_call_days"], [vac, AC_VAC_RAISES, "save_app_vacations", "delete from public.app_time_off"]].forEach(([fn, raises, name, firstWriteNeedle]) => {
+    ok(fn, n + ": " + name + " could not be sliced");
+    ok(!/\b(stable|immutable)\b/.test(fn.slice(0, fn.indexOf("$$"))), n + ": " + name + " is volatile");
+    const firstWrite = fn.indexOf(firstWriteNeedle);
+    let last = -1;
+    raises.forEach((r, i) => {
+      const at = fn.indexOf(r, last + 1);
+      ok(at > last, n + ": " + name + " - the refusal is missing or out of order:\n" + r);
+      if (i < raises.length - 1 || name === "save_app_vacations") ok(at < firstWrite, n + ": " + name + " - every refusal comes BEFORE the first write:\n" + r);
+      if (at > last) last = at;
+    });
+    eq((fn.match(/using errcode = 'A[PV]0/g) || []).length, raises.length, n + ": " + name + " raises exactly its " + raises.length + " refusals;");
+    eq((fn.match(/pg_advisory_xact_lock/g) || []).length, 1, n + ": " + name + " takes one advisory lock;");
+    ok(fn.includes(AC_LOCK), n + ": " + name + " takes the one APP lock app_call_days:save (shifts and vacations are checked against each other)");
+    ok(!/notifications/.test(fn), n + ": " + name + " writes no notification row");
+  });
+  {
+    const lock = sad.indexOf(AC_LOCK);
+    ok(lock > sad.indexOf(AC_SAD_RAISES[11]) && lock < sad.indexOf(AC_SAD_RAISES[12]) && lock < sad.indexOf("from public.app_call_days") && lock < sad.indexOf("public.app_time_off"), n + ": save_app_days locks after AP003, before AP006 and before its first read of either table");
+    const gate = sad.indexOf("  if not sched then\n"), gateEnd = sad.indexOf("\n  end if;\n", sad.indexOf("\n    end if;\n", gate));
+    eq((sad.match(/  if not sched then\n/g) || []).length, 1, n + ": save_app_days has one scheduler exemption;");
+    eq(sad.slice(gate, gateEnd).match(/errcode = 'AP0\d\d'/g), ["errcode = 'AP006'"], n + ": save_app_days' `not sched` exempts the scheduler from AP006 (the past day) only;");
+    ok(sad.includes("  today_c   date := (now() at time zone 'America/Chicago')::date;") && sad.includes("from (select distinct d from unnest(a_day || c_day) d where d < today_c) x;"), n + ": AP006 reads the Central date, for adds and removals");
+    ok(sad.includes("  v_src := case when who = me then 'app' else 'scheduler' end;") && sad.includes("    on conflict (day, shift_type, profile_id) do nothing"), n + ": save_app_days: source app / scheduler, a held shift kept (on conflict do nothing)");
+    ok(sad.includes("   where h.n >= st.per_day\n") && sad.includes("x.profile_id <> who and x.profile_id is distinct from p_replace) h"), n + ": AP005 is perDay - other APPs filling the shift, the one a change takes over from not counted");
+    ok(sad.includes("when not st.holidays and exists (") && sad.includes("blob #> '{holidays,units}'") && sad.includes("when not (extract(dow from a.d)::int = any(st.weekdays))") && sad.includes("when st.retired then"), n + ": AP008 reads the type's weekdays, its holidays flag against the stored holiday units, and retired");
+    ok(sad.includes("            'appdays.save',\n") && sad.includes("jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', ins, 'removed', del, 'replaced', replaced, 'source', v_src)") && sad.includes(AC_SAD_RETURN), n + ": save_app_days writes the appdays.save audit row and returns {ok, profile_id, added, removed, kept, absent, replaced, source, audit} (binding for the client)");
+    eq((sad.match(/(insert into|update|delete from) public\.[a-z_]+/g) || []).sort(), ["delete from public.app_call_days", "delete from public.app_call_days", "insert into public.app_call_days", "insert into public.audit_log"], n + ": save_app_days writes app_call_days (the change's delete, the clears, the adds) and audit_log only;");
+    const vlock = vac.indexOf(AC_LOCK);
+    ok(vlock > vac.indexOf(AC_VAC_RAISES[12]) && vlock < vac.indexOf(AC_VAC_RAISES[13]) && vlock < vac.indexOf("from public.app_time_off") && vlock < vac.indexOf("from public.app_call_days"), n + ": save_app_vacations locks after AV003, before AV007 and before its first read of either table");
+    eq((vac.match(/  if not sched then\n/g) || []).length, 1, n + ": save_app_vacations has one scheduler exemption;");
+    const vg = vac.indexOf("  if not sched then\n"), vgEnd = vac.indexOf("\n  end if;\n", vac.indexOf("\n    end if;\n", vg));
+    eq(vac.slice(vg, vgEnd).match(/errcode = 'AV0\d\d'/g), ["errcode = 'AV006'"], n + ": save_app_vacations' `not sched` exempts the scheduler from AV006 (a started vacation) only - the office is bound like the APP;");
+    ok(vac.includes("  if me is null or not (sched or coord or c_app) then") && vac.includes("  if not (sched or coord) and who <> me then"), n + ": the APP for itself; the scheduler and the office coordinator for any APP; nobody else");
+    ok(vac.includes("v.start_date <= today_c;") && !/a_s[^\n]*< today_c/.test(vac), n + ": AV006 reads a removed vacation's first day against today (Central); an add has no past check (the surgeons' rule)");
+    ok(vac.includes("  v_src := case when who = me then 'app' when sched then 'scheduler' else 'office' end;") && vac.includes("            'appvac.save',\n") && vac.includes("jsonb_build_object('summary', v_sum, 'profile_id', who, 'added', ins, 'removed', del, 'source', v_src)") && vac.includes(AC_VAC_RETURN), n + ": save_app_vacations: source app / scheduler / office, the appvac.save audit row, the return {ok, profile_id, added, removed, kept, source, audit}");
+    eq((vac.match(/(insert into|update|delete from) public\.[a-z_]+/g) || []).sort(), ["delete from public.app_time_off", "insert into public.app_time_off", "insert into public.audit_log"], n + ": save_app_vacations writes app_time_off and audit_log only;");
+  }
+  const names = sqlFunctionText(s, "app_call_names") || "";
+  ok(names.startsWith(AC_SIGS.app_call_names) && names.includes("          or exists (select 1 from public.app_time_off v where v.profile_id = p.id)\n") && names.includes("and (p.id = auth.uid() or public.silvis_is_sched() or public.silvis_is_coord())))") && names.includes("  select p.id, nullif(btrim(p.display_name), ''), (p.is_app and p.role = 'viewer' and p.person_id is null)\n") && names.includes("   where auth.uid() is not null\n"), n + ": app_call_names - the shift and vacation holders to any signed-in caller, every APP to the scheduler and the office, the caller's own APP profile; id, trimmed name and the flag only; nothing without a signed-in user");
+  ["silvis_app_shift_types(jsonb)", "save_app_days(uuid, jsonb, jsonb, uuid)", "save_app_vacations(uuid, jsonb, uuid[])", "app_call_names()"].forEach((f) => ok(new RegExp("^comment on function public\\." + apEsc(f) + " is '[^\\n]*(revision ac|Revision ac)[^\\n]*';$", "m").test(s), n + ": " + f + " carries a revision ac comment"));
+  ok(/^comment on table public\.app_time_off is 'Revision ac[^\n]*never anon[^\n]*save_app_vacations\(\)[^\n]*';$/m.test(s) && /^comment on table public\.app_call_days is 'Prompt 29 \(Faraz 10\/1\) \/ revision ac[^\n]*never anon[^\n]*save_app_days\(\)[^\n]*';$/m.test(s), n + ": the two table comments say never anon and name the write path");
+}
+checkAc("APP shifts migration", acMig);
+
+step("revision ac: schema.sql mirrors the migration (every statement byte for byte but the reload, the enable line - in the RLS list - and the policy - after app_call_days_read); revision ac recorded after ab, report-first and NOT yet applied");
+checkAc("schema.sql", schema);
+["silvis_app_shift_types", "app_call_names"].forEach((name) => ok(sqlFunctionText(schema, name) === sqlFunctionText(acMig, name), name + "(): schema.sql differs from sql/migrations/" + AC_FILE));
+["save_app_days", "save_app_vacations"].forEach((name) => ok(functionText(schema, name) === functionText(acMig, name), name + "(): schema.sql differs from sql/migrations/" + AC_FILE));
+acStmts.filter((st) => !/^notify pgrst/.test(st) && st !== AC_VAC_ENABLE && st !== AC_VAC_POLICY && st !== "drop policy if exists app_time_off_read on public.app_time_off;").forEach((st) => ok(schemaCode.indexOf(st) >= 0, "schema.sql does not mirror this APP shifts statement byte for byte:\n" + st.slice(0, 300)));
+{
+  const at = (t) => schema.indexOf(t);
+  const rls = at("-- Row Level Security");
+  ok(/^alter table public\.app_time_off +enable row level security;$/m.test(schema) && at(AC_VAC_ENABLE) < 0 && at("alter table public.app_time_off            enable row level security;") > at("alter table public.app_call_days           enable row level security;"), "schema.sql enables RLS on app_time_off in the RLS list, after app_call_days");
+  ok(at(AC_VAC_POLICY) > at(AP_READ_POLICY) && at(AC_VAC_POLICY) < at("-- Seed rows") && at("drop policy if exists app_time_off_read on public.app_time_off;\n" + AC_VAC_POLICY) > 0, "app_time_off_read sits right after app_call_days_read, in the policy section");
+  ok(at("\n-- ---------- APP shifts and APP vacations (Prompt 35, revision ac; sql/migrations/2026-11-17-app-shifts.sql - report-first, NOT yet applied)\n") > at(AP_TABLE) && at(AC_ALTERS[0]) > at(AP_TABLE) && at(AC_SIGS.app_call_names) > at(AC_SIGS.save_app_vacations) && at(AC_SIGS.save_app_vacations) > at(AC_SIGS.save_app_days) && at(AC_SIGS.save_app_days) > at(AC_SIGS.silvis_app_shift_types) && at("comment on function public.app_call_names() is") < rls, "the revision ac block follows Prompt 29's table block (the guard, the alters, app_time_off, the reader, save_app_days, save_app_vacations, app_call_names) and ends before Row Level Security");
+  const loop = schema.slice(schema.indexOf("-- Anon-readable tables"), schema.indexOf("end $$;", schema.indexOf("-- Anon-readable tables")));
+  ok(!/app_time_off/.test(loop), "app_time_off is NOT in the anon read_all loop");
+  ok((schema.match(/create policy [a-z_]+ on public\.app_time_off /g) || []).length === 1 && !/create policy [a-z_]+ on public\.app_time_off for [a-z]+ (using|with)/.test(schema), "app_time_off carries exactly one policy, and it names `to authenticated`");
+  const acAt = header.search(/^-- Revision 2026-11-17 ac \(APP shifts and APP vacations, sql\/migrations\/2026-11-17-app-shifts\.sql, report-first, NOT yet applied\): Faraz 11\/17$/m);
+  const abAt = header.search(/^-- Revision 2026-10-25 ab /m);
+  ok(abAt > 0 && acAt > abAt && acAt < header.indexOf("\n-- Two same-day migrations"), "schema.sql's header records revision 2026-11-17 ac (report-first, NOT yet applied) after revision ab and before the same-day rule");
+  const revAc = header.slice(acAt).split("\n-- Two same-day migrations")[0].replace(/\n-- ?/g, " ");
+  ok(revAc.includes("app_call_days is EXTENDED, not replaced") && revAc.includes("ONE NEW table app_time_off") && revAc.includes("never anon") && revAc.includes("AP001-AP010") && revAc.includes("AV001-AV008") && revAc.includes("no vacation guard") && revAc.includes("Letter u stays taken by the weekend pair claim; ab was the last applied before it"), "revision ac's header line names the choice, the new table, never anon, both code ranges, no vacation guard and the letters");
+  eq(schema.split("\n").filter((l) => /NOT yet applied/.test(l) && !l.includes("sql/migrations/" + AC_FILE)), [], "every schema.sql line that says NOT yet applied names revision ac's file (it is the only prepared revision);");
+  eq((schema.match(/sql\/migrations\/2026-11-17-app-shifts\.sql[^\n]*NOT yet applied/g) || []).length, 3, "revision ac's three schema.sql lines (the header, the block divider, the policy comment) name its file and read NOT yet applied;");
+}
+
+step("revision ac: the probe - self-rolling-back, PROBE_SETUP (not applied, partly applied, no blob row, the collision guard) before any fixture, its shift types and holiday set in the blob INSIDE the transaction, seven throwaway users, 122 cases each stating its AFTER string, readbacks filtered to the probe's own users");
+const acProbe = read(AC_PROBE);
+ok(!/\r/.test(acProbe) && /^[\x00-\x7f]*$/.test(acProbe), "the APP shifts probe is LF and ASCII");
+ok(!/^\s*(begin|commit|rollback)\s*;/im.test(acProbe), "the APP shifts probe must not contain explicit BEGIN/COMMIT/ROLLBACK");
+ok(acProbe.includes("create temp table probe_results (k text, v text);\ngrant insert, select on probe_results to authenticated;\ngrant insert, select on probe_results to anon;"), "the probe collects into probe_results, granted to authenticated and anon");
+const acProbeHdr = acProbe.slice(0, acProbe.indexOf("create temp table probe_results"));
+const AC_AFTER = {};
+const acCaseOrder = [];
+acProbeHdr.split("\n").forEach((l) => { const m = l.match(/^--   ([A-Z][0-9]+s?)\s+.* -> (.*)$/); if (m) { ok(!(m[1] in AC_AFTER), "the probe header lists case " + m[1] + " twice"); AC_AFTER[m[1]] = m[2]; acCaseOrder.push(m[1]); } });
+const AC_CASES = Object.keys(AC_AFTER);
+eq(AC_CASES.length, AC_N, "the probe header lists " + AC_N + " cases;");
+ok(new RegExp("\\n-- " + AC_N + " cases\\.\\n").test(acProbeHdr) && /REPORT-FIRST, NOT APPLIED\)/.test(acProbeHdr) && /WITHOUT PERSISTING ANYTHING/.test(acProbeHdr) && /THE BLOB\./.test(acProbeHdr), "the probe header: report-first NOT applied, nothing persisted, the blob edit explained, " + AC_N + " cases");
+eq(["P", "A", "B", "S", "C", "T", "V", "D", "F", "G", "H", "E", "N", "X", "I"].map((p) => AC_CASES.filter((k) => k[0] === p).length), [5, 46, 10, 6, 8, 2, 3, 18, 1, 1, 3, 7, 9, 1, 2], "the case groups P A B S C T V D F G H E N X I hold 5 / 46 / 10 / 6 / 8 / 2 / 3 / 18 / 1 / 1 / 3 / 7 / 9 / 1 / 2 cases;");
+// the contract strings - Faraz's decisions as the probe reads them (the rest are pinned by cross-file equality below)
+[
+  ["A1", "ok added=2 removed=0 kept=0 source=app 3/3=inbox:one/app 3/4=inbox:one/app by=self"],
+  ["A2", "audit=1 actor=self name=probe shifts one sums=probe shifts one: inbox 3/3, 3/4"],
+  ["A14", "ERR AP008 APP_DAY_NO_SHIFT: 3/1 is a Saturday (Inbox does not run that day) - nothing was saved"],
+  ["A15", "ERR AP008 APP_DAY_NO_SHIFT: 3/12 is a holiday (Inbox does not run on holidays) - nothing was saved"],
+  ["A18", "ok added=1 3/3=inbox:one/app+probe-night:one/app"],
+  ["A22", "ERR AP009 APP_DAY_OVERLAP: 3/14 probe-night overlaps 3/15 probe-day - one APP holds one shift at a time (nothing was saved)"],
+  ["A29", "ERR AP010 APP_DAY_VACATION: 3/18 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)"],
+  ["A31", "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)"],
+  ["B1", "ERR AP005 APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved"],
+  ["B2", "ok added=1 3/3=inbox:one/app+probe-night:one/app+probe-night:two/app"],
+  ["T1", "ERR AP005 APP_DAY_TAKEN: 3/3 probe-night already has probe shifts one and probe shifts two (2 a day) - nothing was saved"],
+  ["C2", "ok added=1 source=office vac=3/17-3/22:one/app+3/24-3/26:two/office+3/27-3/28:two/app"],
+  ["C1", "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift"],
+  ["C7", "names=3 one=app two=app three=app"],
+  ["D7", "ok added=1 replaced=1 3/3=inbox:two/scheduler+probe-night:one/app+probe-night:two/app last=probe shifts two: inbox 3/3 (was probe shifts one)"],
+  ["D15", "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts two holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)"],
+  ["F1", "ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is <today M/D> in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)"],
+  ["G1", "ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is <today M/D> in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)"],
+  ["E2", "ok removed=1 vac=3/17-3/22:one/app+3/27-3/28:two/app"],
+  ["N2", "ERR 42501 permission denied for table app_time_off"],
+  ["N6", "ERR 42501 permission denied for function silvis_app_shift_types"],
+  ["P1", "table=yes rls=yes pk=day,shift_type,profile_id shape=app_call_days_shift_type_shape fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no"],
+  ["P3", "save=definer/volatile vac=definer/volatile names=definer/stable types=invoker/immutable paths=4 old_save=no save_anon=no save_auth=yes vac_anon=no vac_auth=yes names_anon=no names_auth=yes types_anon=no types_auth=no types_service=yes"],
+  ["X1", "before=2/1 after=0/0 audit_kept=yes"],
+].forEach(([k, v]) => eq(AC_AFTER[k], v, "the probe header's AFTER for " + k + ";"));
+{
+  const code = acProbe.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+  const lastDo = acProbe.lastIndexOf("do $$");
+  ok(lastDo > 0 && /raise exception 'PROBE_RESULTS %;END'/.test(acProbe.slice(lastDo)), "the probe's last DO block raises 'PROBE_RESULTS %;END'");
+  const pos = ["raise exception 'PROBE_SETUP: app_call_days.shift_type is absent - sql/migrations/2026-11-17-app-shifts.sql is not applied';", "raise exception 'PROBE_SETUP: app_time_off or save_app_vacations is absent - sql/migrations/2026-11-17-app-shifts.sql is partly applied';", "raise exception 'PROBE_SETUP: the blob row main is absent - the probe sets its shift types there';", "raise exception 'PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2031-03 or on 2020-06-01, app_time_off touching 2031-03 or 2020-06) - the probe fixtures would collide';", "insert into auth.users", "raise exception 'PROBE_SETUP: handle_new_auth_user did not create the profile rows';", "update public.call_schedule_data c"].map((t) => acProbe.indexOf(t));
+  ok(pos.every((p, i) => p > 0 && (i === 0 || p > pos[i - 1])), "the setup raises: not applied, partly applied, no blob row, the collision guard (it reads the tables), then the users, the profile-rows check, then the blob edit (" + pos + ")");
+  const setupEnd = acProbe.indexOf("\nend $$;"), firstCase = acProbe.indexOf("r := public.save_app_days(");
+  const raises = []; let at = acProbe.indexOf("raise exception 'PROBE_SETUP"); while (at >= 0) { raises.push(at); at = acProbe.indexOf("raise exception 'PROBE_SETUP", at + 1); }
+  ok(setupEnd > 0 && firstCase > setupEnd && raises.length === 5 && raises.every((x) => x < setupEnd), "the probe raises its five PROBE_SETUP in its setup block (before any case) and nowhere else (" + raises.length + ")");
+  eq((code.match(/update public\.call_schedule_data/g) || []).length, 1, "the probe edits the blob exactly once (its setup's shift types and holiday, inside the rolled-back transaction);");
+  ok(code.indexOf("update public.call_schedule_data c") < setupEnd && code.includes("|| jsonb_build_object('appShiftTypes', '[") && code.includes("'[{\"name\":\"probe holiday\",\"tier\":\"minor\",\"days\":[\"2031-03-12\",\"2031-03-15\"]}]'::jsonb") && code.includes("   where c.id = 'main';"), "the blob edit sets groupRules.appShiftTypes and appends the probe holiday unit to holidays.units.2031 of the main row (merged into the existing keys, never a replacement)");
+  ok(!/(update|insert into|delete from)\s+public\.(schedule_days|time_off|availability|call_offers|notifications)\b/.test(code), "the probe never writes the schedule, the surgeons' vacations, availability, offers or the feed");
+  ok(code.includes("'probe-appshifts-' || u || '@example.test'") && !/'probe-appshifts-[^'|]*@/.test(code), "the throwaway users are probe-appshifts-<uuid>@example.test (the email built with ||)");
+  ["update public.user_profiles set display_name = 'probe shifts one', is_app = true where id = u1;", "update public.user_profiles set display_name = 'probe shifts two', is_app = true where id = u2;", "update public.user_profiles set display_name = 'probe shifts three', is_app = true where id = u3;", "update public.user_profiles set person_id = 's3', role = 'surgeon', display_name = 'probe shifts surgeon' where id = us;", "update public.user_profiles set role = 'coordinator', display_name = 'probe shifts office' where id = uc;", "update public.user_profiles set display_name = 'probe shifts viewer' where id = uv;", "update public.user_profiles set person_id = 's1', role = 'admin', display_name = 'probe shifts admin' where id = ua;"].forEach((l) => ok(code.includes(l), "the probe's seven users: missing " + l));
+  ok((code.match(/insert into public\.app_call_days/g) || []).length === 1 && (code.match(/insert into public\.app_time_off/g) || []).length === 2, "no fixture row: the only direct inserts are the refused cases (A13; A38, S6)");
+  const days = Array.from(code.matchAll(/(20[0-9]{2}-[0-9]{2}-[0-9]{2})/g)).map((m) => m[1]);
+  ok(days.length > 40 && days.every((d) => d.slice(0, 7) === "2031-03" || d.slice(0, 7) === "2020-06" || ["2031-02-30", "2031-04-01", "2032-05-05", "2032-03-24", "2026-11-17"].includes(d)), "every day the probe touches is in 2031-03, 2020-06, the refused ranges or a bad day (2031-02-30): " + days.filter((d) => !(d.slice(0, 7) === "2031-03" || d.slice(0, 7) === "2020-06" || ["2031-02-30", "2031-04-01", "2032-05-05", "2032-03-24", "2026-11-17"].includes(d))).join(", "));
+  AC_CASES.forEach((k) => ok(code.includes("values ('" + k + "', "), "the probe records case " + k));
+  ok(code.includes("     where x.profile_id::text in (select c.v from probe_ctx c)\n") && (code.match(/l\.detail ->> 'profile_id' in \(select c\.v from probe_ctx c\)/g) || []).length === 3 && code.includes("order by l.detail ->> 'summary' collate \"C\""), "names= / audit= / sums= / last= read only the probe's own users; sums in text order (collate C)");
+}
+
+step("revision ac: the pre-check - ONE read-only SELECT (the gate through catalog lookups, the row counts, the accounts, the blob's types and holiday years, the grants, the realtime facts)");
+const acPre = read(AC_PRECHECK);
+ok(!/\r/.test(acPre) && /^[\x00-\x7f]*$/.test(acPre), "the pre-check is LF and ASCII");
+{
+  const hdr = acPre.slice(0, acPre.indexOf("with objects as ("));
+  ok(/READ-ONLY: one SELECT, nothing is written, locked or changed/.test(hdr) && /REPORT-FIRST, NOT APPLIED/.test(hdr) && hdr.includes("shift_type=no pk=day vac_table=no types_fn=no save_sig=old vac_fn=no names_vac=no") && hdr.includes("shift_type=yes pk=day,shift_type,profile_id vac_table=yes types_fn=yes save_sig=new vac_fn=yes names_vac=yes") && hdr.includes("save=t/f vac=t/f types=f/f/t names=t/f"), "the header: read-only, the gate before / after the apply, the grants after");
+  const code = acPre.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n").trim();
+  ok(code.startsWith("with objects as (") && code.endsWith("order by ord, role;") && (code.match(/;/g) || []).length === 1, "the pre-check is ONE statement ordered by ord, role");
+  ok(!/\b(insert|update|delete|alter|create|drop|truncate|grant|revoke|lock|perform|set role|set_config)\b/i.test(code.replace(/'[^']*'/g, "''")), "the pre-check writes, locks and changes nothing");
+  ok(!/public\.app_time_off\b(?!')/.test(code.replace(/'[^']*'/g, "''")) && !/\.shift_type\b/.test(code), "the pre-check never reads the new table or column directly (to_regclass / query_to_xml / pg_attribute only)");
+  ["'objects'::text", "'rows'::text", "'accounts'::text", "'setup'::text", "'grants'::text", "'realtime'::text"].forEach((t) => ok(code.includes(t), "the pre-check has the section " + t));
+  ok(!/email/.test(code) && (code.match(/display_name/g) || []).length === 1, "counts only - no email; the display name is counted once, never printed");
+}
+
+step("revision ac: verify-rls.sh section 25 - anon REST (25a-25e), the surgeon (25f), the graded probe (25g: every case by name + the count), leftovers (25h); the not-applied picture tolerated until the record step unless SILVIS_APP_SHIFTS_APPLIED=1; section 18's superseded arm; graded against a faked CLI and curl");
+ok(/^echo "== 25\. APP shifts and APP vacations \(2026-11-17, revision ac - Prompt 35\): typed app_call_days \+ app_time_off \+ save_app_days \/ save_app_vacations \/ app_call_names \/ silvis_app_shift_types - anon refused, rolled-back probe =="$/m.test(vr), "verify-rls.sh has no section 25 (APP shifts)");
+const s25 = vr.slice(vr.indexOf('echo "== 25. '), vrSectionEnd('echo "== 25. '));
+ok(s25.length > 0 && vr.indexOf('echo "== 25. ') > vr.indexOf('echo "== 24. ') && vrSectionEnd('echo "== 25. ') === vr.indexOf('\necho\necho "RESULT: '), "section 25 is the last section, after section 24");
+const s25code = s25.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+{
+  eq((s25code.match(/curl /g) || []).length, 7, "section 25 makes exactly seven REST calls (25a-25e anon, 25f two as a surgeon);");
+  ok(s25code.includes("\"$URL/rest/v1/app_time_off?select=id&limit=1\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Prefer: count=exact\")") && s25code.includes("-X POST \"$URL/rest/v1/rpc/save_app_vacations\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_profile\":null,\"p_add\":[],\"p_remove\":[]}'") && s25code.includes("-X POST \"$URL/rest/v1/rpc/save_app_days\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_profile\":null,\"p_add\":[{\"day\":\"2031-03-31\",\"type\":\"inbox\"}],\"p_clear\":[],\"p_replace\":null}'") && s25code.includes("-X POST \"$URL/rest/v1/rpc/silvis_app_shift_types\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\" -H \"Content-Type: application/json\" -d '{\"p_data\":{}}'") && s25code.includes("-X POST \"$URL/rest/v1/app_time_off\" -H \"apikey: $ANON\" -H \"Authorization: Bearer $ANON\""), "25a-25e: the anon calls (a read of app_time_off with Prefer: count=exact; save_app_vacations' three keys; save_app_days with a typed list; the internal reader; a direct write)");
+  ok(!/SILVIS_JWT[^_]|\$SILVIS_JWT\b/.test(s25code) && (s25code.match(/curl [^\n]*-X POST[^\n]*/g) || []).every((p) => /Bearer \$ANON|Bearer \$SILVIS_SURGEON_JWT/.test(p) && !/"p_add":\[\{"start"/.test(p)), "section 25 never sends the scheduler's token, and no POST carries a vacation (nothing could be written)");
+  ok(s25code.includes('AP25_APPLIED="${SILVIS_APP_SHIFTS_APPLIED:-}"') && /nf25\(\) \{ if \[ "\$AP25_APPLIED" = "1" \]; then bad /.test(s25code) && (s25code.match(/"HTTP 404"\) nf25 /g) || []).length === 7, "every 404 goes through nf25: a FAIL with SILVIS_APP_SHIFTS_APPLIED=1, the not-applied picture otherwise");
+  ok((s25code.match(/"HTTP 401"\|"HTTP 403"\) ok /g) || []).length === 5 && /"HTTP 200"\) bad "anon read of app_time_off: HTTP 200/.test(s25code), "25a-25e: 401/403 PASS; an anon 200 on app_time_off FAILs");
+  ok(/PROBE25="\$\(cd sql\/probes && \(pwd -W 2>\/dev\/null \|\| pwd\)\)\/app-shifts-probe\.sql"/.test(s25code), "25g runs sql/probes/app-shifts-probe.sql through the linked CLI");
+  ok(s25code.includes("[ \"$n25\" = \"" + AC_N + "\" ] && ok") && s25code.includes('lines25=$(echo "$results25" | tr \';\' \'\\n\' | sed \'s/\\\\u003e/>/g; s/\\\\u003c/</g; s/\\\\u0026/\\&/g; s/\\\\//g\')'), "25g decodes once and requires exactly " + AC_N + " case lines");
+  // every case is graded with exactly the header's AFTER string
+  const grades = {};
+  (s25code.match(/\n    expect_(eq25 |err25|dt25 ) [^\n]*/g) || []).forEach((l) => { const m = l.match(/expect_(eq25|err25|dt25)\s+([A-Z][0-9]+s?)\s+(.*)$/); if (m) grades[m[2]] = [m[1], m[3]]; });
+  eq(Object.keys(grades).sort(), AC_CASES.slice().sort(), "section 25 grades exactly the probe header's cases;");
+  const unq = (t) => t.startsWith("'") ? t.slice(1, -1) : t.slice(1, -1).replace(/\\(["$`\\])/g, "$1");
+  const args = (t) => (t.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\S+/g) || []);
+  AC_CASES.forEach((k) => {
+    const g = grades[k]; if (!g) return;
+    const a = args(g[1]);
+    const want = AC_AFTER[k];
+    if (g[0] === "dt25") ok(want.includes("<today M/D>") && unq(a[0]) + "<today M/D>" + unq(a[1]) === want, "section 25 grades " + k + " with the header's dated string");
+    else if (g[0] === "err25") ok(want === "ERR " + a[0] + " " + unq(a[1]), "section 25 grades " + k + " with the header's error");
+    else ok(unq(a[0]) === want, "section 25 grades " + k + " with the header's AFTER (" + unq(a[0]) + " vs " + want + ")");
+  });
+  ok(s25code.includes("LEFTOVER25_SQL=\"select ((select count(*) from auth.users where email like 'probe-appshifts-%@example.test') + (select count(*) from public.audit_log where action in ('appdays.save', 'appvac.save') and detail->>'summary' like 'probe shifts %') + (select count(*) from public.call_schedule_data where id = 'main' and (data::text like '%probe-night%' or data::text like '%probe holiday%')))::int as tagged,") && /LEFT ROWS BEHIND/.test(s25code), "25h counts the probe's leftovers - its users, its audit rows, a probe type or holiday left in the blob (tagged) and window rows (in_window, guarded by to_regclass)");
+  ok(!/delete from public\.(app_call_days|app_time_off|call_schedule_data)/.test(s25code), "25h never prints a DELETE for an APP shift, an APP vacation or the blob (review only)");
+  ok(s25code.includes("  end25=none\n  if echo \"$out\" | grep -q 'PROBE_RESULTS .*;END'; then end25=results\n  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: '; then end25=setup; fi\n"), "25h reads how 25g ended (results / setup / none)");
+  ok(s25code.includes('echo "   SKIP 25g/25h (supabase CLI not linked at $WORKDIR)"') && s25code.includes('echo "   SKIP 25f (set SILVIS_SURGEON_JWT='), "without a linked CLI 25g / 25h skip; without a surgeon token 25f skips");
+}
+{
+  const head = vr.slice(0, vr.indexOf("case \"${1:-}\""));
+  ok(/ \+ locked trades probe \(24\) \+ APP shifts anon checks and probe \(25\) via the linked Supabase CLI$/m.test(head) && /anon checks \([^)]*22c-22e, 25a-25e\)/.test(head) && /surgeon reads \(9d, 18e, 19f, 20e, 25f;/.test(head), "verify-rls.sh's header names section 25 and its anon and surgeon checks");
+  ok(/^#   SILVIS_APP_SHIFTS_APPLIED=1 +set ONLY on the run right after revision ac's apply/m.test(head) && /SILVIS_PREFS_ROWS_BEFORE \/ SILVIS_APP_SHIFTS_APPLIED - see the header of this file/.test(vr.slice(0, vr.indexOf("set -u"))), "the header and --help document SILVIS_APP_SHIFTS_APPLIED (until the record step drops it)");
+}
+{
+  const run25 = (cliOut, opts) => {
+    const o = Object.assign({ tagged: 0, win: 0, anon: "401", surgeon: false, pre: "" }, opts || {});
+    const script = "set -u\nWORKDIR=/nonexistent; pass=0; fail=0; T=$(mktemp -d); URL=http://verify.invalid; ANON=x\n" +
+      "ok() { echo \"PASS  $1\"; pass=$((pass+1)); }\nbad() { echo \"FAIL  $1\"; fail=$((fail+1)); }\n" +
+      (o.pre ? o.pre + "\n" : "") + (o.surgeon ? "SILVIS_SURGEON_JWT=SURGEONTOKEN\n" : "") + "linked() { true; }\n" +
+      "q() { printf '{\\n  \"boundary\": \"%s\",\\n  \"rows\": [\\n    {\\n      \"tagged\": " + o.tagged + ",\\n      \"in_window\": " + o.win + "\\n    }\\n  ]\\n}\\n' \"$RANDOM\"; }\n" +
+      "curl() { local of='' prev='' code='' post='' sur='' a; for a in \"$@\"; do [ \"$prev\" = '-o' ] && of=\"$a\"; [ \"$a\" = POST ] && post=1; case \"$a\" in *SURGEONTOKEN*) sur=1;; esac; prev=\"$a\"; done; [ -n \"$of\" ] && : > \"$of\"; " +
+      "if [ -n \"$sur\" ]; then if [ -n \"$post\" ]; then code=400; [ -n \"$of\" ] && echo '{\"code\":\"AV001\",\"message\":\"APP_VACATION_NOT_ALLOWED: ...\"}' > \"$of\"; else code=200; fi; else code=" + o.anon + "; fi; printf 'HTTP %s' \"$code\"; }\n" +
+      "supabase() { echo 'Initialising login role...'; echo '" + cliOut.replace(/'/g, "'\\''") + "'; }\n" + fakesGuard(["linked", "q", "curl", "supabase"]) + s25 + "\nrm -rf \"$T\"\necho \"RESULT $pass $fail\"\n";
+    const r = require("child_process").spawnSync("bash", ["-s"], { cwd: ROOT, encoding: "utf8", input: script });
+    ok(!r.error, "bash could not be started to run section 25: " + (r.error && r.error.message));
+    ok(!/ABORT-FAKES/.test(r.stdout || ""), "section 25's faked run: a fake did not resolve to a bash function - aborted before the section ran");
+    return { out: r.stdout || "", result: ((r.stdout || "").match(/^RESULT (\d+) (\d+)$/m) || []).slice(1).map(Number), err: r.stderr || "" };
+  };
+  const fails = (x) => x.out.split("\n").filter((l) => /^FAIL/.test(l)).join(" | ") + x.err.slice(0, 200);
+  const after = {};
+  AC_CASES.forEach((k) => { after[k] = AC_AFTER[k].replace(/<today M\/D>/g, "11/17"); });
+  const msgOf = (pic, esc) => { let m = Object.keys(pic).sort().map((k) => k + "=" + pic[k]).join(";"); m = m.replace(/"/g, '\\"'); if (esc) m = m.replace(/>/g, "\\u003e"); return 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_RESULTS ' + m + ';END\\nCONTEXT:  PL/pgSQL function inline_code_block line 3 at RAISE\\n"}'; };
+  const ra = run25(msgOf(after));
+  eq(ra.result, [AC_N + 7, 0], "section 25 against the AFTER picture (25a-25e 401, the count, every case, leftover 0): every check PASS (" + fails(ra) + ");");
+  eq(run25(msgOf(after, true), { surgeon: true, pre: "export SILVIS_APP_SHIFTS_APPLIED=1" }).result, [AC_N + 9, 0], "with the CLI's \\u003e escapes, a surgeon token (25f: read 200, save 400 AV001) and the apply-run flag: every check PASS;");
+  const notApplied = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: app_call_days.shift_type is absent - sql/migrations/2026-11-17-app-shifts.sql is not applied\\nCONTEXT:  ..."}';
+  const rn = run25(notApplied, { anon: "404" });
+  eq(rn.result, [7, 0], "the not-applied picture (five 404s, PROBE_SETUP) passes as 'not applied yet' without the flag (" + fails(rn) + ");");
+  ok(/PASS  anon GET app_time_off: HTTP 404 - revision ac is not applied yet/.test(rn.out) && /PASS  APP shifts probe: PROBE_SETUP - app_call_days\.shift_type is absent: revision ac is not applied yet/.test(rn.out), "... and says so");
+  eq(run25(notApplied, { anon: "404", pre: "SILVIS_APP_SHIFTS_APPLIED=1" }).result, [1, 6], "with SILVIS_APP_SHIFTS_APPLIED=1 (the run right after the apply) the five 404s and PROBE_SETUP FAIL;");
+  const wrong = Object.assign({}, after, { B1: "ok added=1", C1: "ok added=1 source=office" });
+  eq(run25(msgOf(wrong)).result, [AC_N + 5, 2], "a second APP let onto a full shift and the office let onto shifts: exactly those two FAIL;");
+  const lost = Object.assign({}, after); delete lost.A5;
+  eq(run25(msgOf(lost)).result, [AC_N + 5, 2], "a lost case FAILs twice (the count, the case);");
+  const doubled = msgOf(after).replace("A1=", "A1=" + after.A1 + ";A1=");
+  eq(run25(doubled).result, [AC_N + 6, 1], "a doubled case FAILs the count;");
+  const r200 = run25(msgOf(after), { anon: "200" });
+  eq(r200.result, [AC_N + 2, 5], "an anon 200 FAILs 25a-25e (25e finds no 42501 in the answer either) (" + fails(r200) + ");");
+  ok(/FAIL  anon read of app_time_off: HTTP 200/.test(r200.out), "... and says so");
+  const rt = run25(msgOf(after), { tagged: 2 });
+  eq(rt.result, [AC_N + 6, 1], "tagged leftovers FAIL, with their DELETEs and the blob read");
+  ok(rt.out.includes("delete from auth.users where email like 'probe-appshifts-%@example.test';") && rt.out.includes("select data #> '{groupRules,appShiftTypes}', data #> '{holidays,units,2031}' from public.call_schedule_data where id = 'main';") && !/delete from public\.(app_call_days|app_time_off|call_schedule_data)/.test(rt.out), "... the users' and audit rows' DELETEs, a SELECT for the blob - never a DELETE of a shift, a vacation or the blob");
+  const rw = run25(msgOf(after), { win: 2 });
+  eq(rw.result, [AC_N + 6, 1], "window rows after a run that ran its cases FAIL (review only, no DELETE)");
+  const collide = 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2031-03 or on 2020-06-01, app_time_off touching 2031-03 or 2020-06) - the probe fixtures would collide\\nCONTEXT:  ..."}';
+  const rc = run25(collide, { win: 2 });
+  eq(rc.result, [5, 1], "a collision FAILs 25g; its window rows are listed for review, never a leftover (" + fails(rc) + ");");
+  ok(rc.out.includes("   25h: 2 app_call_days / app_time_off row(s) sit in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (25g)") && !/LEFT ROWS BEHIND/.test(rc.out), "... listed for review");
+  for (const [what, cli] of [["partly applied", 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: app_time_off or save_app_vacations is absent - sql/migrations/2026-11-17-app-shifts.sql is partly applied\\nCONTEXT:  ..."}'], ["no blob row", 'unexpected status 400: {"message":"Failed to run sql query: ERROR:  P0001: PROBE_SETUP: the blob row main is absent - the probe sets its shift types there\\nCONTEXT:  ..."}'], ["no sentinel", '{"message": "connection refused"}']]) {
+    eq(run25(cli).result, [6, 1], what + ": 25g FAILs (never 'not applied'), the REST checks and the leftover count run;");
+  }
+}
+{
+  // section 18 since revision ac: Prompt 29's probe reads 'PROBE_SETUP: superseded by revision ac' - ONE PASS, never a FAIL; 18c / 18e
+  // send p_replace null (valid for the boolean and the uuid)
+  const code18 = vr.slice(vr.indexOf('echo "== 18. '), vrSectionEnd('echo "== 18. '));
+  ok(code18.includes("-d '{\"p_profile\":null,\"p_add\":[],\"p_clear\":[],\"p_replace\":null}')\necho \"   18c anon rpc save_app_days:") && code18.includes("-d '{\"p_profile\":null,\"p_add\":[],\"p_clear\":[],\"p_replace\":null}')\n  echo \"   18e surgeon rpc save_app_days (empty lists)") && !/"p_replace":false/.test(code18), "18c / 18e send p_replace null");
+  ok(code18.includes("  elif ! echo \"$out\" | grep -q 'PROBE_RESULTS' && echo \"$out\" | grep -q 'PROBE_SETUP: superseded by revision ac'; then\n    ok \"APP days probe: superseded by revision ac - app_call_days has shift_type (Prompt 35); section 25 grades sql/probes/app-shifts-probe.sql instead\""), "18f reads Prompt 29's superseded probe as one PASS");
+}
+
+step("revision ac: docs - SCHEMA-REVIEW.md section (PREPARED, the decisions, the change table, the choice, the tables verbatim, both refusal tables, the probe table = the header, apply order, one command, rollback = the header's), tables (a) / (b), the helper line");
+ok(/^## 2026-11-17 - APP shifts and APP vacations: app_call_days typed \+ app_time_off \+ save_app_vacations \/ silvis_app_shift_types, save_app_days and app_call_names re-created \(Faraz 11\/17, Prompt 35; `sql\/migrations\/2026-11-17-app-shifts\.sql`\)$/m.test(review), "SCHEMA-REVIEW.md lacks the '## 2026-11-17 - APP shifts and APP vacations: ...' section");
+{
+  const at = review.indexOf("## 2026-11-17 - APP shifts and APP vacations:"), end = review.indexOf("\n## ", at + 1);
+  const sec = at < 0 ? "" : review.slice(at, end < 0 ? review.length : end);
+  const flat = sec.replace(/\s+/g, " ");
+  ok(end < 0, "the revision ac section is the last section of SCHEMA-REVIEW.md");
+  ok(/^\*\*Status: PREPARED - report-first, NOT APPLIED\*\* \(revision ac;/m.test(sec), "the section's status reads PREPARED - report-first, NOT APPLIED");
+  ok(flat.includes("**The choice: extend app_call_days, do not replace it**") && flat.includes("**APP vacations get their own table**") && flat.includes("**Shift types stay Setup data in the blob**"), "the section states the choice and why");
+  ok(sec.includes("```sql\n" + AC_ALTERS.join("\n")) && sec.includes(AC_VAC_PRIVS) && sec.includes("drop policy if exists app_time_off_read on public.app_time_off;\n" + AC_VAC_POLICY + "\n```"), "the section carries the two tables and their RLS verbatim");
+  [["AP001", "APP_DAY_NOT_ALLOWED"], ["AP002", "APP_DAY_NOT_YOURS"], ["AP003", "APP_DAY_NOT_APP"], ["AP004", "APP_DAY_BAD_DAY"], ["AP005", "APP_DAY_TAKEN"], ["AP006", "APP_DAY_PAST"], ["AP007", "APP_DAY_STALE"], ["AP008", "APP_DAY_NO_SHIFT"], ["AP009", "APP_DAY_OVERLAP"], ["AP010", "APP_DAY_VACATION"], ["AV001", "APP_VACATION_NOT_ALLOWED"], ["AV002", "APP_VACATION_NOT_YOURS"], ["AV003", "APP_VACATION_NOT_APP"], ["AV004", "APP_VACATION_BAD_RANGE"], ["AV005", "APP_VACATION_ON_SHIFT"], ["AV006", "APP_VACATION_PAST"], ["AV007", "APP_VACATION_STALE"], ["AV008", "APP_VACATION_OVERLAP"]].forEach(([c, t]) => ok(new RegExp("^\\| [0-9]+ \\| `" + c + "` \\|[^\\n]*`" + t + ": ", "m").test(sec), "the refusal tables list " + c + " with its " + t + " message"));
+  AC_CASES.forEach((k) => ok(new RegExp("^\\| " + apEsc(k) + " \\| [^\\n]* \\| `" + apEsc(AC_AFTER[k].replace(/\|/g, "\\|")) + "` \\|$", "m").test(sec), "the section's probe table lists case " + k + " with its AFTER string"));
+  ok(flat.includes("8. `SILVIS_APP_SHIFTS_APPLIED=1 bash scripts/verify-rls.sh` - `RESULT: 718 passed, 0 failed`") && flat.includes("10. The client push, on Faraz's go") && flat.includes("**664 / 0**") && flat.includes("**718 / 0**"), "the apply order and the expected verify-rls counts (664 before, 718 right after the apply)");
+  ok(flat.includes("**One command (Faraz):** his apply script `apply-app-shifts.sh`, kept OUTSIDE the repo") && flat.includes("--dry-run") && flat.includes("PASTE THIS BACK TO CLAUDE CODE"), "the section names the one command (outside the repo), its dry run and the paste-back block");
+  ok(sec.includes("```sql\n" + AC_ROLLBACK.join("\n") + "\n```") && flat.includes("then re-run `sql/migrations/2026-10-02-app-call-days.sql` (revision v, idempotent)"), "the section's rollback = the migration header's");
+  // an APP's real name never appears (test/privacy.test.js A6c guards it by salted digest - a test cannot name it either)
+  ok(sec.includes("`<APP name>: inbox 11/18, 11/19; removed inbox 11/25`"), "the section's audit example uses the placeholder <APP name>, never an APP's real name");
+  ok(flat.includes("**What could break, and the offline proof**") && flat.includes("all 122 cases as its header lists") && flat.includes("54 facts"), "the section records the offline proof (122 cases, the schema.sql comparison)");
+}
+ok(/^\| `app_call_days` \|[^\n]*Revision ac \(Faraz 11\/17, Prompt 35; prepared 2026-11-17 - report-first, \*\*NOT applied\*\*/m.test(tblA) && /^\| `app_time_off` \| APP vacations \(Faraz 11\/17, Prompt 35, revision ac\), prepared 2026-11-17 - report-first, \*\*NOT applied\*\*[^\n]*never anon[^\n]*save_app_vacations\(\)/m.test(tblA), "SCHEMA-REVIEW table (a): the app_call_days row notes revision ac, and an app_time_off row (NOT applied; never anon; write = save_app_vacations)");
+ok(/^\| `app_time_off` - revision ac, prepared 2026-11-17 - report-first, NOT applied \| every signed-in role[^\n]*never anon[^\n]*\| none directly[^\n]*save_app_vacations/m.test(tblB) && /`silvis_app_shift_types\(p_data\)` \(revision ac, prepared 2026-11-17 - report-first, NOT applied:/.test(review), "SCHEMA-REVIEW table (b) has an app_time_off row; the helper line names silvis_app_shift_types");
+
+step("revision ac: no apply script in the repo (Faraz 10/1: apply scripts live outside it); verify-rls.sh names the APP shifts probe in section 25 only");
+{
+  ok(!fs.existsSync(path.join(ROOT, "scripts", "apply-app-shifts.sh")), "scripts/apply-app-shifts.sh must not be in the repo (it lives outside it)");
+  [AC_MIGRATION, AC_PROBE, AC_PRECHECK].forEach((p) => ok(!/bash scripts\/apply-|scripts\/apply-app-shifts\.sh/.test(read(p)), path.relative(ROOT, p) + " names an in-repo apply script"));
+  ok(vr.indexOf("/app-shifts-probe.sql\"") > vr.indexOf('echo "== 25. ') && vr.split("/app-shifts-probe.sql\"").length === 2, "verify-rls.sh runs the APP shifts probe in section 25 only (section 18 names it in its superseded PASS line, never runs it)");
+}
+console.log("- revision ac (2026-11-17): APP shifts and APP vacations - the migration (report-first, NOT applied), its mirror, the probe (122 cases), the pre-check, verify-rls section 25 (graded against a faked CLI) and section 18's superseded arm, the docs");
 
 console.log("schema.test.js: " + N + " assertions passed");

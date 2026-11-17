@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Silvis Call Schedule - RLS + trigger verification (Prompt 2).
 #
-#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i, 22c-22e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) + push follow-ups anon checks and probe (22) + East reset backstop probe (23) + locked trades probe (24) via the linked Supabase CLI
+#   bash scripts/verify-rls.sh                 anon checks (1-2, 5c, 7a, 8, 9a-9b, 10a, 16a-16b, 18a-18d, 19a-19e, 19i, 20a-20d, 20h, 20i, 22c-22e, 25a-25e) + trigger checks (4) + trade-guard probe (5) + claim probe (7b) + offers probe (8e) + east-vacation probe (9c) + pre-launch probe (10c) + coordinator probe (11b) + followers probe (12b) + audit read-back probe (13) + call pay anon checks and probe (14) + vacation guard probe (15) + no-primary days anon RPC checks and probe (16) + APP call days anon checks and probe (18) + phone push anon checks and probe (19) + East vacations anon checks and probe (20) + trade offers probe (21) + push follow-ups anon checks and probe (22) + East reset backstop probe (23) + locked trades probe (24) + APP shifts anon checks and probe (25) via the linked Supabase CLI
 #   SILVIS_JWT=<scheduler jwt> bash scripts/verify-rls.sh   also runs the authenticated write checks (3, 8c, 8d)
-#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e; a SURGEON-role user's access token)
+#   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e, 25f; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
+#   SILVIS_APP_SHIFTS_APPLIED=1                               set ONLY on the run right after revision ac's apply (Prompt 35, the APP shifts): section 25 then FAILs the not-applied picture (an anon 404, the probe's PROBE_SETUP app_call_days.shift_type is absent) instead of reading it as "not applied yet" (the record step drops it)
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
@@ -16,7 +17,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_APP_SHIFTS_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1208,7 +1209,9 @@ echo "== 18. APP call days (2026-10-02, Prompt 29): app_call_days + save_app_day
 # two self policies). 18a-18d go over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the
 # object exists and anon holds no privilege; a 404 is a FAIL (18c: PGRST202 - the schema cache does not know the four keys, the gate
 # before the Prompt 29 client push). 18e (only with SILVIS_SURGEON_JWT) reads as a surgeon and sends an empty save (refused AP001 at
-# the first check). 18f runs sql/probes/app-call-days-probe.sql through the linked CLI (rolls itself back; 69 cases graded by name -
+# the first check). 18c / 18e send p_replace null - valid for Prompt 29's boolean and for revision ac's uuid (Prompt 35, which re-creates
+# save_app_days with typed JSON lists under the same four keys). Since revision ac's apply the probe raises 'PROBE_SETUP: superseded by
+# revision ac' (it cannot run its cases on a typed table): 18f reads that as one PASS, and section 25 grades the APP shifts probe. 18f runs sql/probes/app-call-days-probe.sql through the linked CLI (rolls itself back; 69 cases graded by name -
 # its header lists each AFTER string). The table and the functions exist since the apply, so the probe's PROBE_SETUP (app_call_days
 # is absent) and a 404 are FAILs - strict since the record step, which dropped the flag for the run right after the apply (before
 # the apply they passed as the not-applied picture); its partly-applied raise and its collision guard (PROBE_SETUP: live rows
@@ -1232,7 +1235,7 @@ case "$line" in
   *) bad "anon rpc app_call_names: $line (expected 401/403; anything else - a 200 included - means anon reached the names)";;
 esac
 # 18c. anon may not execute save_app_days; PostgREST must know its four keys before the Prompt 29 client is pushed
-line=$(curl -s -o $T/vr18c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":false}')
+line=$(curl -s -o $T/vr18c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":null}')
 echo "   18c anon rpc save_app_days: $line  body: $(head -c 160 $T/vr18c.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc save_app_days refused ($line): PostgREST knows the four keys - the Prompt 29 client may be pushed";;
@@ -1256,7 +1259,7 @@ if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
     "HTTP 404") bad "surgeon GET app_call_days: HTTP 404 (the table exists since the 2026-10-02 apply - or the schema cache is stale)";;
     *) bad "surgeon GET app_call_days: $line (expected 200)";;
   esac
-  line=$(curl -s -o $T/vr18f.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":false}')
+  line=$(curl -s -o $T/vr18f.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_clear":[],"p_replace":null}')
   echo "   18e surgeon rpc save_app_days (empty lists): $line  body: $(head -c 160 $T/vr18f.json)"
   case "$line" in
     "HTTP 400") if grep -q 'AP001' $T/vr18f.json; then ok "a surgeon's save_app_days is refused AP001 (only an APP or the scheduler)"; else bad "surgeon rpc save_app_days: HTTP 400 without AP001 ($(head -c 160 $T/vr18f.json))"; fi;;
@@ -1271,6 +1274,8 @@ if linked; then
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE18" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   if echo "$out" | grep -q 'PROBE_SETUP: app_call_days is absent'; then
     bad "APP days probe: PROBE_SETUP - app_call_days is absent (the table exists since the 2026-10-02 apply)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: superseded by revision ac'; then
+    ok "APP days probe: superseded by revision ac - app_call_days has shift_type (Prompt 35); section 25 grades sql/probes/app-shifts-probe.sql instead"
   elif echo "$out" | grep -q 'PROBE_SETUP: user_profiles.is_app is absent'; then
     bad "APP days probe: PROBE_SETUP - user_profiles.is_app is absent while app_call_days exists (the migration is partly applied - ask Claude Code)"
   elif echo "$out" | grep -q 'PROBE_SETUP: live rows already sit in the probe window'; then
@@ -2307,6 +2312,279 @@ if linked; then
   fi
 else
   echo "   SKIP 24 (supabase CLI not linked at $WORKDIR)"
+fi
+
+echo "== 25. APP shifts and APP vacations (2026-11-17, revision ac - Prompt 35): typed app_call_days + app_time_off + save_app_days / save_app_vacations / app_call_names / silvis_app_shift_types - anon refused, rolled-back probe =="
+# Section 25 (17 = the weekend pair claim, taken on its own branch; 24 = revision ab's locked trades, the section above).
+# sql/migrations/2026-11-17-app-shifts.sql (report-first, NOT yet applied; revision ac): app_call_days typed (shift_type, the key day +
+# shift_type + profile_id; read policy, grants and cascade as Prompt 29 left them); app_time_off (the APPs' vacations - read by every
+# signed-in role through app_time_off_read, never anon: no anon policy AND anon's table privileges revoked, so an anon request is refused
+# 401 / 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke did not take); save_app_days re-created with typed JSON
+# lists and save_app_vacations (security definer, the only write paths; AP001-AP010 APP_DAY_* and AV001-AV008 APP_VACATION_* refuse before
+# any write) - EXECUTE for authenticated, never anon; silvis_app_shift_types (internal - EXECUTE for the service role only). 25a-25e go
+# over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the object exists and anon holds no
+# privilege. 25f (only with SILVIS_SURGEON_JWT) reads app_time_off as a surgeon and sends two empty saves (refused AP001 / AV001 at the
+# first check). 25g runs sql/probes/app-shifts-probe.sql through the linked CLI (rolls itself back - its edit of the blob's shift types and
+# holiday included; 122 cases graded by name - its header lists each AFTER string - and the number of case lines it reports, whatever their
+# names, must be exactly 122). Until revision ac's record step the not-applied picture (an anon 404, the probe's PROBE_SETUP
+# app_call_days.shift_type is absent) reads as "not applied yet" - unless SILVIS_APP_SHIFTS_APPLIED=1 (the run right after the apply), which
+# makes them FAILs; the probe's other raises (partly applied, no blob row, the collision guard) are FAILs either way. 25h counts the probe's
+# leftovers either way, by the probe's own identity, in two columns: tagged = rows only the probe writes - its auth users
+# (probe-appshifts-<uuid>@example.test; profiles, shifts and vacations cascade), its appdays.save / appvac.save audit rows (summaries
+# 'probe shifts ...') and the probe's shift types or holiday left in the live blob; in_window = app_call_days rows in 2031-03 or on 2020-06-01
+# and app_time_off rows touching 2031-03 or 2020-06 (read through query_to_xml, guarded by to_regclass: before the apply - or after a
+# rollback - the shift_type column and app_time_off do not exist). The collision guard refuses to start while an in_window row exists, so
+# after a run that ran its cases (PROBE_RESULTS) such rows can only be the probe's - a FAIL; after a PROBE_SETUP (every one sits in the
+# setup block, before the first window row) they are rows this run never wrote - listed for review, never counted, never given a DELETE.
+AP25_APPLIED="${SILVIS_APP_SHIFTS_APPLIED:-}"
+# not404_25 <label> <line>: a 404 is the not-applied picture (ok before the record step unless the flag is set)
+nf25() { if [ "$AP25_APPLIED" = "1" ]; then bad "$1: HTTP 404 (revision ac is applied - the run right after the apply - or the schema cache is stale)"; else ok "$1: HTTP 404 - revision ac is not applied yet (the picture before the apply)"; fi; }
+# 25a. anon may not read app_time_off (revoked: a refusal, never 200 + [])
+line=$(curl -s -o $T/vr25a.json -w 'HTTP %{http_code}' "$URL/rest/v1/app_time_off?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
+echo "   25a anon GET app_time_off: $line  body: $(head -c 160 $T/vr25a.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon read of app_time_off refused ($line - the table exists, anon holds no privilege)";;
+  "HTTP 404") nf25 "anon GET app_time_off";;
+  "HTTP 200") bad "anon read of app_time_off: HTTP 200 - anon's privileges are revoked, so a refusal (401 / 403) is expected, not an answer (an APP vacation must never reach anon)";;
+  *) bad "anon GET app_time_off: $line (expected 401/403)";;
+esac
+# 25b. anon may not execute save_app_vacations; PostgREST must know its three keys before the Prompt 35 client is pushed
+line=$(curl -s -o $T/vr25b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_vacations" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_remove":[]}')
+echo "   25b anon rpc save_app_vacations: $line  body: $(head -c 160 $T/vr25b.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc save_app_vacations refused ($line): PostgREST knows the three keys - the Prompt 35 client may be pushed";;
+  "HTTP 404") nf25 "anon rpc save_app_vacations (PGRST202 - do NOT push the Prompt 35 client while it answers 404)";;
+  *) bad "anon rpc save_app_vacations: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
+esac
+# 25c. anon may not execute save_app_days with a typed list (the same four keys as 18c; the list carries a {day, type} item)
+line=$(curl -s -o $T/vr25c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_days" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[{"day":"2031-03-31","type":"inbox"}],"p_clear":[],"p_replace":null}')
+echo "   25c anon rpc save_app_days (a typed list): $line  body: $(head -c 160 $T/vr25c.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc save_app_days with a typed list refused ($line)";;
+  "HTTP 404") nf25 "anon rpc save_app_days with a typed list";;
+  "HTTP 400") if [ "$AP25_APPLIED" != "1" ] && grep -q '22P02\|date\[\]\|malformed array' $T/vr25c.json; then ok "anon rpc save_app_days with a typed list: HTTP 400 - the date-list signature is still live (revision ac is not applied yet)"; else bad "anon rpc save_app_days with a typed list: HTTP 400 ($(head -c 160 $T/vr25c.json))"; fi;;
+  *) bad "anon rpc save_app_days with a typed list: $line (expected 401/403)";;
+esac
+# 25d. anon may not execute silvis_app_shift_types (internal: EXECUTE for the service role only)
+line=$(curl -s -o $T/vr25d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/silvis_app_shift_types" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"p_data":{}}')
+echo "   25d anon rpc silvis_app_shift_types: $line  body: $(head -c 160 $T/vr25d.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon rpc silvis_app_shift_types refused ($line - internal, the service role only)";;
+  "HTTP 404") nf25 "anon rpc silvis_app_shift_types";;
+  *) bad "anon rpc silvis_app_shift_types: $line (expected 401/403; anything else - a 200 included - means anon read the shift types through it)";;
+esac
+# 25e. anon may not write app_time_off directly (no privilege; the zero uuid names no profile, so even an acceptance could not land)
+line=$(curl -s -o $T/vr25e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/app_time_off" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Content-Type: application/json" -d '{"profile_id":"00000000-0000-0000-0000-000000000000","start_date":"2031-03-31","end_date":"2031-03-31","source":"app"}')
+echo "   25e anon POST app_time_off: $line  body: $(head -c 160 $T/vr25e.json)"
+case "$line" in
+  "HTTP 401"|"HTTP 403") ok "anon insert into app_time_off refused ($line)";;
+  "HTTP 404") nf25 "anon POST app_time_off";;
+  *) if grep -q '42501' $T/vr25e.json; then ok "anon insert into app_time_off refused (42501)"; else bad "anon POST app_time_off: $line (expected 401/403 or 42501)"; fi;;
+esac
+# 25f. as a surgeon (read-only): app_time_off answers 200; two empty saves are refused at the first check, AP001 / AV001
+if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
+  line=$(curl -s -o $T/vr25f.json -w 'HTTP %{http_code}' "$URL/rest/v1/app_time_off?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT")
+  echo "   25f surgeon GET app_time_off: $line"
+  case "$line" in
+    "HTTP 200") ok "a surgeon reads app_time_off (every signed-in role sees the APP vacations)";;
+    "HTTP 404") nf25 "surgeon GET app_time_off";;
+    *) bad "surgeon GET app_time_off: $line (expected 200)";;
+  esac
+  line=$(curl -s -o $T/vr25g.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_vacations" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_remove":[]}')
+  echo "   25f surgeon rpc save_app_vacations (empty lists): $line  body: $(head -c 160 $T/vr25g.json)"
+  case "$line" in
+    "HTTP 400") if grep -q 'AV001' $T/vr25g.json; then ok "a surgeon's save_app_vacations is refused AV001 (only an APP, the scheduler or the office)"; else bad "surgeon rpc save_app_vacations: HTTP 400 without AV001 ($(head -c 160 $T/vr25g.json))"; fi;;
+    "HTTP 404") nf25 "surgeon rpc save_app_vacations";;
+    *) bad "surgeon rpc save_app_vacations: $line (expected 400 AV001)";;
+  esac
+else
+  echo "   SKIP 25f (set SILVIS_SURGEON_JWT=<a surgeon-role user's access token> in the environment)"
+fi
+if linked; then
+  # 25g. the graded probe
+  PROBE25="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/app-shifts-probe.sql"
+  out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE25" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
+  if ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: app_call_days.shift_type is absent'; then
+    if [ "$AP25_APPLIED" = "1" ]; then bad "APP shifts probe: PROBE_SETUP - app_call_days.shift_type is absent (revision ac is applied - the run right after the apply)"
+    else ok "APP shifts probe: PROBE_SETUP - app_call_days.shift_type is absent: revision ac is not applied yet (the picture before the apply)"; fi
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then
+    bad "APP shifts probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (partly applied, no blob row or a fixture collision - 25h lists window rows; ask Claude Code)"
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then
+    bad "APP shifts probe reported no sentinel-terminated PROBE_RESULTS (setup error or truncated output: $(echo "$out" | head -c 400))"
+  else
+    # no trailing-whitespace trim (section 22's reader): the ;END cut already drops everything the CLI adds after the raised text
+    results25=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//')
+    echo "$results25" | tr ';' '\n' | sed 's/^/   /'
+    # one case per line, the CLI's JSON escapes decoded ONCE: an HTML character (> for '>', <, &) and the backslashes (an escaped double
+    # quote); the graders then read a case in plain bash (no process per case - 122 of them)
+    lines25=$(echo "$results25" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
+    case_val25()   { CV25=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV25="${l#"$1="}"; return 0;; esac; done <<< "$lines25"; }
+    expect_eq25()  { case_val25 "$1"; v="$CV25"; [ "$v" = "$2" ] && ok "APP shifts probe $1: $3" || bad "APP shifts probe $1: $3 (got '$v', expected '$2')"; }
+    expect_err25() { case_val25 "$1"; v="$CV25"; case "$v" in "ERR $2 "*"$3"*) ok "APP shifts probe $1: $4";; *) bad "APP shifts probe $1: $4 (got '$v', expected ERR $2 ... $3)";; esac; }
+    # expect_dt25 <case> <head> <tail> <words>: the exact text with the run's Central date (M/D) between head and tail
+    expect_dt25()  { case_val25 "$1"; v="$CV25"; case "$v" in "$2"[0-9]*/[0-9]*"$3") ok "APP shifts probe $1: $4";; *) bad "APP shifts probe $1: $4 (got '$v', expected $2<M/D>$3)";; esac; }
+    n25=$(echo "$lines25" | grep -c .)
+    [ "$n25" = "122" ] && ok "APP shifts probe: 122 cases reported (with the 122 graded below, exactly its header's)" || bad "APP shifts probe: $n25 cases reported, not the 122 of its header (a case lost, doubled or added without a grade here)"
+    expect_eq25  P1   "table=yes rls=yes pk=day,shift_type,profile_id shape=app_call_days_shift_type_shape fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no" "postgres: app_call_days - RLS, key, shape check, cascade, policy, privileges"
+    expect_eq25  P2   "table=yes rls=yes pk=id range=app_time_off_range fk=cascade policies=app_time_off_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no" "postgres: app_time_off - RLS, key, range check, cascade, policy, privileges"
+    expect_eq25  P3   "save=definer/volatile vac=definer/volatile names=definer/stable types=invoker/immutable paths=4 old_save=no save_anon=no save_auth=yes vac_anon=no vac_auth=yes names_anon=no names_auth=yes types_anon=no types_auth=no types_service=yes" "postgres: the four functions - security, volatility, search_path, grants; the old save_app_days signature is gone"
+    expect_eq25  P4   "inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f | probe-night Probe night 1020-420 d=1,2,3,4,5 h=f n=2 r=f | probe-day Probe day 360-360 d=0,6 h=t n=1 r=f | probe-long Probe long 720-1200 d=1,2,3,4,5 h=f n=1 r=f | probe-old Probe old 420-1020 d=1,2,3,4,5 h=f n=1 r=t" "postgres: silvis_app_shift_types over the blob the probe set (junk entries skipped, a string perDay read as 1)"
+    expect_eq25  P5   "absent=inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f null=inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f notlist=inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f empty=none" "postgres: the default - no key, a null blob, a key that is not a list, an empty list"
+    expect_eq25  A1   "ok added=2 removed=0 kept=0 source=app 3/3=inbox:one/app 3/4=inbox:one/app by=self" "U1 sad(null, inbox 3/3 + 3/4)"
+    expect_eq25  A2   "audit=1 actor=self name=probe shifts one sums=probe shifts one: inbox 3/3, 3/4" "its audit row (read as postgres)"
+    expect_eq25  A3   "ok added=0 kept=2 audit=false audit_rows=1" "U1 the same two again (idempotent)"
+    expect_eq25  A4   "ok removed=1 3/4=none sums=probe shifts one: inbox 3/3, 3/4 | probe shifts one: removed inbox 3/4" "U1 clears inbox 3/4"
+    expect_eq25  A5   "ok removed=0 absent=1 audit=false" "U1 clears inbox 3/5 (nobody holds it)"
+    expect_eq25  A6   "ERR AP004 APP_DAY_BAD_DAY: 3/5 inbox is both added and removed in one save - nothing was saved" "U1 adds and clears inbox 3/5 in one call"
+    expect_eq25  A7   "ERR AP004 APP_DAY_BAD_DAY: a shift in the list is not a day and a shift type - nothing was saved" "U1 sends a bare day string (no type)"
+    expect_eq25  A8   "ERR AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved" "U1 sends 2031-02-30"
+    expect_eq25  A9   "ERR AP004 APP_DAY_BAD_DAY: at most 400 shifts in one save - nothing was saved" "U1 sends 401 shifts"
+    expect_dt25  A10  "ERR AP006 APP_DAY_PAST: 6/1 is before today (" ") in Central time - a past day stays as it was" "U1 adds inbox 2020-06-01 (a past day)"
+    expect_eq25  A11  "ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own shifts - ask the scheduler" "U1 sad(U2, inbox 3/5)"
+    expect_eq25  A12  "ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a shift" "U1 sad(U1, inbox 3/5, null, U2) - a change"
+    expect_err25 A13  42501 "permission denied for table app_call_days" "U1 direct insert into app_call_days"
+    expect_eq25  A14  "ERR AP008 APP_DAY_NO_SHIFT: 3/1 is a Saturday (Inbox does not run that day) - nothing was saved" "U1 adds inbox Saturday 3/1"
+    expect_eq25  A15  "ERR AP008 APP_DAY_NO_SHIFT: 3/12 is a holiday (Inbox does not run on holidays) - nothing was saved" "U1 adds inbox Wednesday 3/12 (the probe's holiday)"
+    expect_eq25  A16  "ERR AP008 APP_DAY_NO_SHIFT: there is no nosuch shift type - nothing was saved" "U1 adds a type the blob does not list"
+    expect_eq25  A17  "ERR AP008 APP_DAY_NO_SHIFT: the probe-old shift is retired - nothing was saved" "U1 adds the retired probe-old 3/5 (and inbox 3/6 with it)"
+    expect_eq25  A17s "3/6=none" "state of 3/6 after A17 (all or nothing)"
+    expect_eq25  A18  "ok added=1 3/3=inbox:one/app+probe-night:one/app" "U1 adds probe-night 3/3 (5p-7a; its inbox 7a-5p only touches it at 5p)"
+    expect_eq25  A19  "ERR AP009 APP_DAY_OVERLAP: 3/3 probe-long overlaps 3/3 inbox, 3/3 probe-long overlaps 3/3 probe-night - one APP holds one shift at a time (nothing was saved)" "U1 adds probe-long 3/3 (12p-8p) over both"
+    expect_eq25  A20  "ERR AP009 APP_DAY_OVERLAP: 3/7 probe-night overlaps 3/8 probe-day - one APP holds one shift at a time (nothing was saved)" "U1 adds probe-night Fri 3/7 (to 7a Sat) and probe-day Sat 3/8 (from 6a) in one call"
+    expect_eq25  A21  "ok added=1 3/15=probe-day:one/app" "U1 adds probe-day Sat 3/15 (a probe holiday; the type runs on holidays)"
+    expect_eq25  A22  "ERR AP009 APP_DAY_OVERLAP: 3/14 probe-night overlaps 3/15 probe-day - one APP holds one shift at a time (nothing was saved)" "U1 adds probe-night Fri 3/14 (to 7a Sat) - over the kept probe-day 3/15 (from 6a)"
+    expect_eq25  A23  "rows=3" "U1 reads the window"
+    expect_eq25  A24  "names=1 self=yes" "U1 app_call_names()"
+    expect_err25 A25  42501 "permission denied for function silvis_app_shift_types" "U1 calls silvis_app_shift_types (internal)"
+    expect_eq25  A26  "ok added=1 removed=0 kept=0 source=app vac=3/17-3/21:one/app" "U1 svac(null, 3/17-3/21)"
+    expect_eq25  A27  "vaudit=1 actor=self name=probe shifts one sums=probe shifts one: vacation 3/17-3/21" "its audit row (read as postgres)"
+    expect_eq25  A28  "ok added=0 kept=1 audit=false" "U1 the same vacation again (idempotent)"
+    expect_eq25  A29  "ERR AP010 APP_DAY_VACATION: 3/18 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)" "U1 adds inbox 3/18 (inside its vacation)"
+    expect_eq25  A30  "ERR AP010 APP_DAY_VACATION: 3/16 probe-day is on probe shifts one's vacation - change the vacation first (nothing was saved)" "U1 adds probe-day Sun 3/16 (6a to 6a Mon 3/17 - into the vacation)"
+    expect_eq25  A31  "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)" "U1 svac 3/3 over its own inbox and probe-night 3/3"
+    expect_eq25  A32  "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/3 probe-night - remove the shift first (nothing was saved)" "U1 svac 3/4-3/5 (its probe-night 3/3 runs to 7a 3/4)"
+    expect_eq25  A33  "ERR AV008 APP_VACATION_OVERLAP: probe shifts one is already away 3/17-3/21 - change that vacation instead (nothing was saved)" "U1 svac 3/20-3/25 (touches its 3/17-3/21)"
+    expect_eq25  A34  "ERR AV004 APP_VACATION_BAD_RANGE: 3/25-3/24 ends before it starts - nothing was saved" "U1 svac 3/25-3/24"
+    expect_eq25  A35  "ERR AV004 APP_VACATION_BAD_RANGE: 3/24-3/26 and 3/26-3/28 overlap - nothing was saved" "U1 svac 3/24-3/26 and 3/26-3/28 in one call"
+    expect_eq25  A36  "ERR AV004 APP_VACATION_BAD_RANGE: 3/24-3/24 is longer than a year - nothing was saved" "U1 svac 2031-03-24 to 2032-03-24 (366 days)"
+    expect_eq25  A37  "ERR AV002 APP_VACATION_NOT_YOURS: an APP enters, changes or removes only their own vacations - ask the scheduler or the office" "U1 svac(U2, 3/24-3/26)"
+    expect_err25 A38  42501 "permission denied for table app_time_off" "U1 direct insert into app_time_off"
+    expect_eq25  A39  "ok added=1 removed=1 vac=3/17-3/22:one/app sums=probe shifts one: vacation 3/17-3/21 | probe shifts one: vacation 3/17-3/22, removed vacation 3/17-3/21" "U1 changes 3/17-3/21 to 3/17-3/22 (remove + add, one call)"
+    expect_eq25  A40  "ERR AV007 APP_VACATION_STALE: a vacation in the list is gone or is not probe shifts one's - reload Time off (nothing was saved)" "U1 removes an id that does not exist"
+    expect_eq25  A41  "ERR AV004 APP_VACATION_BAD_RANGE: a vacation in the list is not a first and a last day - nothing was saved" "U1 sends a vacation that is a bare string"
+    expect_eq25  A42  "vrows=1" "U1 reads the APP vacations of the window"
+    expect_eq25  A43  "ERR AV004 APP_VACATION_BAD_RANGE: a day in the list is not a calendar day - nothing was saved" "U1 svac 2031-02-30"
+    expect_err25 A44  42501 'new row violates row-level security policy for table "user_profiles"' "U1 (an APP) renames itself"
+    expect_eq25  A45  "updated=1" "U1 sets its own display_name to the same value"
+    expect_eq25  B1   "ERR AP005 APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved" "U2 adds inbox 3/3 (U1 holds it; perDay 1)"
+    expect_eq25  B1s  "3/3=inbox:one/app+probe-night:one/app" "state of 3/3 after B1"
+    expect_eq25  B2   "ok added=1 3/3=inbox:one/app+probe-night:one/app+probe-night:two/app" "U2 adds probe-night 3/3 (U1 holds 1 of 2)"
+    expect_eq25  B3   "ERR AP002 APP_DAY_NOT_YOURS: 3/3 inbox is probe shifts one's shift - only that APP or the scheduler can remove it (nothing was saved)" "U2 clears U1's inbox 3/3"
+    expect_eq25  B4   "ERR AP005 APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved" "U2 adds inbox 3/10, 3/3, 3/11"
+    expect_eq25  B4s  "3/10=none" "state of 3/10 after B4 (all or nothing)"
+    expect_eq25  B5   "ERR AV007 APP_VACATION_STALE: a vacation in the list is gone or is not probe shifts two's - reload Time off (nothing was saved)" "U2 removes U1's vacation by its id"
+    expect_eq25  B6   "ok added=1 source=app vac=3/17-3/22:one/app+3/27-3/28:two/app" "U2 svac(null, 3/27-3/28)"
+    expect_eq25  B7   "vrows=2" "U2 reads the APP vacations of the window"
+    expect_eq25  B8   "names=2" "U2 app_call_names()"
+    expect_eq25  S1   "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift" "US sad(null, inbox 3/10)"
+    expect_eq25  S2   "ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation" "US svac(U1, 3/24-3/26)"
+    expect_eq25  S3   "rows=4" "US reads the window"
+    expect_eq25  S4   "vrows=2" "US reads the APP vacations of the window"
+    expect_eq25  S5   "names=2 one=probe shifts one two=probe shifts two three=-" "US app_call_names()"
+    expect_err25 S6   42501 "permission denied for table app_time_off" "US direct insert into app_time_off"
+    expect_eq25  C1   "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift" "UC sad(U1, inbox 3/10) - shifts are not the office's"
+    expect_eq25  C2   "ok added=1 source=office vac=3/17-3/22:one/app+3/24-3/26:two/office+3/27-3/28:two/app" "UC svac(U2, 3/24-3/26)"
+    expect_eq25  C3   "actor=self name=probe shifts office sums=probe shifts two: vacation 3/24-3/26" "its audit row (read as postgres)"
+    expect_eq25  C4   "ok removed=1 source=office vac=3/17-3/22:one/app+3/27-3/28:two/app" "UC removes it again"
+    expect_eq25  C5   "ERR AV001 APP_VACATION_NOT_ALLOWED: name the APP (pick one in Time off)" "UC svac(null, 3/24-3/26)"
+    expect_eq25  C6   "ERR AV003 APP_VACATION_NOT_APP: probe shifts viewer is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UC svac(UV - not an APP, 3/24-3/26)"
+    expect_eq25  C7   "names=3 one=app two=app three=app" "UC app_call_names() - every APP, U3 holding nothing included"
+    expect_eq25  C8   "rows=4 vrows=2" "UC reads the window and the vacations"
+    expect_eq25  T1   "ERR AP005 APP_DAY_TAKEN: 3/3 probe-night already has probe shifts one and probe shifts two (2 a day) - nothing was saved" "U3 adds probe-night 3/3 (U1 and U2 hold both of its 2)"
+    expect_eq25  T2   "ok added=1 3/6=inbox:three/app" "U3 adds inbox 3/6"
+    expect_eq25  V1   "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift" "UV sad(null, inbox 3/10)"
+    expect_eq25  V2   "ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation" "UV svac(null, 3/24-3/26)"
+    expect_eq25  V3   "rows=5 vrows=2" "UV reads the window and the vacations"
+    expect_eq25  D1   "ok added=1 source=scheduler 3/10=inbox:two/scheduler by=admin" "UA sad(U2, inbox 3/10)"
+    expect_eq25  D2   "actor=s1 name=probe shifts admin sums=probe shifts two: inbox 3/10" "its audit row (read as postgres)"
+    expect_eq25  D3   "ok removed=1 3/10=none" "UA clears it"
+    expect_eq25  D4   "ok added=1 6/1=inbox:one/scheduler" "UA sad(U1, inbox 2020-06-01) - a past day (the scheduler is exempt)"
+    expect_eq25  D5   "ok removed=1 6/1=none" "UA clears it"
+    expect_eq25  D6   "ERR AP005 APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved" "UA sad(U2, inbox 3/3) - U1 holds it"
+    expect_eq25  D7   "ok added=1 replaced=1 3/3=inbox:two/scheduler+probe-night:one/app+probe-night:two/app last=probe shifts two: inbox 3/3 (was probe shifts one)" "UA's change: sad(U2, inbox 3/3, null, U1)"
+    expect_eq25  D8   "ERR AP007 APP_DAY_STALE: 3/3 inbox is no longer probe shifts one's shift - reload the calendar (nothing was saved)" "UA's change again from U1 - U1 no longer holds it"
+    expect_eq25  D9   "ERR AP007 APP_DAY_STALE: 3/3 inbox is probe shifts two's shift - reload the calendar (nothing was saved)" "UA clears U1's inbox 3/3 - U2 holds it now"
+    expect_eq25  D10  "ERR AP003 APP_DAY_NOT_APP: probe shifts viewer is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UA sad(UV, inbox 3/11) - not an APP"
+    expect_eq25  D11  "ERR AP003 APP_DAY_NOT_APP: that account is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UA sad(<a random uuid>, inbox 3/11)"
+    expect_eq25  D12  "ERR AP001 APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)" "UA sad(null, inbox 3/11)"
+    expect_eq25  D13  "ERR AP004 APP_DAY_BAD_DAY: a change takes a shift over from another APP - name the shift and that APP (nothing was saved)" "UA's change naming the same APP twice: sad(U2, inbox 3/11, null, U2)"
+    expect_eq25  D14  "ok added=1 source=scheduler vac=6/1-6/5:one/scheduler+3/17-3/22:one/app+3/27-3/28:two/app" "UA svac(U1, 2020-06-01 to 2020-06-05) - a past vacation (no past check on an add)"
+    expect_eq25  D15  "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts two holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)" "UA svac(U2, 3/3) over U2's inbox and probe-night 3/3"
+    expect_eq25  D16  "ERR AP010 APP_DAY_VACATION: 3/19 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)" "UA sad(U1, inbox 3/19) - inside U1's vacation"
+    expect_eq25  D17  "names=3 one=app two=app three=app" "UA app_call_names()"
+    expect_eq25  D18  "updated=1 is_app=false" "UA sets is_app = false on U3"
+    expect_dt25  F1   "ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is " " in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)" "U1 removes its 2020-06-01 to 06-05 vacation"
+    expect_dt25  G1   "ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is " " in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)" "UC removes U1's 2020-06-01 to 06-05 vacation"
+    expect_eq25  H1   "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift" "U3 sad(null, inbox 3/13)"
+    expect_eq25  H2   "ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation" "U3 svac(null, 3/24-3/26)"
+    expect_eq25  H3   "3/6=inbox:three/app" "U3 reads 3/6 (its shift stays)"
+    expect_eq25  E1   "names=3 one=app two=app three=former" "UA app_call_names()"
+    expect_eq25  E2   "ok removed=1 vac=3/17-3/22:one/app+3/27-3/28:two/app" "UA removes U1's started vacation (the scheduler is exempt)"
+    expect_eq25  E3   "ok removed=1 3/6=none" "UA clears the former APP's inbox 3/6 (AP003 binds adds only)"
+    expect_eq25  E4   "ERR AV003 APP_VACATION_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UA svac(U3, 3/24-3/26) - a former APP"
+    expect_eq25  E5   "ERR AP003 APP_DAY_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UA sad(U3, inbox 3/13) - a former APP"
+    expect_err25 E6   23514 'new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"' "UA sets is_app = true on US (a surgeon)"
+    expect_err25 E7   23514 'new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"' "UA sets is_app = true on UC (the coordinator)"
+    expect_err25 N1   42501 "permission denied for table app_call_days" "anon: select count(*) from app_call_days"
+    expect_err25 N2   42501 "permission denied for table app_time_off" "anon: select count(*) from app_time_off"
+    expect_err25 N3   42501 "permission denied for function app_call_names" "anon: app_call_names()"
+    expect_err25 N4   42501 "permission denied for function save_app_days" "anon: sad(U2, inbox 3/13)"
+    expect_err25 N5   42501 "permission denied for function save_app_vacations" "anon: svac(U2, 3/24-3/26)"
+    expect_err25 N6   42501 "permission denied for function silvis_app_shift_types" "anon: silvis_app_shift_types('{}')"
+    expect_eq25  N7   "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift" "postgres, no signed-in user: sad(U2, inbox 3/13)"
+    expect_eq25  N8   "ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation" "postgres, no signed-in user: svac(U2, 3/24-3/26)"
+    expect_eq25  N9   "names=0" "postgres, no signed-in user: app_call_names()"
+    expect_eq25  X1   "before=2/1 after=0/0 audit_kept=yes" "postgres deletes U2's auth user (U2 holds inbox and probe-night 3/3 and the vacation 3/27-3/28)"
+    expect_err25 I1   42501 'new row violates row-level security policy for table "user_profiles"' "postgres deletes UV's profile; UV self-inserts with is_app = true"
+    expect_eq25  I2   "ok is_app=false" "UV self-inserts (viewer, no is_app key)"
+  fi
+  # 25h. leftovers, by the probe's identity only (see the section comment)
+  LEFTOVER25_SQL="select ((select count(*) from auth.users where email like 'probe-appshifts-%@example.test') + (select count(*) from public.audit_log where action in ('appdays.save', 'appvac.save') and detail->>'summary' like 'probe shifts %') + (select count(*) from public.call_schedule_data where id = 'main' and (data::text like '%probe-night%' or data::text like '%probe holiday%')))::int as tagged, (case when to_regclass('public.app_time_off') is null then 0 else (xpath('/row/n/text()', query_to_xml('select (select count(*) from public.app_call_days where day between ''2031-03-01'' and ''2031-03-31'' or day = ''2020-06-01'') + (select count(*) from public.app_time_off where (start_date <= ''2031-03-31'' and end_date >= ''2031-03-01'') or (start_date <= ''2020-06-30'' and end_date >= ''2020-06-01'')) as n', false, true, '')))[1]::text::int end) as in_window"
+  r=$(q "$LEFTOVER25_SQL")
+  rflat25=$(echo "$r" | tr -d ' \n')
+  tagged25=$(echo "$rflat25" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
+  win25=$(echo "$rflat25" | grep -oE '"in_window":"?[0-9]+' | head -1 | tr -cd '0-9')
+  # how 25g ended: results = the sentinel (the probe ran its cases); setup = a PROBE_SETUP raise and no PROBE_RESULTS at all (its setup
+  # block stopped before its first window row); none = neither (a setup error or cut-off output - nobody can tell)
+  end25=none
+  if echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then end25=results
+  elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then end25=setup; fi
+  if [ -z "$tagged25" ] || [ -z "$win25" ]; then
+    bad "APP shifts probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
+  else
+    if [ "$tagged25" = "0" ] && [ "$win25" = "0" ]; then
+      ok "APP shifts probe persisted nothing (leftover count 0: auth.users probe-appshifts-* / audit_log appdays.save + appvac.save 'probe shifts ...' / no probe shift type or holiday in the blob / app_call_days in 2031-03 or on 2020-06-01, app_time_off touching 2031-03 or 2020-06)"
+    fi
+    if [ "$tagged25" != "0" ]; then
+      bad "APP shifts probe LEFT ROWS BEHIND (tagged=$tagged25 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
+      echo "      delete from public.audit_log where action in ('appdays.save', 'appvac.save') and detail->>'summary' like 'probe shifts %';"
+      echo "      delete from auth.users where email like 'probe-appshifts-%@example.test';   -- profiles, their shifts and vacations cascade"
+      echo "      select data #> '{groupRules,appShiftTypes}', data #> '{holidays,units,2031}' from public.call_schedule_data where id = 'main';   -- a probe type (probe-night ...) or the probe holiday there: ask Claude Code for the exact edit"
+    fi
+    if [ "$win25" != "0" ]; then
+      if [ "$end25" = "results" ]; then
+        bad "APP shifts probe LEFT ROWS BEHIND (in_window=$win25 - app_call_days / app_time_off rows in the probe window after a run that ran its cases): the batch did not run as one transaction. Review them before removing anything (an untagged probe row and a real APP shift or vacation look alike), then report:"
+      elif [ "$end25" = "setup" ]; then
+        echo "   25h: $win25 app_call_days / app_time_off row(s) sit in the probe window - the probe stopped at a PROBE_SETUP raise before writing any row in its window (25g), so this run wrote none of them (real rows, or an earlier run's leak: see any tagged rows above); review them before removing anything:"
+      else
+        echo "   25h: $win25 app_call_days / app_time_off row(s) sit in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (25g), so whether the probe wrote them is unknown; review them before removing anything:"
+      fi
+      echo "      select * from public.app_call_days where day between '2031-03-01' and '2031-03-31' or day = '2020-06-01';"
+      echo "      select * from public.app_time_off where (start_date <= '2031-03-31' and end_date >= '2031-03-01') or (start_date <= '2020-06-30' and end_date >= '2020-06-01');"
+    fi
+  fi
+else
+  echo "   SKIP 25g/25h (supabase CLI not linked at $WORKDIR)"
 fi
 
 echo

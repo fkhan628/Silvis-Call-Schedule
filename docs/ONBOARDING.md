@@ -50,7 +50,7 @@ afterwards; the editor keeps query history).*
 3. **Setup → Users** (in the app: the card titled "Users (accounts, roles, roster links)", visible only when your role is
    admin): pick the new user, set **roster id** (s1–s6) and **role** (`surgeon` for the five
    surgeons, `viewer` for the office contact, `scheduler` for anyone who should publish, `app` for an APP - no roster link;
-   see "APPs: putting yourself on a call day" below). Setup → Users is the normal path; if the
+   see "APPs: shifts and vacations" below). Setup → Users is the normal path; if the
    app is unreachable, the same thing in SQL:
 
    ```sql
@@ -200,57 +200,79 @@ Roles (`user_profiles.role`, set in Setup → Users by the admin):
 | `admin` | everything, including user links and roles | — |
 | `scheduler` | generate, publish, edit days, import, snapshots, Periods, enter vacations / offers for anyone (relayed as the scheduler) | change accounts (admin only) |
 | `surgeon` | own vacations, paint own offers, propose / accept trades, claim open shifts, own e-mail preferences | anything for another surgeon |
-| `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor, trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
+| `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it) and **any APP's vacation** the same way (Time off → APP vacations; Prompt 35), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor, trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
 | `viewer` | read-only — the office viewer | every write |
-| `app` (an APP: a `viewer` with `user_profiles.is_app`, Prompt 29 - database applied 2026-10-02) | everything a viewer has, plus putting itself on call days and taking them off (Mine → My APP days; one APP per day; from today on) | every other write; another APP's days; a roster link |
+| `app` (an APP: a `viewer` with `user_profiles.is_app`, Prompt 29 - database applied 2026-10-02) | everything a viewer has, plus putting itself on shifts and taking them off, and entering its own vacations (Mine → My APP shifts / My vacations - Prompt 35; shifts from today on; a vacation changed or removed only before it starts) | every other write; another APP's shifts or vacations; a roster link |
 
 A viewer (the office viewer, and every invited account until you link *and* promote it) sees the schedule read-only with nothing broken on purpose (Prompt 16 B3): no "not linked" banner, no trade card (Time off lists the group's vacations instead), **Settings → Live calendar sync** offers the public full-schedule feed, and **Alerts** carries only the publish and open-shift notices.
 
 A coordinator account is created like any other (invite from the dashboard), then given the role in Setup → Users with
 **no roster link**; the database refuses a linked coordinator (`user_profiles_coordinator_unlinked`).
 
-## APPs: putting yourself on a call day (Prompt 29, 10/1)
+## APPs: shifts and vacations (Prompt 29, 10/1; Prompt 35, 11/17)
 
 *The database part ran on 2026-10-02 (`apply-app-call-days.sh`); APP accounts work from the build that ships Prompt 29's
 client, then Faraz marks them in Setup → Users. (Should the database part ever be rolled back, the APP line reads "APP days
 are available after the next database update.")*
 
+*Prompt 35 (Faraz 11/17) - shifts with hours and the APPs' own vacations: its database part (revision ac) is Faraz's apply
+(`apply-app-shifts.sh`), and its client ships right after it, on his go; what follows is what the APPs see from that build
+on. (Should that database part ever be rolled back, the APP line reads "APP shifts and vacations are available after the
+next database update.")*
+
 **What an APP account is.** A viewer account (read-only, no roster link) that you mark **APP**. It keeps everything a
-viewer has — the calendar, follows and the follower e-mails, its preferences — and adds one thing: the APP puts itself on
-call days. The decisions (Faraz 10/1): **any day** (no rules, no fairness; a past day is refused for the APP - you can fix
-one); **one APP per day** (the database enforces it); **everyone signed in sees it**, not the `?public=1` page; **no
-e-mails** — the Activity log only.
+viewer has — the calendar, follows and the follower e-mails, its preferences — and adds two things: the APP puts itself on
+**shifts** and enters its own **vacations**. The decisions (Faraz 11/17, on top of 10/1's): one shift for now - **Inbox,
+7a-5p, Monday to Friday, not on the six holidays, one APP a day** (you change the shifts in **Setup → APP shifts**); the
+database enforces how many APPs a shift holds; one APP never holds two shifts at the same time, nor a shift on its own
+vacation; vacations need **no approval**; you and the office can enter, change or remove any APP's vacation; a vacation over
+the APP's own shift is refused ("remove the shift first"); the surgeons' vacation minimum does not count APPs; **everyone
+signed in sees** APP shifts and vacations, not the `?public=1` page; **no e-mails** — the Activity log only.
 
 **How you mark one (Setup → Users).** Invite the APP like a viewer (above). Give the account a **display name** first (a
 nameless APP shows as "APP" on the calendar; the calendar shows the last name - a credential such as "PA-C" after it is
 dropped - and an APP cannot rename itself, so the name you set is the one everyone sees), leave the **roster link** at *none*, then set **Role** to `app`. The app
 refuses `app` on a linked account (and a roster link on an APP), and the database refuses it too. The switch writes the
 usual `users.link` Activity log row ("Account <APP name>: APP on"). Setting the role back to `viewer` takes the APP
-feature away; that person's days stay on the calendar until you clear them (deleting the account removes them).
+feature away; that person's shifts and vacations stay until you clear them (deleting the account removes them).
 
-**What the APP does.** **Mine → My APP days**: a month of days on the phone. Tap a day to put yourself on call; tap it
-again to take it off. A day with another APP's name on it is taken and cannot be picked. **Range** (tap the first and the
-last day) and **Paste dates** ("12/2, 12/9, 12/14-12/16") add every free day at once and say which days they skipped and
-why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is refused, nothing was saved, your
-other taps stay and the message says why - e.g. "12/10 already has <APP name> - nothing was saved"; a tap the refusal made
-impossible, such as a day another APP just took, drops out). Past days stay as they are. A tapped day shows "*" (unsaved) until Save; leaving Mine (another tab, Sign in again, a new-version banner's reload) with unsaved taps asks first - Cancel keeps them; closing the app asks only in a desktop browser (an iPhone never asks), so Save first.
+**The shifts (Setup → APP shifts).** One row per shift: its name, its start and end (an end before the start runs into the
+next morning - 5p-7a; the same start and end is 24 hours), its weekdays, whether it runs on holidays, and **APPs a day**.
+**Add a type**, change one, then **Save APP shifts**. A change applies to shifts added from then on - nothing already booked
+moves. **Retire** a shift that nobody holds from today on: it is offered no more and its past days keep its name
+(**Restore** brings it back).
 
-**What you do (the day editor).** Every day's editor has an **APP** line: pick any APP and **Set APP** (it replaces the
-APP already on that day), or **Clear APP**. It is saved at once, apart from the day's own Save, and works on past days too.
+**What the APP does.** **Mine → My APP shifts**: a month of days on the phone, for one shift at a time (a picker shows once
+there is a second one). Tap a day to put yourself on the shift; tap it again to take it off. A day with another APP's name
+on it is taken; a grey day has no shift for you (a weekend, a holiday, your vacation, or another shift of yours at that
+time). **Range** (tap the first and the last day) and **Paste dates** ("12/2, 12/9, 12/14-12/16") add every free day at once
+and say which days they skipped and why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is
+refused, nothing was saved, your other taps stay and the message says why - e.g. "12/10 inbox already has <APP name> -
+nothing was saved"; a tap the refusal made impossible, such as a day another APP just took, drops out). Past days stay as
+they are. A tapped day shows "*" (unsaved) until Save; leaving Mine (another tab, Sign in again, a new-version banner's reload) with unsaved taps asks first - Cancel keeps them; closing the app asks only in a desktop browser (an iPhone never asks), so Save first.
+**Mine → My vacations**: pick the first and the last day and tap **Add vacation** - saved at once, no approval. **Edit** or
+**Remove** one that has not started; once it starts it stays on record (ask the scheduler). A vacation over one of your own
+shifts is refused - remove the shift first.
 
-**Who sees it.** The calendar shows the APP as a third line "A <last name>" (on a phone the first four letters, or an initial + three letters when two APPs start alike - "P.App" / "J.App") in a muted rose (the full name is in the day's
-hover and in the day summary), and the legend explains it - for every signed-in account: surgeons, the office, viewers,
-followers, the APPs and you. The `?public=1` page, its share links, the printable month, the ER Call Panels, the calendar
-feeds, Totals, pay, the office digest and every e-mail show nothing of it. The generator, the rules, trades and the open
-shifts board ignore APP days.
+**What you do (the day editor and Time off).** Every day's editor has one **APP** line per shift that runs that day: pick an
+APP and **Set APP** (or **Change APP**, which puts another APP in the holder's place), or **Clear** a holder. It is saved at
+once, apart from the day's own Save, and works on past days too. **Time off → APP vacations** lists every APP's vacations for
+everyone signed in; you and the office pick an APP and **Add vacation**, or **Edit** / **Remove** one (the office: one that
+has not started).
 
-**The record.** No e-mail and no notification; each Save writes one Activity log row naming the days, e.g.
-"<APP name>: on call 10/14, 10/21" (a change you make reads "<APP name>: on call 10/14 (was <other APP>)").
+**Who sees it.** The calendar shows each APP shift as a line "A <last name> 7a-5p" (on a phone the first four letters, or an initial + three letters when two APPs start alike - "P.App" / "J.App" - with the hours under the name) in a muted rose (the shift's name and the full name are in the day's
+hover and in the day summary); an APP on vacation shows in that day's vacation bar as "A <last name>"; the legend explains
+both - for every signed-in account: surgeons, the office, viewers, followers, the APPs and you. The `?public=1` page, its
+share links, the printable month, the ER Call Panels, the calendar feeds, Totals, pay, the office digest and every e-mail
+show nothing of it. The generator, the rules, trades and the open shifts board ignore APP shifts and vacations.
+
+**The record.** No e-mail and no notification; each Save writes one Activity log row, e.g. "<APP name>: inbox 11/18, 11/19"
+(a change you make reads "<APP name>: inbox 11/18 (was <other APP>)") or "<APP name>: vacation 12/1-12/5".
 
 **Three lines to send an APP (phone):**
-1. Open the Silvis call schedule and sign in, then tap **Mine**.
-2. Under **My APP days**, tap each day you will take call (tap it again to take it off; the arrow right of the month name shows the next month) - a day showing someone else's name is taken.
-3. Tap **Save** before leaving Mine (a tapped day shows "*" until then; switching tabs asks first, but closing the app does not always ask - an iPhone never does) - your days appear on the calendar of everyone signed in as "A <your last name>" (on a phone its first letters).
+1. Open the Silvis call schedule, sign in and tap **Mine**.
+2. Under **My APP shifts**, tap each weekday you will cover the inbox (7a-5p) - tap again to undo, the arrow by the month shows the next one, a day with someone else's name is taken - then tap **Save**.
+3. Under **My vacations**, pick your first and last day and tap **Add vacation** - no approval needed; if it covers one of your shifts, take that shift off first.
 
 ## Phone notifications (Prompt 30 - the database, the VAPID keys and send-notification are live since 2026-10-03; it works from the build that ships Prompt 30's client)
 

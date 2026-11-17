@@ -1006,7 +1006,7 @@ function syncFailLine(dayFail, blobFail) {
 // empty-read tripwire of mergeLoadedDays) and blobMoved - are not failed reads: they keep their own sentence, in order.
 // Prompt 29 (the merge with main, 10/2): appDays - the APP-day read of a signed-in load (APP_DAYS_LOAD_FAIL_TEXT) - goes last.
 const LOAD_FAIL_ORDER = ["days", "daysEmpty", "blob", "blobMoved", "timeOff", "availability", "eastFeed", "eastReviews", "appDays"];
-const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews", appDays: "the APP days" };
+const LOAD_FAIL_SHORT = { days: "the schedule", blob: "the shared setup", timeOff: "vacations", availability: "availability", eastFeed: "the East feed cache", eastReviews: "the East vacation reviews", appDays: "the APP shifts and vacations" };
 function combinedLoadToast(fails, opts) {
   const f = fails && typeof fails === "object" ? fails : {};
   const o = opts || {};
@@ -6514,13 +6514,18 @@ function pushDiagLine(d) {
 // database holds one APP per day); the only write path is the save function, which also writes the audit row. config.js
 // appDaysDb is the only client file that names the table or its two functions. These are the pure pieces the client is
 // built on; none of them throws.
-const APP_DAYS_UNAVAILABLE_TEXT = "APP days are available after the next database update.";
+// Prompt 35 (Faraz 11/17): the APPs' typed shifts and their vacations ride the same read and the same words.
+const APP_DAYS_UNAVAILABLE_TEXT = "APP shifts and vacations are available after the next database update.";
 // The mount load's sentence for a failed APP-day read (Do first 4's collector, key appDays - the merge with main, 10/2): every
 // signed-in role sees the A lines, so one wording serves the viewer, the APP and the scheduler (?public=1 never reads them).
-const APP_DAYS_LOAD_FAIL_TEXT = "Couldn't load the APP days - the A lines on the calendar may be missing until they load.";
+const APP_DAYS_LOAD_FAIL_TEXT = "Couldn't load the APP shifts and vacations - the A lines on the calendar may be missing until they load.";
 // The refusal codes the save function raises (custom SQLSTATEs; PostgREST answers 400 with the code + "<TOKEN>: <text>").
-const APP_DAY_CODES = { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE" };
-const APP_DAYS_MAX_SAVE = 400; // the server's cap per save (AP004); the client refuses a bigger save before any request
+// Revision ac (Prompt 35) adds AP008-AP010 (no such shift that day, two of one APP's shifts overlapping, a shift on the APP's own
+// vacation) and the vacation function's AV001-AV008 (APP_VACATION_CODES).
+const APP_DAY_CODES = { AP001: "APP_DAY_NOT_ALLOWED", AP002: "APP_DAY_NOT_YOURS", AP003: "APP_DAY_NOT_APP", AP004: "APP_DAY_BAD_DAY", AP005: "APP_DAY_TAKEN", AP006: "APP_DAY_PAST", AP007: "APP_DAY_STALE", AP008: "APP_DAY_NO_SHIFT", AP009: "APP_DAY_OVERLAP", AP010: "APP_DAY_VACATION" };
+const APP_VACATION_CODES = { AV001: "APP_VACATION_NOT_ALLOWED", AV002: "APP_VACATION_NOT_YOURS", AV003: "APP_VACATION_NOT_APP", AV004: "APP_VACATION_BAD_RANGE", AV005: "APP_VACATION_ON_SHIFT", AV006: "APP_VACATION_PAST", AV007: "APP_VACATION_STALE", AV008: "APP_VACATION_OVERLAP" };
+const APP_DAYS_MAX_SAVE = 400; // the server's cap per save (AP004 - shifts); the client refuses a bigger save before any request
+const APP_VACATIONS_MAX_SAVE = 50; // the vacation function's cap per save (AV004)
 const appDayIsIso = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
 // appShortName(displayName) -> the grid's name: the part before the first comma (drops ", PA-C"), trimmed, its last word -
 // after trailing credential words written without a comma ("Pat Appleton PA-C", "... NP", "... P.A.-C"; review 10/2), matched
@@ -6533,23 +6538,278 @@ function appShortName(displayName) {
   while (words.length > 1 && APP_CREDENTIAL_WORDS.includes(words[words.length - 1].replace(/\./g, "").replace(/^PhD$/, "PHD"))) words.pop();
   return words.length ? words[words.length - 1] : "APP";
 }
-// appDaysByDay(rows, names) -> { "YYYY-MM-DD": { day, profileId, name, short, isApp, source } } from the APP table's rows
-// ({ day, profile_id, source, created_at }) and the names function's rows ({ profile_id, display_name, is_app }). A row
-// whose day is not ISO or that has no profile_id is skipped; name = the holder's display name, else "APP"; isApp is false
-// only for a holder whose names row says so (a former APP: his days stay until the scheduler clears them).
-function appDaysByDay(rows, names) {
-  const byId = {};
-  (Array.isArray(names) ? names : []).forEach(n => { if (n && typeof n === "object" && typeof n.profile_id === "string" && n.profile_id) byId[n.profile_id] = n; });
-  const out = {};
-  (Array.isArray(rows) ? rows : []).forEach(r => {
-    if (!r || typeof r !== "object" || !appDayIsIso(r.day) || typeof r.profile_id !== "string" || !r.profile_id) return;
-    const n = byId[r.profile_id];
-    const name = n && typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP";
-    out[r.day] = { day: r.day, profileId: r.profile_id, name, short: appShortName(name), isApp: !(n && n.is_app === false), source: typeof r.source === "string" ? r.source : null };
+/* --- Prompt 35 (Faraz 11/17): typed APP shifts and APP vacations ---
+   Shift types are Setup data: call_schedule_data.data.groupRules.appShiftTypes = [{ id, label, start, end, weekdays, holidays,
+   perDay[, retired] }] - absent or not a list = APP_SHIFT_TYPES_DEFAULT, the one decided type (Inbox, 07:00-17:00, Mon-Fri, not on
+   the six holidays, one APP a day). appShiftTypesOf is the SAME rule as the database's silvis_app_shift_types (sql/migrations/
+   2026-11-17-app-shifts.sql; test/data-layer.test.js runs both on one set of inputs): an entry counts when it is an object with an id
+   matching ^[a-z][a-z0-9-]{0,23}$, start / end "HH:MM" (two digits, 24-hour) and a non-empty list of whole weekdays 0-6 (0 = Sunday,
+   Date.getDay); the first entry of an id wins; label = the label trimmed of spaces, else the id; holidays / retired only when exactly
+   true; perDay a whole number 1-20, else 1. A shift of type T on day D runs from T.start on D to T.end - on D + 1 when end < start, 24
+   hours when end = start (Central wall clock). Two shifts of one APP overlap when their spans share a minute; a shift meets an APP
+   vacation when its span reaches any minute of a vacation day; a holiday is a day of a stored holiday unit (holidayNameByDay). */
+const APP_SHIFT_TYPES_DEFAULT = Object.freeze([Object.freeze({ id: "inbox", label: "Inbox", start: "07:00", end: "17:00", weekdays: Object.freeze([1, 2, 3, 4, 5]), holidays: false, perDay: 1 })]);
+const APP_SHIFT_ID_RE = /^[a-z][a-z0-9-]{0,23}$/;
+const APP_HHMM_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+const APP_SHIFT_PER_DAY_MAX = 20;
+const appHhmmMinutes = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+// appShiftTypesOf(groupRules) -> [{ id, label, start, end, startMin, endMin, weekdays, holidays, perDay, retired }] (see above)
+function appShiftTypesOf(groupRules) {
+  const g = groupRules && typeof groupRules === "object" ? groupRules : {};
+  const list = Array.isArray(g.appShiftTypes) ? g.appShiftTypes : APP_SHIFT_TYPES_DEFAULT;
+  const out = [], seen = {};
+  list.forEach(t => {
+    if (!t || typeof t !== "object" || Array.isArray(t)) return;
+    if (typeof t.id !== "string" || !APP_SHIFT_ID_RE.test(t.id)) return;
+    if (typeof t.start !== "string" || !APP_HHMM_RE.test(t.start) || typeof t.end !== "string" || !APP_HHMM_RE.test(t.end)) return;
+    if (!Array.isArray(t.weekdays) || !t.weekdays.length || !t.weekdays.every(w => typeof w === "number" && [0, 1, 2, 3, 4, 5, 6].indexOf(w) >= 0)) return;
+    if (seen[t.id]) return;
+    seen[t.id] = true;
+    const label = typeof t.label === "string" ? t.label.replace(/^ +/, "").replace(/ +$/, "") : "";
+    out.push({ id: t.id, label: label || t.id, start: t.start, end: t.end, startMin: appHhmmMinutes(t.start), endMin: appHhmmMinutes(t.end),
+      weekdays: Array.from(new Set(t.weekdays.map(w => w + 0))).sort((a, b) => a - b), holidays: t.holidays === true,
+      perDay: typeof t.perDay === "number" && Number.isInteger(t.perDay) && t.perDay >= 1 && t.perDay <= APP_SHIFT_PER_DAY_MAX ? t.perDay : 1,
+      retired: t.retired === true });
   });
   return out;
 }
-// appGridLabels(byDay) -> { profileId: label } - the phone month grid's APP name (fix/painter-dark-mode, 10/3, spec H: at
+// appHourLabel(minutes) -> "7a", "5p", "7:30a", "12p" (noon), "12a" (midnight) - the calendar's short hours
+function appHourLabel(min) {
+  const m = ((Math.floor(Number(min) || 0) % 1440) + 1440) % 1440, h = Math.floor(m / 60), mm = m % 60;
+  return (h % 12 === 0 ? 12 : h % 12) + (mm ? ":" + String(mm).padStart(2, "0") : "") + (h < 12 ? "a" : "p");
+}
+// appShiftHours(type) -> "7a\u20135p" (an en dash; "5p\u20137a" crosses midnight, "7a\u20137a" is 24 hours); "" for no type
+function appShiftHours(t) { return t && typeof t === "object" && isFinite(t.startMin) && isFinite(t.endMin) ? appHourLabel(t.startMin) + "\u2013" + appHourLabel(t.endMin) : ""; }
+// appShiftWeekdayWords(type) -> "Mon-Fri", "Sat, Sun", "every day" - Setup's and the cards' short form of a type's weekdays
+const APP_WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function appShiftWeekdayWords(t) {
+  const mon = (x) => (x + 6) % 7;   // Monday first, as Setup's weekday buttons: a weekend reads "Sat, Sun", Friday to Sunday "Fri-Sun"
+  const w = t && Array.isArray(t.weekdays) ? t.weekdays.slice().sort((a, b) => mon(a) - mon(b)) : [];
+  if (w.length === 7) return "every day";
+  if (w.length >= 3 && w.every((x, i) => i === 0 || mon(x) === mon(w[i - 1]) + 1)) return APP_WEEKDAY_SHORT[w[0]] + "-" + APP_WEEKDAY_SHORT[w[w.length - 1]];
+  return w.map(x => APP_WEEKDAY_SHORT[x]).join(", ");
+}
+// the day number from 2000-01-01 (UTC arithmetic: never a DST-length day) and a shift's span in minutes on that scale; a row
+// whose type is unknown (no longer listed) spans its whole calendar day - the database's reading
+function appDayIndex(day) { const [y, m, d] = String(day).split("-").map(Number); return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(2000, 0, 1)) / 86400000); }
+function appShiftSpan(day, t) {
+  const base = appDayIndex(day) * 1440;
+  if (!t || !isFinite(t.startMin) || !isFinite(t.endMin)) return { s: base, e: base + 1440 };
+  return { s: base + t.startMin, e: base + t.startMin + (t.endMin > t.startMin ? t.endMin - t.startMin : t.endMin - t.startMin + 1440) };
+}
+const appSpansOverlap = (a, b) => !!(a && b && a.s < b.e && b.s < a.e);
+// appVacationSpan(start, end) -> the vacation's days as a span (its first day's midnight to the midnight after its last day)
+function appVacationSpan(start, end) { return { s: appDayIndex(start) * 1440, e: (appDayIndex(end) + 1) * 1440 }; }
+// appShiftRunsOn(type, day, holidayDays) -> { ok: true } or { ok: false, why: "unknown" | "retired" | "weekday" | "holiday" }
+// (holidayDays = holidayNameByDay's { day: name } map)
+function appShiftRunsOn(t, day, holidayDays) {
+  if (!t) return { ok: false, why: "unknown" };
+  if (t.retired) return { ok: false, why: "retired" };
+  if (!appDayIsIso(day) || t.weekdays.indexOf(parse(day).getDay()) < 0) return { ok: false, why: "weekday" };
+  if (!t.holidays && holidayDays && holidayDays[day]) return { ok: false, why: "holiday" };
+  return { ok: true };
+}
+// appNamesById(names) -> { profile_id: names row } (app_call_names' rows: { profile_id, display_name, is_app })
+function appNamesById(names) {
+  const byId = {};
+  (Array.isArray(names) ? names : []).forEach(n => { if (n && typeof n === "object" && typeof n.profile_id === "string" && n.profile_id) byId[n.profile_id] = n; });
+  return byId;
+}
+const appNameOfRow = (n) => n && typeof n.display_name === "string" && n.display_name.trim() ? n.display_name.trim() : "APP";
+// appShiftDayMap(rows, names, types) -> { "YYYY-MM-DD": [{ day, type, label, hours, known, profileId, name, short, isApp, source }] }
+// from the APP table's rows ({ day, shift_type, profile_id, source }) - each day's list in the types' order (an unknown type last,
+// by id), then by name; a row with no ISO day, no type or no profile is skipped. isApp is false only for a holder whose names row
+// says so (a former APP: its shifts stay until the scheduler clears them).
+function appShiftDayMap(rows, names, types) {
+  const byId = appNamesById(names), ts = Array.isArray(types) ? types : [], at = {};
+  ts.forEach((t, i) => { at[t.id] = i; });
+  const out = {};
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    if (!r || typeof r !== "object" || !appDayIsIso(r.day) || typeof r.profile_id !== "string" || !r.profile_id || typeof r.shift_type !== "string" || !r.shift_type) return;
+    const t = at[r.shift_type] !== undefined ? ts[at[r.shift_type]] : null, n = byId[r.profile_id], name = appNameOfRow(n);
+    (out[r.day] = out[r.day] || []).push({ day: r.day, type: r.shift_type, label: t ? t.label : r.shift_type, hours: appShiftHours(t), known: !!t,
+      profileId: r.profile_id, name, short: appShortName(name), isApp: !(n && n.is_app === false), source: typeof r.source === "string" ? r.source : null });
+  });
+  const rank = (e) => at[e.type] !== undefined ? at[e.type] : ts.length;
+  Object.keys(out).forEach(d => out[d].sort((a, b) => rank(a) - rank(b) || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) || (a.profileId < b.profileId ? -1 : a.profileId > b.profileId ? 1 : 0)));
+  return out;
+}
+// appVacationRows(rows, names) -> [{ id, profileId, start, end, name, short, isApp, source }] from the APP vacation table's rows ({ id,
+// profile_id, start_date, end_date, source }), sorted by start, end, name; a row without an id, a profile or ISO days is skipped
+function appVacationRows(rows, names) {
+  const byId = appNamesById(names);
+  return (Array.isArray(rows) ? rows : []).filter(r => r && typeof r === "object" && typeof r.id === "string" && r.id && typeof r.profile_id === "string" && r.profile_id
+      && appDayIsIso(String(r.start_date || "").slice(0, 10)) && appDayIsIso(String(r.end_date || "").slice(0, 10)))
+    .map(r => { const n = byId[r.profile_id], name = appNameOfRow(n);
+      return { id: r.id, profileId: r.profile_id, start: String(r.start_date).slice(0, 10), end: String(r.end_date).slice(0, 10), name, short: appShortName(name), isApp: !(n && n.is_app === false), source: typeof r.source === "string" ? r.source : null }; })
+    .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0) || (a.end < b.end ? -1 : a.end > b.end ? 1 : 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) || (a.id < b.id ? -1 : 1));
+}
+// appVacationMap(vacs) -> { profileId: [[start, end, id, null], ...] } - the surgeons' vacation-map shape, so onVac /
+// groupVacationRows / vacRangeLabel read APP vacations too
+function appVacationMap(vacs) {
+  const out = {};
+  (Array.isArray(vacs) ? vacs : []).forEach(v => { (out[v.profileId] = out[v.profileId] || []).push([v.start, v.end, v.id, null]); });
+  Object.keys(out).forEach(k => out[k].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
+  return out;
+}
+// appVacationsOn(vacs, day) -> the vacations covering the day (one per APP, in name order)
+function appVacationsOn(vacs, day) {
+  const seen = {};
+  return (Array.isArray(vacs) ? vacs : []).filter(v => day >= v.start && day <= v.end && !seen[v.profileId] && (seen[v.profileId] = true))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) || (a.profileId < b.profileId ? -1 : 1));
+}
+// appVacRange(start, end) -> "12/1-12/5" ("12/1" for one day) - the database's and the audit row's form
+function appVacRange(start, end) { return end && end !== start ? fmtMD(start) + "-" + fmtMD(end) : fmtMD(start); }
+const appShiftKey = (day, type) => day + "|" + type;
+// appShiftCellState(day, typeId, ctx) -> what one cell of My APP shifts is for the picked type. ctx: { byDay (appShiftDayMap),
+// me, draft ({ "day|type": true / false }), today, types, holidayDays, myVacs ([{ start, end }] - the APP's own vacations) }:
+//   "past" / "past-mine" (before today, Central - never tappable), "mine" / "remove" (saved as mine; drafted to go), "add" (drafted),
+//   "off" (the type does not run that day: retired, unknown, the weekday, a holiday), "taken" (other APPs fill its perDay),
+//   "away" (the shift reaches one of my vacation days), "clash" (it overlaps another shift of mine - saved or drafted), "free".
+function appShiftCellState(day, typeId, ctx) {
+  const c = ctx || {}, byDay = c.byDay || {}, draft = c.draft || {}, ts = Array.isArray(c.types) ? c.types : [];
+  const today = todayOrCentral(c.today), list = Array.isArray(byDay[day]) ? byDay[day] : [], key = appShiftKey(day, typeId);
+  const t = ts.find(x => x.id === typeId) || null;
+  const mine = list.some(e => e.type === typeId && c.me && e.profileId === c.me);
+  if (day < today) return mine ? "past-mine" : "past";
+  if (mine) return draft[key] === false ? "remove" : "mine";
+  if (draft[key] === true) return "add";
+  if (!appShiftRunsOn(t, day, c.holidayDays).ok) return "off";
+  if (list.filter(e => e.type === typeId && e.profileId !== c.me).length >= t.perDay) return "taken";
+  const span = appShiftSpan(day, t);
+  if ((Array.isArray(c.myVacs) ? c.myVacs : []).some(v => appSpansOverlap(span, appVacationSpan(v.start, v.end)))) return "away";
+  // my other shifts: the saved ones I keep and the drafted adds, within a day either side (no shift is longer than 24 hours)
+  const typeOf = (id) => ts.find(x => x.id === id) || null;
+  const near = [-1, 0, 1].map(k => fmt(addD(parse(day), k)));
+  const others = [];
+  near.forEach(d => (Array.isArray(byDay[d]) ? byDay[d] : []).forEach(e => { if (e.profileId === c.me && !(d === day && e.type === typeId) && draft[appShiftKey(d, e.type)] !== false) others.push(appShiftSpan(d, typeOf(e.type))); }));
+  Object.keys(draft).forEach(k => { const [d, ty] = k.split("|"); if (draft[k] === true && near.indexOf(d) >= 0 && !(d === day && ty === typeId)) others.push(appShiftSpan(d, typeOf(ty))); });
+  if (others.some(o => appSpansOverlap(span, o))) return "clash";
+  return "free";
+}
+// appShiftToggle(draft, day, typeId, ctx) -> the draft after a tap: free -> add, add -> free, mine -> remove, remove -> mine; any
+// other cell (past, off, taken, away, clash) leaves the draft as it was (the SAME object)
+function appShiftToggle(draft, day, typeId, ctx) {
+  const d = draft && typeof draft === "object" ? draft : {};
+  const st = appShiftCellState(day, typeId, { ...(ctx || {}), draft: d });
+  if (st !== "free" && st !== "mine" && st !== "add" && st !== "remove") return d;
+  const next = { ...d }, k = appShiftKey(day, typeId);
+  if (st === "free") next[k] = true;
+  else if (st === "mine") next[k] = false;
+  else delete next[k];
+  return next;
+}
+// appShiftCellWords(state, day, entries, type) -> the hint a tap on a cell that cannot change shows
+function appShiftCellWords(st, day, entries, t) {
+  const md = fmtMD(day), label = t ? t.label : "That shift";
+  if (st === "past" || st === "past-mine") return md + " is past - a past day stays as it was (ask the scheduler).";
+  if (st === "taken") return md + " " + label + " already has " + (Array.isArray(entries) ? entries : []).map(e => e.name).join(" and ") + (t && t.perDay > 1 ? " (" + t.perDay + " a day)." : ".");
+  if (st === "off") return !t ? md + " has no such shift (it is not offered)." : t.retired ? "The " + label + " shift is retired." : md + " has no " + label + " shift (" + appShiftWeekdayWords(t) + (t.holidays ? "" : ", not on holidays") + ").";
+  if (st === "away") return md + " is on your vacation - change the vacation first.";
+  if (st === "clash") return md + " " + label + " overlaps another shift of yours - one shift at a time.";
+  return "";
+}
+// appShiftPlan(days, typeId, ctx) - for Range / Paste: { go: [the days the type can take, sorted], skipped: [{ day, why }] }
+function appShiftPlan(days, typeId, ctx) {
+  const c = ctx || {}, ts = Array.isArray(c.types) ? c.types : [], t = ts.find(x => x.id === typeId) || null;
+  const list = Array.from(new Set((Array.isArray(days) ? days : []).filter(appDayIsIso))).sort();
+  const go = [], skipped = [];
+  let draft = c.draft || {};
+  list.forEach(d => {
+    const st = appShiftCellState(d, typeId, { ...c, draft });
+    if (st === "free") { go.push(d); draft = { ...draft, [appShiftKey(d, typeId)]: true }; }
+    else if (st === "mine" || st === "add") skipped.push({ day: d, why: fmtMD(d) + " is already yours" });
+    else skipped.push({ day: d, why: appShiftCellWords(st, d, ((c.byDay || {})[d] || []).filter(e => e.type === typeId && e.profileId !== c.me), t).replace(/\.$/, "") });
+  });
+  return { go, skipped };
+}
+// appShiftDraftDiff(draft, byDay, me, today) -> { add: [{ day, type }], clear: [{ day, type }], count } - what one Save sends (a
+// drafted day before today never counts - the server refuses it with AP006)
+function appShiftDraftDiff(draft, byDay, me, today) {
+  const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {}, t = appDayIsIso(today) ? today : null;
+  const held = (day, ty) => (Array.isArray(b[day]) ? b[day] : []).some(e => e.type === ty && me && e.profileId === me);
+  const add = [], clear = [];
+  Object.keys(d).sort().forEach(k => {
+    const [day, ty] = k.split("|");
+    if (!appDayIsIso(day) || !ty || (t && day < t)) return;
+    if (d[k] === true && !held(day, ty)) add.push({ day, type: ty });
+    else if (d[k] === false && held(day, ty)) clear.push({ day, type: ty });
+  });
+  return { add, clear, count: add.length + clear.length };
+}
+// appShiftDraftPrune(draft, ctx) -> the draft without what a reload made impossible (an add on a full or no-longer-running shift,
+// a removal of a shift no longer mine) and the days before today; the SAME object when nothing goes
+function appShiftDraftPrune(draft, ctx) {
+  const d = draft && typeof draft === "object" ? draft : {}, c = ctx || {}, b = c.byDay || {}, ts = Array.isArray(c.types) ? c.types : [];
+  const t = appDayIsIso(c.today) ? c.today : null;
+  const drop = Object.keys(d).filter(k => {
+    const [day, ty] = k.split("|"), list = Array.isArray(b[day]) ? b[day] : [], type = ts.find(x => x.id === ty) || null;
+    if (t && day < t) return true;
+    const mine = list.some(e => e.type === ty && c.me && e.profileId === c.me);
+    if (d[k] === false) return !mine;
+    if (mine) return true;
+    return !appShiftRunsOn(type, day, c.holidayDays).ok || list.filter(e => e.type === ty && e.profileId !== c.me).length >= type.perDay;
+  });
+  if (!drop.length) return d;
+  const next = { ...d };
+  drop.forEach(k => { delete next[k]; });
+  return next;
+}
+// appShiftSummary(items) -> "inbox 11/18, 11/19; weeknight 11/20" - the database's audit wording (type ids, days in order)
+function appShiftSummary(items) {
+  const by = {}, first = {};
+  (Array.isArray(items) ? items : []).filter(x => x && appDayIsIso(x.day) && x.type).slice().sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)).forEach(x => {
+    (by[x.type] = by[x.type] || []).push(fmtMD(x.day)); if (!first[x.type]) first[x.type] = x.day;
+  });
+  return Object.keys(by).sort((a, b) => (first[a] < first[b] ? -1 : first[a] > first[b] ? 1 : a < b ? -1 : 1)).map(ty => ty + " " + by[ty].join(", ")).join("; ");
+}
+// appShiftSavedNote(add, clear) -> "Saved: inbox 11/18, 11/19; removed inbox 11/25" (the parts that apply)
+function appShiftSavedNote(add, clear) {
+  const a = appShiftSummary(add), c = appShiftSummary(clear);
+  const parts = [];
+  if (a) parts.push(a);
+  if (c) parts.push("removed " + c);
+  return parts.length ? "Saved: " + parts.join("; ") : "Saved: nothing changed";
+}
+// appVacSavedNote(added, removed) -> "Saved: vacation 12/1-12/5; removed vacation 12/2-12/4" (ranges { start, end })
+function appVacSavedNote(added, removed) {
+  const r = (l) => (Array.isArray(l) ? l : []).filter(x => x && appDayIsIso(x.start)).map(x => appVacRange(x.start, x.end)).join(", ");
+  const parts = [];
+  if (r(added)) parts.push("vacation " + r(added));
+  if (r(removed)) parts.push("removed vacation " + r(removed));
+  return parts.length ? "Saved: " + parts.join("; ") : "Saved: nothing changed";
+}
+// appVacationEditable(row, ctx) -> may this account change or remove the APP vacation? The scheduler always; the office and the APP
+// itself only while it has not started (first day after today, Central) - the surgeons' Time off rule, the database's AV006
+function appVacationEditable(v, ctx) {
+  const c = ctx || {};
+  if (!v || !v.id) return false;
+  if (c.isScheduler) return true;
+  if (!(c.isCoordinator || (c.me && v.profileId === c.me && c.isApp))) return false;
+  return v.start > todayOrCentral(c.today);
+}
+// appVacationCheck(profileId, start, end, ctx) -> null when the client sees nothing against an APP vacation, else the words the
+// database would answer: ctx { vacs (appVacationRows), byDay (appShiftDayMap), types, excludeId (the vacation a change replaces), name,
+// self (true on the APP's own card: "You hold ..." / "You are already away ...") }
+function appVacationCheck(profileId, start, end, ctx) {
+  const c = ctx || {};
+  if (!appDayIsIso(start) || !appDayIsIso(end)) return "Pick a first and a last day.";
+  if (end < start) return appVacRange(start, end) + " ends before it starts.";
+  if (appDayIndex(end) - appDayIndex(start) > 365) return appVacRange(start, end) + " is longer than a year.";
+  const who = c.self ? "You" : c.name || "This APP", be = c.self ? " are" : " is", hold = c.self ? " hold " : " holds ";
+  const kept = (Array.isArray(c.vacs) ? c.vacs : []).filter(v => v.profileId === profileId && v.id !== c.excludeId);
+  if (kept.some(v => v.start === start && v.end === end)) return null;
+  const clash = kept.filter(v => v.start <= end && start <= v.end);
+  if (clash.length) return who + be + " already away " + clash.map(v => appVacRange(v.start, v.end)).join(", ") + " - change that vacation instead.";
+  const span = appVacationSpan(start, end), ts = Array.isArray(c.types) ? c.types : [], hits = [];
+  Object.keys(c.byDay || {}).sort().forEach(d => (c.byDay[d] || []).forEach(e => {
+    if (e.profileId === profileId && appSpansOverlap(span, appShiftSpan(d, ts.find(x => x.id === e.type) || null))) hits.push(fmtMD(d) + " " + e.type);
+  }));
+  if (hits.length) return who + hold + hits.join(", ") + " - remove the shift first.";
+  return null;
+}
+// appGridLabels(byDay) -> { profileId: label } - the phone month grid's APP name (a day's value: appShiftDayMap's list, Prompt 35, or
+// one entry) (fix/painter-dark-mode, 10/3, spec H: at
 // 390 px the name ellipsized to "A Appl..." / "A Bram...", and two APPs starting alike looked the same). Every APP holding a
 // day in byDay (appDaysByDay's map) gets at most four letters and no ellipsis: its short name when that has four letters or
 // fewer, else its first four ("Appleton" -> "Appl", "Bramble" -> "Bram"). APPs whose labels would match (ignoring case) take
@@ -6561,7 +6821,7 @@ function appDaysByDay(rows, names) {
 function appGridLabels(byDay) {
   const map = byDay && typeof byDay === "object" ? byDay : {};
   const people = {};
-  Object.keys(map).forEach(d => { const e = map[d]; if (e && typeof e === "object" && typeof e.profileId === "string" && e.profileId && !people[e.profileId]) people[e.profileId] = e; });
+  Object.keys(map).forEach(d => (Array.isArray(map[d]) ? map[d] : [map[d]]).forEach(e => { if (e && typeof e === "object" && typeof e.profileId === "string" && e.profileId && !people[e.profileId]) people[e.profileId] = e; }));
   const ids = Object.keys(people).sort();
   const shortOf = (e) => (typeof e.short === "string" && e.short ? e.short : appShortName(e.name));
   const out = {};
@@ -6583,10 +6843,10 @@ function appGridLabels(byDay) {
 // shows beforeunload), anything else = leaving Mine for another tab. OK lets the draft go; Cancel keeps the APP on My APP days.
 function appDaysLeaveWords(n, why) {
   const k = Math.max(0, Math.floor(Number(n) || 0));
-  const what = k + " unsaved APP day change" + (k === 1 ? "" : "s");
-  if (why === "signin") return "Discard " + what + " and sign in again?\n\nCancel keeps them on My APP days (note the days, then sign in again).";
+  const what = k + " unsaved APP shift change" + (k === 1 ? "" : "s");
+  if (why === "signin") return "Discard " + what + " and sign in again?\n\nCancel keeps them on My APP shifts (note the days, then sign in again).";
   if (why === "reload") return "Discard " + what + " and reload?\n\nCancel keeps them - tap Save first, then reload.";
-  return "Discard " + what + " and leave Mine?\n\nCancel stays on My APP days - tap Save to keep them.";
+  return "Discard " + what + " and leave Mine?\n\nCancel stays on My APP shifts - tap Save to keep them.";
 }
 // appDaysReadFailureState(status, bodyText) - a non-2xx answer to the APP reads: "unavailable" when the table or the
 // function does not exist yet (the migration not applied, or rolled back): 404 PGRST205 (table) / PGRST202 (function), a
@@ -6596,73 +6856,9 @@ function appDaysReadFailureState(status, bodyText) {
   let code = null;
   try { const j = JSON.parse(t); code = j && typeof j.code === "string" ? j.code : null; } catch (e) { code = null; }
   if (st === 404 && (code === "PGRST202" || (code === null && /PGRST202/.test(t)))) return "unavailable";
+  // Prompt 35: the select names shift_type - a database without revision ac (rolled back) answers 400 42703 (no such column)
+  if ((st === 400 || st === 404) && (code === "42703" || (code === null && /42703/.test(t)))) return "unavailable";
   return payReadFailureState(st, t);
-}
-// appDaysCellState(day, { byDay, me, draft, today }) -> what the My APP days month cell is:
-//   "past" / "past-mine" (before today, Central - never tappable), "taken" (another profile holds it), "mine" (saved as
-//   mine), "add" (free, drafted to add), "remove" (mine, drafted to remove), "free".
-function appDaysCellState(day, ctx) {
-  const c = ctx || {};
-  const byDay = c.byDay || {}, draft = c.draft || {};
-  const today = todayOrCentral(c.today);
-  const e = byDay[day] || null;
-  const mine = !!(e && c.me && e.profileId === c.me);
-  if (day < today) return mine ? "past-mine" : "past";
-  if (e && !mine) return "taken";
-  if (mine) return draft[day] === false ? "remove" : "mine";
-  return draft[day] === true ? "add" : "free";
-}
-// appDaysToggle(draft, day, ctx) -> the draft after a tap: free -> add, add -> free, mine -> remove, remove -> mine; a past
-// or taken day leaves the draft as it was (the SAME object).
-function appDaysToggle(draft, day, ctx) {
-  const d = draft && typeof draft === "object" ? draft : {};
-  const st = appDaysCellState(day, { ...(ctx || {}), draft: d });
-  if (st !== "free" && st !== "mine" && st !== "add" && st !== "remove") return d;
-  const next = { ...d };
-  if (st === "free") next[day] = true;
-  else if (st === "mine") next[day] = false;
-  else delete next[day];
-  return next;
-}
-// appDaysPlan(days, ctx) - for Range / Paste: { go: [the free days, sorted], skipped: [{ day, why }] }; why =
-// "<M/D> already has <name>", "<M/D> is past", "<M/D> is already yours" (read from the saved picture, not the draft).
-function appDaysPlan(days, ctx) {
-  const c = ctx || {};
-  const byDay = c.byDay || {};
-  const list = Array.from(new Set((Array.isArray(days) ? days : []).filter(appDayIsIso))).sort();
-  const go = [], skipped = [];
-  list.forEach(d => {
-    const st = appDaysCellState(d, { byDay, me: c.me, today: c.today });
-    if (st === "past" || st === "past-mine") skipped.push({ day: d, why: fmtMD(d) + " is past" });
-    else if (st === "taken") skipped.push({ day: d, why: fmtMD(d) + " already has " + byDay[d].name });
-    else if (st === "mine") skipped.push({ day: d, why: fmtMD(d) + " is already yours" });
-    else go.push(d);
-  });
-  return { go, skipped };
-}
-// appDaysDraftDiff(draft, byDay, me, today) -> { add: [drafted-true days not held by me, sorted], clear: [drafted-false days
-// held by me, sorted], count } - what one Save sends. With today (ISO), a day before it never counts (a drafted day that became
-// past while the card was open - the server refuses it with AP006; review 10/2).
-function appDaysDraftDiff(draft, byDay, me, today) {
-  const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
-  const t = appDayIsIso(today) ? today : null;
-  const held = (day) => !!(b[day] && me && b[day].profileId === me);
-  const live = (day) => appDayIsIso(day) && !(t && day < t);
-  const add = Object.keys(d).filter(day => live(day) && d[day] === true && !held(day)).sort();
-  const clear = Object.keys(d).filter(day => live(day) && d[day] === false && held(day)).sort();
-  return { add, clear, count: add.length + clear.length };
-}
-// appDaysDraftPrune(draft, byDay, me, today) -> the draft without the entries a reload made impossible (an add on a day somebody
-// now holds, a removal of a day that is no longer mine) and, with today (ISO), without the days before it (midnight Central
-// passed while the card was open; review 10/2); the SAME object when nothing goes.
-function appDaysDraftPrune(draft, byDay, me, today) {
-  const d = draft && typeof draft === "object" ? draft : {}, b = byDay || {};
-  const t = appDayIsIso(today) ? today : null;
-  const drop = Object.keys(d).filter(day => (t && day < t) || (d[day] === true ? !!b[day] : !(b[day] && me && b[day].profileId === me)));
-  if (!drop.length) return d;
-  const next = { ...d };
-  drop.forEach(day => { delete next[day]; });
-  return next;
 }
 // The message of a PostgREST error body (its JSON text, or an object with a message), else the text itself.
 function appDayErrorMessage(body) {
@@ -6684,27 +6880,28 @@ function appDayErrorMessage(body) {
 function appDaysErrorWords(body, status, opts) {
   const msg = appDayErrorMessage(body);
   const raw = body && typeof body === "object" ? msg : String(body === null || body === undefined ? "" : body);
-  const m = /APP_DAY_[A-Z_]+: ([\s\S]*)$/.exec(msg);
+  const m = /APP_(?:DAY|VACATION)_[A-Z_]+: ([\s\S]*)$/.exec(msg);
   if (m && m[1].trim()) return m[1].trim();
   const all = msg + " " + raw;
   if (/PGRST202|PGRST205|42P01/.test(all)) return APP_DAYS_UNAVAILABLE_TEXT;
-  if (/42501|permission denied/i.test(all)) return "Not allowed - only an APP account or the scheduler can change APP days. Nothing was saved.";
+  const vac = !!(opts && opts.kind === "vacation");
+  if (/42501|permission denied/i.test(all)) return vac ? "Not allowed - only an APP account, the scheduler or the office can change APP vacations. Nothing was saved." : "Not allowed - only an APP account or the scheduler can change APP shifts. Nothing was saved.";
   if (/JWT|PGRST301/.test(all) || Number(status) === 401) return opts && opts.sessionExpired === false
     ? "Your session couldn't be refreshed - nothing was saved. Try again in a moment."
     : "Your session expired - sign in again. Nothing was saved.";
-  if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same days twice is safe).";
+  if (/Failed to fetch|NetworkError|network|Load failed/i.test(all) || (status !== undefined && status !== null && Number(status) === 0)) return "Couldn't reach the server - the save may not have gone through. Check your connection and try again (saving the same " + (vac ? "vacation" : "shifts") + " twice is safe).";
   // a 5xx gateway page can arrive after save_app_days committed (re-check 10/2): say the outcome is unknown, never "nothing was
   // saved" - and so for a 5xx JSON body without a PostgREST code (a gateway's own JSON; ship review 10/2)
   const s = Number(status);
   if (s >= 500 && !appDayErrorHasCode(body)) {
     const ed = !!(opts && opts.where === "editor");
     const head = "Couldn't confirm the save (HTTP " + s + ") - it may or may not have gone through. ";
-    if (opts && opts.reloaded === true) return head + (ed ? "The APP line was reloaded - set it again if it is wrong." : "The calendar was reloaded - save again if a day is missing.");
-    return head + (ed ? "Check this day's APP after the next refresh, then set it again if it is wrong." : "Check your days after the next refresh, then save again if a day is missing.");
+    if (opts && opts.reloaded === true) return head + (ed ? "The APP lines were reloaded - set them again if one is wrong." : vac ? "The list was reloaded - save again if a vacation is missing." : "The calendar was reloaded - save again if a shift is missing.");
+    return head + (ed ? "Check this day's APPs after the next refresh, then set them again if one is wrong." : vac ? "Check the vacations after the next refresh, then save again if one is missing." : "Check your shifts after the next refresh, then save again if one is missing.");
   }
   // an HTTP error whose body is no PostgREST JSON (a gateway's HTML page): the status, never the raw page (review 10/2)
-  if (s >= 400 && !appDayErrorIsJson(body)) return "Couldn't save the APP days (HTTP " + s + ") - nothing was saved. Try again.";
-  return "Couldn't save the APP days: " + msg.slice(0, 160);
+  if (s >= 400 && !appDayErrorIsJson(body)) return "Couldn't save the APP " + (vac ? "vacation" : "shifts") + " (HTTP " + s + ") - nothing was saved. Try again.";
+  return "Couldn't save the APP " + (vac ? "vacation" : "shifts") + ": " + msg.slice(0, 160);
 }
 // true when a save's error body is a PostgREST error (an object, or JSON text, with a message)
 function appDayErrorIsJson(body) {
@@ -6723,21 +6920,14 @@ function appDaysSaveUnsure(body, status) {
   if (status !== undefined && status !== null && Number(status) === 0) return true;
   return Number(status) >= 500 && !appDayErrorHasCode(body);
 }
-// appDaysErrorCode(body) -> the AP00n code of a PostgREST error body (its code, else the token in its message), else null -
+// appDaysErrorCode(body) -> the AP0nn / AV00n code of a PostgREST error body (its code, else the token in its message), else null -
 // the client reloads the picture after AP002 / AP005 / AP006 / AP007 (it was stale).
 function appDaysErrorCode(body) {
   const raw = body === null || body === undefined ? "" : String(body);
-  try { const j = JSON.parse(raw); if (j && typeof j.code === "string" && APP_DAY_CODES[j.code]) return j.code; } catch (e) { /* not JSON */ }
+  const all = Object.assign({}, APP_DAY_CODES, APP_VACATION_CODES);
+  try { const j = JSON.parse(raw); if (j && typeof j.code === "string" && all[j.code]) return j.code; } catch (e) { /* not JSON */ }
   const msg = appDayErrorMessage(body);
-  return Object.keys(APP_DAY_CODES).find(k => msg.indexOf(APP_DAY_CODES[k] + ":") >= 0) || null;
-}
-// appSavedNote(add, clear) -> "Saved: on call 12/2, 12/3; removed 12/11" (the parts that apply).
-function appSavedNote(add, clear) {
-  const md = (l) => (Array.isArray(l) ? l : []).filter(appDayIsIso).slice().sort().map(fmtMD).join(", ");
-  const parts = [];
-  if (md(add)) parts.push("on call " + md(add));
-  if (md(clear)) parts.push("removed " + md(clear));
-  return parts.length ? "Saved: " + parts.join("; ") : "Saved: nothing changed";
+  return Object.keys(all).find(k => msg.indexOf(all[k] + ":") >= 0) || null;
 }
 // appPickList(names) -> the scheduler's pick list [{ profileId, name }] of the current APP accounts, sorted by name.
 function appPickList(names) {
@@ -7270,7 +7460,8 @@ function payLogAuditText(verb, name, row) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_DAYS_MAX_SAVE, appShortName, appDaysByDay, appGridLabels, appDaysLeaveWords, appDaysReadFailureState, appDaysCellState, appDaysToggle, appDaysPlan, appDaysDraftDiff, appDaysDraftPrune, appDaysErrorWords, appDaysErrorCode, appDaysSaveUnsure, appSavedNote, appPickList, appColumnState, userRoleValue, userRolePatch,
+    APP_DAYS_UNAVAILABLE_TEXT, APP_DAYS_LOAD_FAIL_TEXT, APP_DAY_CODES, APP_VACATION_CODES, APP_DAYS_MAX_SAVE, APP_VACATIONS_MAX_SAVE, appShortName, appGridLabels, appDaysLeaveWords, appDaysReadFailureState, appDaysErrorWords, appDaysErrorCode, appDaysSaveUnsure, appPickList, appColumnState, userRoleValue, userRolePatch,
+    APP_SHIFT_TYPES_DEFAULT, APP_SHIFT_ID_RE, APP_HHMM_RE, APP_SHIFT_PER_DAY_MAX, appShiftTypesOf, appHourLabel, appShiftHours, appShiftWeekdayWords, appDayIndex, appShiftSpan, appSpansOverlap, appVacationSpan, appShiftRunsOn, appShiftDayMap, appVacationRows, appVacationMap, appVacationsOn, appVacRange, appShiftKey, appShiftCellState, appShiftToggle, appShiftCellWords, appShiftPlan, appShiftDraftDiff, appShiftDraftPrune, appShiftSummary, appShiftSavedNote, appVacSavedNote, appVacationEditable, appVacationCheck,
     GEN_WORKER_MODULES, genWorkerSource, focusTrapNext, notifTestMessage, emailTestMessage, notifPermissionText, setupSaveToasts, suPatternRowIds, daysReadTripped,
     TOAST_MS, TOAST_ERROR_MIN_MS, TOAST_ERROR_MS_PER_CHAR, TOAST_ERROR_LOG_MAX, toastDurationMs, toastNext, toastErrorLogPush,
     reviewStateFor, derivedEastVacations,
