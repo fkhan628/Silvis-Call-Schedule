@@ -8049,7 +8049,7 @@ const AB_OBSERVED_SHA256 = "03d3eb7ae8d83b70ddaa2a27ab7f7deb02017a28c4013f3e0c8e
 {
   ok(review.includes("\n" + AB_HEADING + "\n"), "SCHEMA-REVIEW.md has the revision ab section");
   const sec = AB_SEC;
-  ok(sec && sec.slice(3).indexOf("\n## ") < 0, "the revision ab section is the last one in SCHEMA-REVIEW.md");
+  ok(sec && sec.slice(3).indexOf("\n## ") < 0, "the revision ab section is one section (revision ac's, prepared 11/17, may follow it) in SCHEMA-REVIEW.md");
   const prepared = sec.includes("**Status: PREPARED");
   const applied = sec.includes("**Status: APPLIED 2026-10-26 03:50:31Z by Faraz** (`apply-locked-trade.sh`, log `apply-locked-trade-20261026T034928Z.log`, APPLIED AND\nVERIFIED;");
   ok(applied && !prepared, "the section's Status reads APPLIED 2026-10-26 03:50:31Z with the script and the log (the record step; it read PREPARED before)");
@@ -8057,7 +8057,9 @@ const AB_OBSERVED_SHA256 = "03d3eb7ae8d83b70ddaa2a27ab7f7deb02017a28c4013f3e0c8e
   ok(sec.includes("**The review's finding, fixed here too.**") && sec.includes("**The record step** (done 2026-10-26;"), "the section records the review's finding and marks the record step done");
   const ob = sec.indexOf("**Observed** (apply, 2026-10-26):");
   ok(ob > 0, "the section's observed paragraph is copied from the log (the record step)");
-  eq(crypto.createHash("sha256").update(ob > 0 ? sec.slice(ob) : "").digest("hex"), AB_OBSERVED_SHA256, "the observed paragraph is frozen as the record step wrote it (its sha256);");
+  // pin moved deliberately 11/17 (revision ac, Prompt 35): ab's section is no longer the file's last - the blank line before revision ac's
+  // heading is not the paragraph's; kept intent: the paragraph is byte for byte what the record step wrote
+  eq(crypto.createHash("sha256").update(ob > 0 ? sec.slice(ob).replace(/\n+$/, "\n") : "").digest("hex"), AB_OBSERVED_SHA256, "the observed paragraph is frozen as the record step wrote it (its sha256);");
   const rules = read(path.join(ROOT, "docs", "SILVIS-CALL-RULES.md")).replace(/\n\s*/g, " ");
   ok(rules.includes("locked slot moved only when the scheduler applied the trade (the database's rule for every lock; ⟶ **10/25 (Faraz, revision ab - applied 2026-10-26 03:50 UTC):** \"all locks, holidays included\" - since revision ab a locked slot moves like any other when either party applies an accepted trade,") && !rules.includes("revision ab - prepared, not applied yet") && !rules.includes("once revision ab is applied"), "the rules doc says since revision ab (applied 2026-10-26 03:50 UTC) a locked slot moves for either party once the trade is accepted");
   ok(guide.includes("- **Locked trades (2026-10-25, revision ab, report-first, applied 2026-10-26 03:50 UTC; `sql/migrations/" + AB_FILE + "`).**") && guide.includes("applied: 2026-10-26 03:50:31 UTC by Faraz (`apply-locked-trade.sh`, from the main clone at `2b7a293`; a `--dry-run` first applied nothing)") && guide.includes("since revision ab\n  (applied 2026-10-26 03:50 UTC) either party applies an accepted trade over a locked slot, holidays included.") && !/revision ab[^\n]*NOT applied yet|revision ab \(prepared 10\/25, not applied yet\)/.test(guide), "the build guide's revision ab bullet and its holiday-plan line read applied 2026-10-26 03:50 UTC");
