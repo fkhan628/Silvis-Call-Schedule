@@ -12458,8 +12458,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(plain(H.appShiftDraftPrune({ "2026-12-11|inbox": true, "2026-12-11|night": true }, c2({ myVacs: [{ start: "2026-12-12", end: "2026-12-13" }] }))), { "2026-12-11|inbox": true }, "the night runs into the vacation and goes; the inbox it overlapped stays");
       assert.deepStrictEqual(plain(H.appShiftDraftPrune({ "2026-12-09|inbox": true, "2026-12-09|night": true, "2026-12-10|inbox": true }, c2({ myVacs: [{ start: "2026-12-10", end: "2026-12-10" }] }))), { "2026-12-09|inbox": true }, "a chain: 12/10 on the vacation, the 12/9 night reaching it, the 12/9 inbox the night overlapped stays");
       assert.deepStrictEqual(plain(H.appShiftDraftPrune({ "2026-12-09|inbox": true, "2026-12-09|night": true }, c2())), { "2026-12-09|night": true }, "two adds that came to overlap: the later key stays");
-      const keep2 = { "2026-12-09|inbox": true, "2026-12-10|night": false };
-      assert.strictEqual(H.appShiftDraftPrune(keep2, c2({ byDay: { "2026-12-10": [{ day: "2026-12-10", type: "night", profileId: PA, name: "Pat Appleton" }] } })), keep2, "nothing to drop: still the SAME object");
+      // the round-2 check (11/17): a drafted removal frees its time for an add in its place - the add overlaps the shift it replaces
+      const keep2 = { "2026-12-10|inbox": true, "2026-12-10|night": false };
+      assert.strictEqual(H.appShiftDraftPrune(keep2, c2({ byDay: { "2026-12-10": [{ day: "2026-12-10", type: "night", profileId: PA, name: "Pat Appleton" }] } })), keep2, "a swap (the night off, an inbox that overlaps it on): nothing to drop, still the SAME object");
+      const swap = { "2026-12-03|night": false, "2026-12-03|half": true };
+      assert.strictEqual(H.appShiftDraftPrune(swap, ctx()), swap, "my saved 12/3 night drafted off and the half that overlaps it drafted on: both stay (Save sends the pair)");
     });
     check("P35 helpers: appShiftSummary / appShiftSavedNote / appVacSavedNote - the database's audit wording ('inbox 11/18, 11/19; removed inbox 11/25', 'vacation 12/1-12/5')", () => {
       assert.strictEqual(H.appShiftSummary([{ day: "2026-12-09", type: "inbox" }, { day: "2026-12-03", type: "night" }, { day: "2026-12-04", type: "inbox" }, { day: "bad", type: "inbox" }, null]), "night 12/3; inbox 12/4, 12/9", "types by their first day, days in order");
