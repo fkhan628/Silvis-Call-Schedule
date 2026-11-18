@@ -22,7 +22,7 @@ Verification: `scripts/verify-rls.sh`.*
 | `shift_trade_requests` | Trades by day + role with an optional return leg and a status lifecycle. Authenticated. `kind` `trade` / `give` (a give is one-way; the database's "a member trade needs a return leg" is the separate follow-up `2026-09-25-member-trade-return-leg.sql`, applied 2026-09-27) - Prompt 19, applied 2026-09-25. Revision y (prepared 2026-10-18 - report-first, **applied live 2026-10-20 00:41 UTC** - section at the end): `proposed_by` / `accepted_by`, the consent stamps the trade triggers write (a roster id when that surgeon agreed himself, else `scheduler`), and `apply_trade` writing the agreeing, submitted receiver's `call_offers` row. |
 | `notifications` | In-app notification feed (recipients ride in `data`). Authenticated. |
 | `notification_preferences` | Per-person email toggles and reminder hour. Own row + scheduler. Prompt 20 F1 (applied 2026-09-27 00:43:54Z): keyed by a new `id`; `person_id` UNIQUE + nullable (a surgeon's row) or `profile_id` → `user_profiles` (an unlinked follower's row), exactly one of the two. Prompt 30 (prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end): `trade_updates_push` / `schedule_updates_push` (boolean not null default true; the phone switches, independent of the e-mail ones). Revision z (prepared 2026-10-20 - report-first, **applied live 2026-10-22 04:33 UTC** - section at the end): `shift_reminders_push` (boolean not null default true; the day-before shift reminder's phone switch, at `reminder_hour_central`, independent of `shift_reminders_email`; a follower's row carries it too). |
-| `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself; since 2026-10-03 16:30 UTC `push.save` / `push.delete` from `save_push_subscription` / `delete_push_subscription`, Prompt 30 - the function writes the row for every role, in the same transaction as its own write). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; the three SQL functions' rows do so (`apply_trade`'s and `claim_open_slot`'s since the item 5b migration - applied 2026-09-24; the two earlier `trade.apply` rows backfilled, section at the end - and `save_app_days`'s since it was applied 2026-10-02 19:19 UTC); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
+| `audit_log` | Who did what; insert by scheduler/admin or by the writer as himself (a linked person's roster id, a coordinator's profile id), read by scheduler/admin (a coordinator: its own `timeoff.` / `offers.` / `availability.` rows; Prompt 21 step 1, applied 2026-09-27 00:49:39Z: every signed-in user the rows he wrote - `audit_read_own`, section at the end; the lost rows the tables could rebuild are backfilled, `detail.backfilled` - the rest listed there). Actions are dotted names written by the client (`schedule.publish`, `schedule.day_edit`, `trade.propose`, `openshifts.notify` for the open-shifts notice, ...) or by a SQL function in the same transaction as its write (`trade.apply` from `apply_trade`, `schedule.claim` from `claim_open_slot`; since 2026-10-02 19:19 UTC `appdays.save` from `save_app_days`, Prompt 29 - the APP cannot insert audit rows itself; since 2026-10-03 16:30 UTC `push.save` / `push.delete` from `save_push_subscription` / `delete_push_subscription`, Prompt 30 - the function writes the row for every role, in the same transaction as its own write; since 2026-11-18 03:04 UTC `appvac.save` from `save_app_vacations`, revision ac (Prompt 35) - an APP's own vacation saves and the scheduler's and the office's for an APP). Rows written by the client (`logAudit`) carry `actor_name` and a `detail.summary` the Activity log renders; these SQL functions' rows do so too (`apply_trade`'s and `claim_open_slot`'s since the item 5b migration - applied 2026-09-24; the two earlier `trade.apply` rows backfilled, section at the end - `save_app_days`'s since it was applied 2026-10-02 19:19 UTC, `save_push_subscription`'s / `delete_push_subscription`'s since 2026-10-03 16:30 UTC and `save_app_vacations`' since revision ac, applied 2026-11-18 03:04 UTC); the `daily-reminder` edge function's `period.close` rows carry `actor_name` only, so the log shows their raw action. |
 | `call_schedule_snapshots` | Restore points captured before destructive actions and once per session. Scheduler/admin. |
 | `client_versions` | Row `main` = minimum version + banner message for the refresh check; other rows = per-client heartbeats. |
 | `office_contacts` | Office recipients of publish/change digests (the ER-panel author). Authenticated-read, scheduler-write. |
@@ -31,11 +31,11 @@ Verification: `scripts/verify-rls.sh`.*
 | `east_vacation_reviews` | Prompt 15 part 2 (2026-09-23, **applied live 2026-09-23 04:37 — see the section at the end**): one row per reviewed Davenport vacation range of a surgeon with an East code — `person_id`, `"start"`, `"end"`, `decision` (`away` \| `home`), `decided_at`, `decided_by`. Dates and a decision only. Authenticated-read, own-rows or scheduler write. The ranges themselves stay in the `east_feed` payload. Prompt 31 Part A (prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): a refresh deletes the stale rows through `east_vacation_reset_stale(p_from)` (one `eastvac.review` audit row each) instead of the client's loop. Revision aa (prepared 2026-10-21 - report-first, **applied live 2026-10-22 04:50 UTC** - section at the end): that reset keeps every review of an East person the cache holds no merged range of ending on or after `p_from` (one `eastvac.reset.kept` audit row instead). |
 | `call_pay_settings` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC** - section at the end: ONE row `main` - the four rates the scheduler enters in Setup > Pay rates (`stipend_per_shift`, `weekday_callin_rate`, `weekend_holiday_callin_rate`, `activation_rate`; null = not set yet, no default and no figure anywhere in the repo), the pay-model flags (`activation_unit`, `weekend_days`, `holiday_unit_days_are_holidays`, `callin_required_weekday`, `callin_required_weekend_holiday`) and `stipend_off_ids` (the roster ids NOT paid by the call stipend - the per-surgeon switch, default ON = not listed; read through `silvis_pay_enabled`). Authenticated only; anon privileges revoked. |
 | `call_pay_logs` | Call pay (Faraz 9/27), **applied live 2026-09-28 01:15 UTC**: one row per call-in of the PRIMARY on a past call day (`day`, `person_id`, `hours` in quarter hours 0-24, optional contact-free `note`, `created_by`); `call_pay_logs_guard` refuses the office coordinator (`PY004`), a switched-off person (`PY005`), a future day (`PY001`), a day the person is not primary (`PY002`) and more than 24 h per day (`PY003`). Authenticated only; anon privileges revoked. |
-| `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end: one row per day (`day` is the primary key - ONE APP per day, the database enforces it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. Revision ac (Faraz 11/17, Prompt 35; prepared 2026-11-17 - report-first, **NOT applied** - section at the end): typed shifts - `shift_type` (the type's id; the shift types are Setup data, `groupRules.appShiftTypes`) and the key `(day, shift_type, profile_id)`; how many APPs one shift may hold on a day is its type's `perDay`, counted by `save_app_days` (re-created with typed JSON lists). |
-| `app_time_off` | APP vacations (Faraz 11/17, Prompt 35, revision ac), prepared 2026-11-17 - report-first, **NOT applied** - section at the end: one row per vacation (`id`, `profile_id` -> `user_profiles` on delete cascade, `start_date`, `end_date`, `source` `app` / `scheduler` / `office`, `created_by`, `created_at`; at most a year). Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_vacations()` only - the APP for itself, the scheduler and the office coordinator for any APP. Never in `time_off` (anon-readable). Not in the blob, snapshots or the data export. |
+| `app_call_days` | APP call days (Faraz 10/1, Prompt 29), prepared 2026-10-02 - report-first, **applied live 2026-10-02 19:19 UTC** - section at the end: one row per day until revision ac (`day` was the primary key - ONE APP per day, the database enforced it), `profile_id` -> `user_profiles` (on delete cascade), `source` `app` / `scheduler`, `created_by` (auth uid), `created_at`. Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_days()` only (authenticated holds SELECT only). Not in the blob, snapshots or the data export. Revision ac (Faraz 11/17, Prompt 35; prepared 2026-11-17 - report-first, **applied live 2026-11-18 03:04 UTC** - section at the end): typed shifts - `shift_type` (the type's id; the shift types are Setup data, `groupRules.appShiftTypes`) and the key `(day, shift_type, profile_id)`; how many APPs one shift may hold on a day is its type's `perDay`, counted by `save_app_days` (re-created with typed JSON lists). |
+| `app_time_off` | APP vacations (Faraz 11/17, Prompt 35, revision ac), prepared 2026-11-17 - report-first, **applied live 2026-11-18 03:04 UTC** - section at the end: one row per vacation (`id`, `profile_id` -> `user_profiles` on delete cascade, `start_date`, `end_date`, `source` `app` / `scheduler` / `office`, `created_by`, `created_at`; at most a year). Authenticated read (every signed-in role), never anon (no anon policy, anon privileges revoked); write = `save_app_vacations()` only - the APP for itself, the scheduler and the office coordinator for any APP. Never in `time_off` (anon-readable). Not in the blob, snapshots or the data export. |
 | `push_subscriptions` | Phone push (Faraz 10/2, Prompt 30), prepared 2026-10-03 - report-first, **applied live 2026-10-03 16:30 UTC** - section at the end: one row per device that turned phone notifications on (`profile_id` -> `user_profiles` on delete cascade, `endpoint` unique - https on a known push service only - `p256dh` / `auth` shape-checked, `device_label`, `created_at`, `last_ok_at` / `last_error_at` / `fail_count` kept by the edge function). Own rows only: authenticated reads the non-secret columns (a column grant - never the endpoint or the keys) and deletes its own rows; write = `save_push_subscription()` only; never anon (no anon policy, anon privileges revoked); not in the realtime publication. Revision z (prepared 2026-10-20 - report-first, **applied live 2026-10-22 04:33 UTC** - section at the end): `replace_push_subscription()` wraps it for the re-arm - it deletes the caller's own earlier row for the device (by the first 16 hex of SHA-256 of its endpoint, the device's flag; never another account's row), then calls the save in the same transaction; no audit row for the replaced row; EXECUTE for authenticated, never anon. |
 
-Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon); `silvis_app_shift_types(p_data)` (revision ac, prepared 2026-11-17 - report-first, NOT applied: the shift types of a blob - `groupRules.appShiftTypes`, absent = the decided Inbox type; security invoker, immutable, EXECUTE for the service role only). Prompt 31 Part A (revision x, prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): `silvis_derived_vacations()` (security definer, stable: the East person's away / unreviewed ranges as person and dates; EXECUTE for authenticated and service_role, never anon), `east_vacation_reset_stale(p_from)` (security definer, volatile: the one review reset of both East feed refreshes - the scheduler or a no-user session; its backstop since revision aa, **applied live 2026-10-22 04:50 UTC** - section at the end: an East person the cache holds no range of keeps his reviews), `silvis_vacation_short_days(p_from, p_to)` (security invoker: the days under the vacation minimum - service_role only) and the internal `silvis_east_people()` / `silvis_east_ranges()` (security invoker, service_role only); `time_off_vacation_guard()` re-created to read the derived rows.
+Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` — `security definer`, `stable`, `search_path = public`; `silvis_is_app()` (Prompt 29, applied 2026-10-02 19:19 UTC: the caller's APP flag; `search_path = public, pg_temp`, EXECUTE for authenticated and service_role, never anon); `silvis_app_shift_types(p_data)` (revision ac, applied 2026-11-18 03:04 UTC: the shift types of a blob - `groupRules.appShiftTypes`, absent = the decided Inbox type; security invoker, immutable, EXECUTE for the service role only). Prompt 31 Part A (revision x, prepared 2026-10-14 - report-first, **applied live 2026-10-19 22:53 UTC** - section at the end): `silvis_derived_vacations()` (security definer, stable: the East person's away / unreviewed ranges as person and dates; EXECUTE for authenticated and service_role, never anon), `east_vacation_reset_stale(p_from)` (security definer, volatile: the one review reset of both East feed refreshes - the scheduler or a no-user session; its backstop since revision aa, **applied live 2026-10-22 04:50 UTC** - section at the end: an East person the cache holds no range of keeps his reviews), `silvis_vacation_short_days(p_from, p_to)` (security invoker: the days under the vacation minimum - service_role only) and the internal `silvis_east_people()` / `silvis_east_ranges()` (security invoker, service_role only); `time_off_vacation_guard()` re-created to read the derived rows.
 
 ## (b) RLS policies — who can read / write
 
@@ -49,7 +49,7 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `shift_trade_requests` | authenticated | insert: proposer or scheduler; update: parties + scheduler, and a trigger restricts non-schedulers to status moves on a pending trade (counter-party → accepted/declined, proposer → cancelled) |
 | `notifications` | authenticated | insert: any authenticated user |
 | `notification_preferences` | own row or scheduler | own row or scheduler. Prompt 20 F1 (applied 2026-09-27): "own" = `person_id = silvis_person_id()` or `profile_id = auth.uid()`; Prompt 30 (applied 2026-10-03 16:30 UTC): the two `*_push` columns ride on the same row and policy; Revision z (prepared 2026-10-20 - report-first, **applied live 2026-10-22 04:33 UTC** - section at the end): `shift_reminders_push` rides the same row and policy |
-| `audit_log` | scheduler/admin, every row (`audit_read`); a coordinator its own `timeoff.` / `offers.` / `availability.` rows (`audit_read_coord`, Prompt 16 A7). Prompt 21 step 1 (applied 2026-09-27 00:49:39Z, after the 24-hour gate): `audit_read_own` - every signed-in user the rows he wrote (`actor_id` = his roster id when linked, else his profile id), which the client's `INSERT ... RETURNING` needs | insert (`audit_insert`, Prompt 16 A1 / A7): scheduler/admin, a linked person as himself (`actor_id` = his roster id), a coordinator as itself (`actor_id` = its profile id); an unlinked viewer none (an APP's `appdays.save` rows are written by the definer `save_app_days`, Prompt 29 - not through an insert policy) |
+| `audit_log` | scheduler/admin, every row (`audit_read`); a coordinator its own `timeoff.` / `offers.` / `availability.` rows (`audit_read_coord`, Prompt 16 A7). Prompt 21 step 1 (applied 2026-09-27 00:49:39Z, after the 24-hour gate): `audit_read_own` - every signed-in user the rows he wrote (`actor_id` = his roster id when linked, else his profile id), which the client's `INSERT ... RETURNING` needs | insert (`audit_insert`, Prompt 16 A1 / A7): scheduler/admin, a linked person as himself (`actor_id` = his roster id), a coordinator as itself (`actor_id` = its profile id); an unlinked viewer none (an APP's `appdays.save` rows are written by the definer `save_app_days`, Prompt 29, and its `appvac.save` rows by the definer `save_app_vacations`, revision ac, applied 2026-11-18 03:04 UTC - not through an insert policy) |
 | `call_schedule_snapshots` | scheduler/admin | scheduler/admin |
 | `office_contacts` | authenticated | scheduler/admin |
 | `call_offers` | authenticated | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin; never anon (deliberately absent from the anon `read_all` loop) |
@@ -57,8 +57,8 @@ Helper functions: `silvis_role()`, `silvis_person_id()`, `silvis_is_sched()` —
 | `east_vacation_reviews` (applied 2026-09-23) | authenticated (**no anon policy** — an anon read is a silent `200 + []`) | insert/update/delete: the surgeon named in the row (`person_id = silvis_person_id()`) or scheduler/admin |
 | `call_pay_settings` - applied 2026-09-28, call pay 9/27 | scheduler/admin; the office coordinator (read-only, 9/27 item 5a); a surgeon-role account linked to a roster id that is paid by the call stipend (`silvis_pay_enabled`, item 5b); never a switched-off surgeon / viewer / follower / anon (anon privileges revoked) | scheduler/admin (all verbs) |
 | `call_pay_logs` - applied 2026-09-28, call pay 9/27 | scheduler/admin and the office coordinator every row (a switched-off surgeon's earlier rows included); a surgeon-role account his own rows while switched on (`person_id = silvis_person_id() and silvis_pay_enabled(person_id)`); nobody else (anon privileges revoked) | insert/update/delete: scheduler/admin, and that surgeon his own rows while switched on - never the coordinator; `call_pay_logs_guard` (PY004 office, PY005 switched off, PY001-PY003) applies to every caller, the scheduler included |
-| `app_call_days` - applied 2026-10-02 19:19 UTC | every signed-in role (`app_call_days_read`: surgeon, coordinator, viewer, APP, follower, scheduler); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_days()` (security definer): an APP its own days, the scheduler any APP's (`AP001`-`AP007` refuse the rest); revision ac (prepared 2026-11-17 - report-first, NOT applied): typed shifts, `AP001`-`AP010` (perDay, type / weekday / holiday, overlap, the APP's vacation) |
-| `app_time_off` - revision ac, prepared 2026-11-17 - report-first, NOT applied | every signed-in role (`app_time_off_read`); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_vacations()` (security definer): the APP its own, the scheduler and the office coordinator any APP's (`AV001`-`AV008` refuse the rest - a vacation over the APP's own shift `AV005`, a started vacation `AV006` for all but the scheduler) |
+| `app_call_days` - applied 2026-10-02 19:19 UTC | every signed-in role (`app_call_days_read`: surgeon, coordinator, viewer, APP, follower, scheduler); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_days()` (security definer): an APP its own days, the scheduler any APP's (`AP001`-`AP007` refuse the rest); revision ac (applied 2026-11-18 03:04 UTC): typed shifts, `AP001`-`AP010` (perDay, type / weekday / holiday, overlap, the APP's vacation) |
+| `app_time_off` - revision ac, applied 2026-11-18 03:04 UTC | every signed-in role (`app_time_off_read`); never anon (no anon policy, anon privileges revoked) | none directly (authenticated holds SELECT only) - `save_app_vacations()` (security definer): the APP its own, the scheduler and the office coordinator any APP's (`AV001`-`AV008` refuse the rest - a vacation over the APP's own shift `AV005`, a started vacation `AV006` for all but the scheduler) |
 | `push_subscriptions` - applied 2026-10-03 16:30 UTC | its own rows only (`push_subscriptions_own_read`: `profile_id = auth.uid()`), the non-secret columns only (`id, profile_id, device_label, created_at, last_ok_at, last_error_at, fail_count` - a column grant; never `endpoint` / `p256dh` / `auth`); never anon (no anon policy, anon privileges revoked); the scheduler sees only his own devices too | insert / update: none directly (no privilege) - `save_push_subscription()` (security definer: `PS001`-`PS007`); delete: its own rows (`push_subscriptions_own_delete`); the service role (the edge function) keeps the bookkeeping and removes 404 / 410 rows; Revision z (prepared 2026-10-20 - report-first, **applied live 2026-10-22 04:33 UTC** - section at the end): `replace_push_subscription()` (security definer) deletes the caller's own earlier row by its endpoint's 16-hex hash, then calls the save, in one transaction (no audit row for the replaced row) |
 
 ## (c) Findings
@@ -2450,6 +2450,12 @@ re-run against the live project after the record step (the record lane ran nothi
 ## 2026-10-02 - APP call days: app_call_days + save_app_days / app_call_names + user_profiles.is_app (Faraz 10/1, Prompt 29; `sql/migrations/2026-10-02-app-call-days.sql`)
 
 **Status: APPLIED 2026-10-02 19:19:27Z** (Faraz, from PowerShell through Git's bash.exe - `apply-app-call-days.sh`, which exports `AI_AGENT`; the observed lines at the end). Was PREPARED - report-first, NOT APPLIED until then.
+
+*Since revision ac (applied 2026-11-18 03:04:10Z - the section "2026-11-17 - APP shifts and APP vacations"): `app_call_days` is typed
+(`shift_type`, the key `day, shift_type, profile_id`), the date-list `save_app_days(uuid, date[], date[], boolean)` gave way to the typed
+`save_app_days(uuid, jsonb, jsonb, uuid)`, `app_call_names()` also names the holders of APP vacations, and this section's probe reads
+`PROBE_SETUP: superseded by revision ac` (verify-rls 18f passes it; its 69 cases last read as listed right before that apply). Roll
+revision ac back first (its section) before using this section's rollback lines.*
 
 Faraz 10/1 6:33 PM: "I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me
 ... This would also show up on the calendar". The four decisions (Faraz 10/1): **any day; ONE APP per day; everyone signed in
@@ -5233,11 +5239,17 @@ reading of both.
 
 ## 2026-11-17 - APP shifts and APP vacations: app_call_days typed + app_time_off + save_app_vacations / silvis_app_shift_types, save_app_days and app_call_names re-created (Faraz 11/17, Prompt 35; `sql/migrations/2026-11-17-app-shifts.sql`)
 
-**Status: PREPARED - report-first, NOT APPLIED** (revision ac; u stays reserved for the weekend pair claim; ab was the last letter applied,
-2026-10-26 03:50:31Z). Nothing in the repo applies it: Faraz's apply script `apply-app-shifts.sh` (kept outside the repo) runs it and
-he pastes the log back; the record step then fills the observed paragraph at the end of this section, drops `SILVIS_APP_SHIFTS_APPLIED`
-from verify-rls (section 25 strict) and turns the revision's lines "applied ...". The client that reads and writes the typed shifts and
-the APP vacations ships after the apply, on Faraz's go.
+**Status: APPLIED 2026-11-18 03:04:10Z by Faraz** (`apply-app-shifts.sh`, its CLI in agent mode (`AI_AGENT=1`), repo HEAD `6b8f502` on
+`feat/app-shifts` - the pins from `6b8f502`, all six matched; log `apply-app-shifts-20261118T030326Z.log`, APPLIED AND VERIFIED; one
+`--dry-run` at 20261118T030109Z before it applied nothing; 11/17 21:04 in Central time); recorded by this section's record step
+(2026-11-18: the migration's trailer line, verify-rls section 25 strict with `SILVIS_APP_SHIFTS_APPLIED` dropped; docs, SQL comments,
+probes, verify-rls and tests only). The observed paragraph at the end of this section is copied from the log. The typed shifts and the
+APP vacations work from the build that ships Prompt 35's client (the branch's merge to main, on Faraz's go); an earlier build's APP
+Save is refused (Blast radius, below).
+*As prepared:* Revision ac (u stays reserved for the weekend pair claim; ab was the last letter applied, 2026-10-26 03:50:31Z). Nothing
+in the repo applies it: Faraz's apply script `apply-app-shifts.sh` (kept outside the repo) runs it and he pastes the log back; the
+record step then fills the observed paragraph at the end of this section, drops `SILVIS_APP_SHIFTS_APPLIED` from verify-rls (section
+25 strict) and turns the revision's lines "applied ...".
 
 Faraz 11/17: the APPs "enter their own vacations and put themselves on shifts that have hours"; "for now there is one shift: the
 weekday inbox shift, 7a-5p, mainly for answering inbox messages"; "weekends and weeknights may come later, so shift types are data in
@@ -5416,10 +5428,19 @@ holiday unit - the first probe to do so); a scheduler's blob save waits for it f
 blob carries none of it afterwards. **Expected verify-rls counts** (no JWT, the CLI linked): the branch's script before the apply
 **664 / 0** (657 + section 25's not-applied picture: 25a-25e, the PROBE_SETUP, the leftover count); right after the apply, with
 `SILVIS_APP_SHIFTS_APPLIED=1`, **731 / 0** (section 18: 74 -> 6; section 25: 142 = 25a-25e, the count line, 135 cases, the leftover
-count); the plain runs after the record step the same 731.
+count); the plain runs after the record step the same 731. *As run (2026-11-18): applied 03:04:10Z (11/17 21:04 in Central time)
+with no APP shift on file - `appdays_rows=0` before and after (pre-check row 2) - so no saved shift was at stake; until the build that
+ships Prompt 35's client (pushed on Faraz's go) an older build's APP Save is refused and writes nothing (by design - an old build's
+signed-in 22P02 refusal was not observed live). The apply run's verify-rls, with `SILVIS_APP_SHIFTS_APPLIED=1`, read **731 passed, 0
+failed** (section 18 6 / 0: 18a-18d HTTP 401 `42501`, 18f the superseded probe, its leftover count; section 25 142 / 0: 25a-25e HTTP
+401 `42501`, the count line, the 135 cases, the leftover count - no probe type or holiday left in the live blob); the record step
+dropped the flag, so a plain run of this branch's script expects the same 731 / 0 - not run live since. Until the merge (the client
+push) main's `scripts/verify-rls.sh` is the older one - no section 25, its 18c still sends the old true / false replace flag and its
+18f runs Prompt 29's probe without the superseded arm, on the typed table - so a run from a main checkout FAILs several section 18
+checks against the live database: expected, not a regression; run this branch's script until the merge.*
 
 **What could break, and the offline proof** (PGlite 0.5.16 - WASM PostgreSQL, Supabase's roles, `auth.uid()` and default
-privileges stubbed; outside the repo, never a dependency; 2026-11-17): main's `sql/schema.sql` (revision ab = the live database) with
+privileges stubbed; outside the repo, never a dependency; 2026-11-17): main's `sql/schema.sql` (revision ab = the live database until this apply) with
 the seed's holiday units in the blob; Prompt 29's probe read its 69 cases as listed; this probe read `PROBE_SETUP: app_call_days.shift_type
 is absent`; the migration applied; the pre-check's gate read as listed below; this probe read all 135 cases as its header lists;
 Prompt 29's probe read `PROBE_SETUP: superseded by revision ac`; nothing persisted (no probe user, row, audit row, type or holiday);
@@ -5434,7 +5455,12 @@ the AFTER picture 142 / 0 (and with the CLI's `\u003e` escapes), a wrong case, a
 collision each FAIL, the not-applied picture 7 / 0 without the flag and 1 / 6 with it. What PGlite cannot show: the live grants after
 Supabase's own default privileges, PostgREST's 401 / 403 / 404 and its schema cache, the CLI's transaction (the apply script's
 leftover counts and verify-rls 25 check them live), and the live collation (no expected text orders strings that collations sort
-differently).
+differently). *As run (2026-11-18): the live probe AFTER read all 135 cases exactly as their header strings (`<today M/D>` = 11/17,
+the run's Central date) - P1-P3 included (the keys, checks, cascades and policies, the grants after Supabase's own default privileges
+and the revokes, search_path, the old signature gone), A2 / A27 / C3 / D2 (the definers' audit rows under the live owner) and X1 (the
+cascade); the pre-check's grants read `save=t/f vac=t/f types=f/f/t names=t/f` after; 25a-25e answered HTTP 401 `42501` right after
+the reload (PostgREST's schema cache knew the three keys of `save_app_vacations` and the typed `save_app_days`); the CLI's one
+transaction persisted nothing (the leftover count `in_window=0 tagged=0`, 25h 0).*
 
 **The pre-check** (`sql/probes/app-shifts-precheck.sql`, read-only, one SELECT; it never names the new objects outside catalog lookups
 and `query_to_xml` counts): row 1 is the apply gate - BEFORE `shift_type=no pk=day vac_table=no types_fn=no save_sig=old vac_fn=no
@@ -5612,11 +5638,26 @@ run's Central date):
    pinned with a negative pin on "prepared" / "NOT applied" (as Prompt 29's record step did).
 10. The client push, on Faraz's go (the branch's merge to main - a live deploy).
 
+*As run (2026-11-18, 11/17 in Central time): items 1-8 by `apply-app-shifts.sh` (Faraz, repo HEAD `6b8f502` on `feat/app-shifts`, the
+pins from `6b8f502` - all six matched), its steps 0-8 in this order: the six sha256 checks, the known-good read and the pre-check, Prompt
+29's probe BEFORE, this probe BEFORE, the migration (after typing APPLY), the gate again, this probe AFTER and its leftover count,
+Prompt 29's probe AFTER, `SILVIS_APP_SHIFTS_APPLIED=1 bash scripts/verify-rls.sh` - the list above and the log number the steps alike;
+the first failure of any step stops the script, and every step read as listed (the observed paragraph at the end). A `--dry-run` at
+20261118T030109Z ran steps 0-3 first and applied nothing. Item 9 is the record commit, as listed: the migration kept byte for byte as it
+ran (sha256 `36ca256ccf683488ab22df8334c0e8b5109a5c531470c7f88c325b4abb81c35a`, pinned in `test/schema.test.js`) with ONE trailer line;
+the probe's and the pre-check's headers read APPLIED with an as-run note, and Prompt 29's probe header records this apply in one;
+`SILVIS_APP_SHIFTS_APPLIED` no longer exists (section 25 is strict by default). The record step changes five of the six graded files
+(the migration through its trailer - its body's sha256 unchanged - the headers of this probe, the pre-check and Prompt 29's probe, and
+`scripts/verify-rls.sh`), so the script is one-shot: a re-run or `--dry-run` needs its pins refreshed (only
+`sql/migrations/2026-10-02-app-call-days.sql` keeps its). Item 10 follows, on Faraz's go.*
+
 **One command (Faraz):** his apply script `apply-app-shifts.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine paths)
 - it checks the sha256 of every file it runs (the migration, the pre-check, both probes, verify-rls and the rollback file), runs steps
 1-8 above, stops at the first failure (nothing after it runs), asks for `APPLY` in capitals on the terminal before step 4, has a
 `--dry-run` (steps 1-3 only), exports `AI_AGENT=1`, writes a log and ends with a PASTE THIS BACK TO CLAUDE CODE block for the record
-step. Its section in the private apply-scripts README gives the PowerShell lines.
+step. Its section in the private apply-scripts README gives the PowerShell lines. Faraz ran it on 2026-11-18 (UTC; the evening of 11/17 in
+Central time) at `6b8f502` on `feat/app-shifts` (the observed paragraph at the end; a `--dry-run` at 20261118T030109Z first applied
+nothing); the record step followed from its paste-back block.
 
 **Rolling back** (only on Claude Code's and Faraz's decision; the APP shifts and vacations are LOST - export them first:
 `select * from public.app_call_days order by day, shift_type;` and `select * from public.app_time_off order by start_date;`):
@@ -5634,3 +5675,199 @@ then re-run `sql/migrations/2026-10-02-app-call-days.sql` (revision v, idempoten
 `save_app_days(uuid, date[], date[], boolean)` and `app_call_names()` as applied 2026-10-02, and re-runs the `is_app` column, its check
 and the two self policies the same. A rollback after the client push only empties the APP features (the client reads the missing column,
 table or function as "unavailable"). Prompt 29's probe then reads its 69 cases again; this probe reads PROBE_SETUP.
+
+**Observed** (apply, 2026-11-18): `apply-app-shifts.sh` (Faraz; repo HEAD `6b8f502` on `feat/app-shifts` - the pins from `6b8f502`, all six
+matched: the migration `36ca256ccf683488ab22df8334c0e8b5109a5c531470c7f88c325b4abb81c35a`, the pre-check
+`79ed83487b608069bdd58855a14409645c8b76459826132557f236c46e504985`, this probe `423d53a974f94832e3eab076ecb3b3669f76b957c644440bc72c4bec18867d96`,
+Prompt 29's probe `da2f6469aaec0d6a395e61a4f280a14ab51d7bdcd4ab9d27d3b0f08e6f55c184`, `scripts/verify-rls.sh`
+`ee14f1d0c441d5acbdb0f988579dfdda7292ddb2a38cc34dab16b00a25c2c4bf` and the rollback's `sql/migrations/2026-10-02-app-call-days.sql`
+`ac8c83048c4daf1859127c1f3aacfa4f857bade726660e97a7e5f1925c42f2e7`; the CLI 2.120.0 in agent mode, `AI_AGENT=1`, the workdir linked to
+`bzhsroegtagqhutbnsrp`; log `apply-app-shifts-20261118T030326Z.log`, outside the repo, result **APPLIED AND VERIFIED**; the run's
+Central date 11/17). Step 1: the known-good read `ok` (the agent-mode envelope; the linked database is Silvis's), then the pre-check
+(read-only) - the gate before and its facts (counts only), as the log printed them:
+
+```text
+objects: shift_type=no pk=day vac_table=no types_fn=no save_sig=old vac_fn=no names_vac=no
+rows: appdays_rows=0 appvac_rows=absent appdays_audit=0 appvac_audit=0
+accounts: apps=2 named_apps=2 coordinators=2
+setup: blob_types=absent holiday_years=2026,2027
+grants: save=- vac=- types=- names=t/f
+realtime: publication=yes all_tables=no app_call_days_published=no app_time_off_published=no
+```
+
+Step 2, Prompt 29's probe BEFORE: 69 / 69, each as its header states (`<today M/D>` = 11/17). Step 3, this probe BEFORE:
+`PROBE_SETUP: app_call_days.shift_type is absent - sql/migrations/2026-11-17-app-shifts.sql is not applied` (nothing else ran). Step 4:
+APPLY typed; applied 2026-11-18T03:04:10Z (the migration file through `supabase db query --linked`, exit 0, an empty result
+`"rows": []`). Step 5, the gate after and its facts:
+
+```text
+objects: shift_type=yes pk=day,shift_type,profile_id vac_table=yes types_fn=yes save_sig=new vac_fn=yes names_vac=yes
+rows: appdays_rows=0 appvac_rows=0 appdays_audit=0 appvac_audit=0
+accounts: apps=2 named_apps=2 coordinators=2
+setup: blob_types=absent holiday_years=2026,2027
+grants: save=t/f vac=t/f types=f/f/t names=t/f
+realtime: publication=yes all_tables=no app_call_days_published=no app_time_off_published=no
+```
+
+Step 6, this probe AFTER - 135 cases, every one as the probe table above lists (`<today M/D>` = 11/17), as the apply script's
+paste-back block printed them (verify-rls's echo of the same cases keeps the CLI's JSON escaping on A44, E6, E7 and I1 - backslashes
+before each double quote - which section 25's case reader strips):
+
+```text
+A1=ok added=2 removed=0 kept=0 source=app 3/3=inbox:one/app 3/4=inbox:one/app by=self
+A10=ERR AP006 APP_DAY_PAST: 6/1 is before today (11/17) in Central time - a past day stays as it was
+A11=ERR AP002 APP_DAY_NOT_YOURS: an APP adds or removes only their own shifts - ask the scheduler
+A12=ERR AP002 APP_DAY_NOT_YOURS: only the scheduler can replace another APP on a shift
+A13=ERR 42501 permission denied for table app_call_days
+A14=ERR AP008 APP_DAY_NO_SHIFT: 3/1 is a Saturday (Inbox does not run that day) - nothing was saved
+A15=ERR AP008 APP_DAY_NO_SHIFT: 3/12 is a holiday (Inbox does not run on holidays) - nothing was saved
+A16=ERR AP008 APP_DAY_NO_SHIFT: there is no nosuch shift type - nothing was saved
+A17=ERR AP008 APP_DAY_NO_SHIFT: the probe-old shift is retired - nothing was saved
+A17s=3/6=none
+A18=ok added=1 3/3=inbox:one/app+probe-night:one/app
+A19=ERR AP009 APP_DAY_OVERLAP: 3/3 probe-long overlaps 3/3 inbox, 3/3 probe-long overlaps 3/3 probe-night - one APP holds one shift at a time (nothing was saved)
+A2=audit=1 actor=self name=probe shifts one sums=probe shifts one: inbox 3/3, 3/4
+A20=ERR AP009 APP_DAY_OVERLAP: 3/7 probe-night overlaps 3/8 probe-day - one APP holds one shift at a time (nothing was saved)
+A21=ok added=1 3/15=probe-day:one/app
+A22=ERR AP009 APP_DAY_OVERLAP: 3/14 probe-night overlaps 3/15 probe-day - one APP holds one shift at a time (nothing was saved)
+A23=rows=3
+A24=names=1 self=yes
+A25=ERR 42501 permission denied for function silvis_app_shift_types
+A26=ok added=1 removed=0 kept=0 source=app vac=3/17-3/21:one/app
+A27=vaudit=1 actor=self name=probe shifts one sums=probe shifts one: vacation 3/17-3/21
+A28=ok added=0 kept=1 audit=false
+A29=ERR AP010 APP_DAY_VACATION: 3/18 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)
+A3=ok added=0 kept=2 audit=false audit_rows=1
+A30=ERR AP010 APP_DAY_VACATION: 3/16 probe-day is on probe shifts one's vacation - change the vacation first (nothing was saved)
+A31=ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)
+A32=ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/3 probe-night - remove the shift first (nothing was saved)
+A33=ERR AV008 APP_VACATION_OVERLAP: probe shifts one is already away 3/17-3/21 - change that vacation instead (nothing was saved)
+A34=ERR AV004 APP_VACATION_BAD_RANGE: 3/25-3/24 ends before it starts - nothing was saved
+A35=ERR AV004 APP_VACATION_BAD_RANGE: 3/24-3/26 and 3/26-3/28 overlap - nothing was saved
+A36=ERR AV004 APP_VACATION_BAD_RANGE: 3/24-3/24 is longer than a year - nothing was saved
+A37=ERR AV002 APP_VACATION_NOT_YOURS: an APP enters, changes or removes only their own vacations - ask the scheduler or the office
+A38=ERR 42501 permission denied for table app_time_off
+A39=ok added=1 removed=1 vac=3/17-3/22:one/app sums=probe shifts one: vacation 3/17-3/21 | probe shifts one: vacation 3/17-3/22, removed vacation 3/17-3/21
+A4=ok removed=1 3/4=none sums=probe shifts one: inbox 3/3, 3/4 | probe shifts one: removed inbox 3/4
+A40=ERR AV007 APP_VACATION_STALE: a vacation in the list is gone or is not probe shifts one's - reload Time off (nothing was saved)
+A41=ERR AV004 APP_VACATION_BAD_RANGE: a vacation in the list is not a first and a last day - nothing was saved
+A42=vrows=1
+A43=ERR AV004 APP_VACATION_BAD_RANGE: a day in the list is not a calendar day - nothing was saved
+A44=ERR 42501 new row violates row-level security policy for table "user_profiles"
+A45=updated=1
+A5=ok removed=0 absent=1 audit=false
+A6=ERR AP004 APP_DAY_BAD_DAY: 3/5 inbox is both added and removed in one save - nothing was saved
+A7=ERR AP004 APP_DAY_BAD_DAY: a shift in the list is not a day and a shift type - nothing was saved
+A8=ERR AP004 APP_DAY_BAD_DAY: a day in the list is not a calendar day - nothing was saved
+A9=ERR AP004 APP_DAY_BAD_DAY: at most 400 shifts in one save - nothing was saved
+B1=ERR AP005 APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved
+B1s=3/3=inbox:one/app+probe-night:one/app
+B2=ok added=1 3/3=inbox:one/app+probe-night:one/app+probe-night:two/app
+B3=ERR AP002 APP_DAY_NOT_YOURS: 3/3 inbox is probe shifts one's shift - only that APP or the scheduler can remove it (nothing was saved)
+B4=ERR AP005 APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved
+B4s=3/10=none
+B5=ERR AV007 APP_VACATION_STALE: a vacation in the list is gone or is not probe shifts two's - reload Time off (nothing was saved)
+B6=ok added=1 source=app vac=3/17-3/22:one/app+3/27-3/28:two/app
+B7=vrows=2
+B8=names=2
+C1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift
+C2=ok added=1 source=office vac=3/17-3/22:one/app+3/24-3/26:two/office+3/27-3/28:two/app
+C3=actor=self name=probe shifts office sums=probe shifts two: vacation 3/24-3/26
+C4=ok removed=1 source=office vac=3/17-3/22:one/app+3/27-3/28:two/app
+C5=ERR AV001 APP_VACATION_NOT_ALLOWED: name the APP (pick one in Time off)
+C6=ERR AV003 APP_VACATION_NOT_APP: probe shifts viewer is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+C7=names=3 one=app two=app three=app
+C8=rows=4 vrows=2
+C9=ok added=1 source=office
+D1=ok added=1 source=scheduler 3/10=inbox:two/scheduler by=admin
+D10=ERR AP003 APP_DAY_NOT_APP: probe shifts viewer is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+D11=ERR AP003 APP_DAY_NOT_APP: that account is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+D12=ERR AP001 APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)
+D13=ERR AP004 APP_DAY_BAD_DAY: a change takes a shift over from another APP - name the shift and that APP (nothing was saved)
+D14=ok added=1 source=scheduler vac=6/1-6/5:one/scheduler+3/17-3/22:one/app+3/27-3/28:two/app+3/29-3/30:three/office
+D15=ERR AV005 APP_VACATION_ON_SHIFT: probe shifts two holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)
+D16=ERR AP010 APP_DAY_VACATION: 3/19 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)
+D17=names=3 one=app two=app three=app
+D18=updated=1 is_app=false
+D19=ERR AP007 APP_DAY_STALE: 3/3 probe-night is already probe shifts two's shift - reload the calendar (nothing was saved)
+D19s=3/3=inbox:two/scheduler+probe-night:one/app+probe-night:two/app
+D2=actor=s1 name=probe shifts admin sums=probe shifts two: inbox 3/10
+D3=ok removed=1 3/10=none
+D4=ok added=1 6/1=inbox:one/scheduler
+D5=ok removed=1 6/1=none
+D6=ERR AP005 APP_DAY_TAKEN: 3/3 inbox already has probe shifts one - nothing was saved
+D7=ok added=1 replaced=1 3/3=inbox:two/scheduler+probe-night:one/app+probe-night:two/app last=probe shifts two: inbox 3/3 (was probe shifts one)
+D8=ERR AP007 APP_DAY_STALE: 3/3 inbox is no longer probe shifts one's shift - reload the calendar (nothing was saved)
+D9=ERR AP007 APP_DAY_STALE: 3/3 inbox is probe shifts two's shift - reload the calendar (nothing was saved)
+E1=names=3 one=app two=app three=former
+E2=ok removed=1 vac=3/17-3/22:one/app+3/27-3/28:two/app+3/29-3/30:three/office
+E3=ok removed=1 3/6=none
+E4=ERR AV003 APP_VACATION_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+E5=ERR AP003 APP_DAY_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
+E6=ERR 23514 new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"
+E7=ERR 23514 new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"
+F1=ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is 11/17 in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)
+G1=ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is 11/17 in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)
+H1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift
+H2=ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation
+H3=3/6=inbox:three/app
+I1=ERR 42501 new row violates row-level security policy for table "user_profiles"
+I2=ok is_app=false
+N1=ERR 42501 permission denied for table app_call_days
+N2=ERR 42501 permission denied for table app_time_off
+N3=ERR 42501 permission denied for function app_call_names
+N4=ERR 42501 permission denied for function save_app_days
+N5=ERR 42501 permission denied for function save_app_vacations
+N6=ERR 42501 permission denied for function silvis_app_shift_types
+N7=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift
+N8=ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation
+N9=names=0
+P1=table=yes rls=yes pk=day,shift_type,profile_id shape=app_call_days_shift_type_shape fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no
+P2=table=yes rls=yes pk=id range=app_time_off_range fk=cascade policies=app_time_off_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no
+P3=save=definer/volatile vac=definer/volatile names=definer/stable types=invoker/immutable paths=4 old_save=no save_anon=no save_auth=yes vac_anon=no vac_auth=yes names_anon=no names_auth=yes types_anon=no types_auth=no types_service=yes
+P4=inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f | probe-night Probe night 1020-420 d=1,2,3,4,5 h=f n=2 r=f | probe-day Probe day 360-360 d=0,6 h=t n=1 r=f | probe-long Probe long 720-1200 d=1,2,3,4,5 h=f n=1 r=f | probe-old Probe old 420-1020 d=1,2,3,4,5 h=f n=1 r=t
+P5=absent=inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f null=inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f notlist=inbox Inbox 420-1020 d=1,2,3,4,5 h=f n=1 r=f empty=none
+S1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift
+S2=ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation
+S3=rows=4
+S4=vrows=2
+S5=names=2 one=probe shifts one two=probe shifts two three=-
+S6=ERR 42501 permission denied for table app_time_off
+S7=names=3 one=probe shifts one two=probe shifts two three=probe shifts three
+T1=ERR AP005 APP_DAY_TAKEN: 3/3 probe-night already has probe shifts one and probe shifts two (2 a day) - nothing was saved
+T2=ok added=1 3/6=inbox:three/app
+V1=ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift
+V2=ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation
+V3=rows=5 vrows=3
+W1=inserted 3/27=probe-gone:one/scheduler
+W2=ERR AP009 APP_DAY_OVERLAP: 3/27 inbox overlaps 3/27 probe-gone - one APP holds one shift at a time (nothing was saved)
+W3=ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/27 probe-gone - remove the shift first (nothing was saved)
+W4=ok added=1 source=app
+W5=ok added=1 source=app
+W6=ok added=1 3/31=inbox:one/app
+W7=ERR AP010 APP_DAY_VACATION: 3/4 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)
+W8=ok added=1 3/10=inbox:one/app
+W9=ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/10 inbox - remove the shift first (nothing was saved)
+X1=before=2/1 after=0/0 audit_kept=yes
+```
+
+then the probe's leftover count (verify-rls 25h's query): `in_window=0 tagged=0` - persisted nothing. Step 7, Prompt 29's probe AFTER:
+`PROBE_SETUP: superseded by revision ac - app_call_days has shift_type (sql/migrations/2026-11-17-app-shifts.sql);
+sql/probes/app-shifts-probe.sql proves the APP shifts`. Step 8, `SILVIS_APP_SHIFTS_APPLIED=1 bash scripts/verify-rls.sh` (agent mode, the
+linked workdir; section 25 graded strictly): `RESULT: 731 passed, 0 failed` - section 18 6 / 0: 18a-18d `HTTP 401` (`42501`; 18c
+`permission denied for function save_app_days`: PostgREST knows the four keys), 18f `APP days probe: superseded by revision ac -
+app_call_days has shift_type (Prompt 35); section 25 grades sql/probes/app-shifts-probe.sql instead`, its leftover count 0; section 25
+142 / 0: 25a `HTTP 401` (`42501`, the table), 25b `HTTP 401` (`permission denied for function save_app_vacations`: PostgREST knows the
+three keys), 25c `HTTP 401` (`permission denied for function save_app_days` - a typed list), 25d `HTTP 401` (`permission denied for
+function silvis_app_shift_types`), 25e `HTTP 401` (`42501`, the insert), `APP shifts probe: 135 cases reported`, every one of the 135
+cases PASS and its leftover count 0 (no probe shift type or holiday left in the live blob); every other section green with every
+leftover count 0; the JWT-gated checks (3, 6, 7c-7e, 8c / 8d, 9d, 14c, 18e, 19f, 20e, 25f) skipped - no JWT set. One earlier run applied
+nothing: the `--dry-run` at 20261118T030109Z (`feat/app-shifts` at `6b8f502`, the same six sha256) read steps 0-3 as above and stopped
+there by design - `DRY RUN - nothing applied`, `APPLY confirmation: not reached`, `migration: not run`. The record step (one commit,
+item 9 and its as-run note): this status, tables (a) / (b)'s `audit_log`, `app_call_days` and `app_time_off` rows and the helper
+line, a pointer in the Prompt 29 section, schema.sql revision ac's three lines, the migration's trailer line and sha256 pin, the
+probe's and the pre-check's headers and an as-run note in Prompt 29's probe header, verify-rls section 25 strict by default with
+`SILVIS_APP_SHIFTS_APPLIED` dropped, the build guide's 4.2 row, 4.3 bullet and Proof line and section 27, the rules doc's section 1
+row and section 8 item 30, ONBOARDING, CLAUDE.md, the smoke's three comments, and the test pins with them. Not
+re-run against the live project after the record step (the record lane ran nothing live); the next plain `bash scripts/verify-rls.sh`
+grades section 25 strictly with no flag - expected **731 passed, 0 failed**.

@@ -13413,6 +13413,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       ['" already has " + appNamesJoin(by, "")', '" (" + st.perDay + " a day)"', '" is " + appNamesJoin(x.by, "\'s") + " shift"', '" overlaps "', 'const appNamesJoin = (pids, suffix) => pids.map(appNameOfP).sort().map(n => n + suffix).join(" and ");'].forEach(p => assert.ok(SMOKEP.includes(p), "the mock builds " + p));
       assert.ok(SMOKEP.includes('const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));'), "the mock's M/D = to_char FMMM/FMDD");
       assert.ok(SMOKEP.includes('const APP_MOCK_TYPES_DEFAULT = [' + JSON.stringify(plain(H.APP_SHIFT_TYPES_DEFAULT)[0]).replace(/"([a-zA-Z]+)":/g, "$1: ").replace(/,/g, ", ").replace(/:\s+/g, ": ").replace(/\{/, "{ ").replace(/\}$/, " }") + '];'), "the mock's default type = APP_SHIFT_TYPES_DEFAULT");
+      // the record step (11/18): the smoke's comments no longer say revision ac is NOT applied (its three: the appRoute note, the P29 block's,
+      // the P35 block's)
+      assert.ok(!/revision ac is (report-first and )?NOT applied/.test(SMOKEP), "the smoke's comments no longer say revision ac is NOT applied (its record step, 11/18)");
     });
   })();
 

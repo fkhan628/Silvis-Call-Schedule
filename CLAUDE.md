@@ -11,8 +11,8 @@ different shift model. Frontend on GitHub Pages, backend on Supabase project `bz
 (`https://bzhsroegtagqhutbnsrp.supabase.co`). Faraz Khan (FAK, roster `s1`) is the scheduler, admin, sole
 developer, one of the six surgeons, and the user you're working with. Live users: 6 surgeons, the office coordinator(s) and
 viewers / followers; APP accounts - viewers with `user_profiles.is_app` who put themselves on call days (Prompt 29, applied
-2026-10-02) - once Faraz switches them on; since Prompt 35 (Faraz 11/17; revision ac, report-first - his apply, then the client on
-his go) those days are typed shifts with hours (Setup data `groupRules.appShiftTypes`; one for now, Inbox 7a-5p Mon-Fri) and
+2026-10-02) - once Faraz switches them on; since Prompt 35 (Faraz 11/17; revision ac, applied 2026-11-18 03:04:10Z; the app part
+is Prompt 35's client build, pushed on his go) those days are typed shifts with hours (Setup data `groupRules.appShiftTypes`; one for now, Inbox 7a-5p Mon-Fri) and
 the APPs enter their own vacations (`app_time_off`, never `time_off`) - build guide §27. Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
 
 ## Identity model — get this right
@@ -227,6 +227,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   Memorial Day call; the day before a vacation was answered 11/12 - it stays his - which leaves a holiday unit ending the
   day before one). Faraz's own Prompt 34 step: the `east-feed-refresh` v3 deploy and its
   dry-run proof (`edge-functions/README.md` §3, "2026-11-11 - the East week lists") - v3 is prepared and waits for it.
-  Prompt 35 (APP shifts and APP vacations, 11/17): Faraz's own steps are the revision ac apply (`apply-app-shifts.sh`,
-  `docs/SCHEMA-REVIEW.md` "2026-11-17 - APP shifts and APP vacations") and then, on his go, the client push - apply and push the
-  same day; readings to confirm: §8 item 30.
+  Prompt 35 (APP shifts and APP vacations, 11/17): revision ac applied 2026-11-18 03:04:10Z (Faraz's `apply-app-shifts.sh`; recorded in
+  `docs/SCHEMA-REVIEW.md` "2026-11-17 - APP shifts and APP vacations"); APP shifts and vacations work from the build that ships Prompt
+  35's client (pushed on Faraz's go - an earlier build's APP Save is refused, nothing written); readings to confirm: §8 item 30.

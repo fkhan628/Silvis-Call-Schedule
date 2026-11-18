@@ -6,7 +6,6 @@
 #   SILVIS_SURGEON_JWT=<surgeon jwt> ...                      also runs the REST trade-guard checks (6), REST claim checks (7c-7e) and the surgeon reads (9d, 18e, 19f, 20e, 25f; a SURGEON-role user's access token)
 #   SILVIS_WORKDIR=<dir linked with `supabase link`>          where the CLI's linked project lives (default: $HOME/supabase-silvis)
 #   SILVIS_PREFS_ROWS_BEFORE=<n>                              the notification_preferences row count read BEFORE the followers migration; set it on the run right after the apply and 12b also requires R1 person=<n> profile=0 (later runs leave it unset: R1 is then graded by its invariants)
-#   SILVIS_APP_SHIFTS_APPLIED=1                               set ONLY on the run right after revision ac's apply (Prompt 35, the APP shifts): section 25 then FAILs the not-applied picture (an anon 404, the probe's PROBE_SETUP app_call_days.shift_type is absent) instead of reading it as "not applied yet" (the record step drops it)
 #
 # Never put a JWT or the service-role key in a file. Reads SUPABASE_URL / anon key from config.js.
 # The Supabase CLI runs in agent mode (AI_AGENT=1, exported below unless already set): q() / verdict() read its JSON envelope.
@@ -17,7 +16,7 @@
 # --help / -h prints usage and exits BEFORE anything runs (the scripts/ contract, audit 9/23 + review follow-up);
 # any other argument is refused the same way - every option of this script is an environment variable, never a flag.
 case "${1:-}" in
-  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE / SILVIS_APP_SHIFTS_APPLIED - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
+  -h|--help) echo "usage: bash scripts/verify-rls.sh   (no flags; options are the env vars SILVIS_JWT / SILVIS_SURGEON_JWT / SILVIS_WORKDIR / SILVIS_PREFS_ROWS_BEFORE - see the header of this file). Runs the live RLS / trigger probes against the Silvis project: anon REST checks, then linked-CLI probes that roll themselves back."; exit 0;;
   "") ;;
   *) echo "unknown argument: $1 (this script takes no flags; see --help)" >&2; exit 2;;
 esac
@@ -1210,7 +1209,7 @@ echo "== 18. APP call days (2026-10-02, Prompt 29): app_call_days + save_app_day
 # object exists and anon holds no privilege; a 404 is a FAIL (18c: PGRST202 - the schema cache does not know the four keys, the gate
 # before the Prompt 29 client push). 18e (only with SILVIS_SURGEON_JWT) reads as a surgeon and sends an empty save (refused AP001 at
 # the first check). 18c / 18e send p_replace null - valid for Prompt 29's boolean and for revision ac's uuid (Prompt 35, which re-creates
-# save_app_days with typed JSON lists under the same four keys). Since revision ac's apply the probe raises 'PROBE_SETUP: superseded by
+# save_app_days with typed JSON lists under the same four keys). Since revision ac's apply (2026-11-18 03:04:10Z) the probe raises 'PROBE_SETUP: superseded by
 # revision ac' (it cannot run its cases on a typed table): 18f reads that as one PASS, and section 25 grades the APP shifts probe. 18f runs sql/probes/app-call-days-probe.sql through the linked CLI (rolls itself back; 69 cases graded by name -
 # its header lists each AFTER string). The table and the functions exist since the apply, so the probe's PROBE_SETUP (app_call_days
 # is absent) and a 404 are FAILs - strict since the record step, which dropped the flag for the run right after the apply (before
@@ -2316,35 +2315,34 @@ fi
 
 echo "== 25. APP shifts and APP vacations (2026-11-17, revision ac - Prompt 35): typed app_call_days + app_time_off + save_app_days / save_app_vacations / app_call_names / silvis_app_shift_types - anon refused, rolled-back probe =="
 # Section 25 (17 = the weekend pair claim, taken on its own branch; 24 = revision ab's locked trades, the section above).
-# sql/migrations/2026-11-17-app-shifts.sql (report-first, NOT yet applied; revision ac): app_call_days typed (shift_type, the key day +
-# shift_type + profile_id; read policy, grants and cascade as Prompt 29 left them); app_time_off (the APPs' vacations - read by every
-# signed-in role through app_time_off_read, never anon: no anon policy AND anon's table privileges revoked, so an anon request is refused
-# 401 / 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke did not take); save_app_days re-created with typed JSON
-# lists and save_app_vacations (security definer, the only write paths; AP001-AP010 APP_DAY_* and AV001-AV008 APP_VACATION_* refuse before
-# any write) - EXECUTE for authenticated, never anon; silvis_app_shift_types (internal - EXECUTE for the service role only). 25a-25e go
-# over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the object exists and anon holds no
-# privilege. 25f (only with SILVIS_SURGEON_JWT) reads app_time_off as a surgeon and sends two empty saves (refused AP001 / AV001 at the
-# first check). 25g runs sql/probes/app-shifts-probe.sql through the linked CLI (rolls itself back - its edit of the blob's shift types and
-# holiday included; 135 cases graded by name - its header lists each AFTER string - and the number of case lines it reports, whatever their
-# names, must be exactly 135). Until revision ac's record step the not-applied picture (an anon 404, the probe's PROBE_SETUP
-# app_call_days.shift_type is absent) reads as "not applied yet" - unless SILVIS_APP_SHIFTS_APPLIED=1 (the run right after the apply), which
-# makes them FAILs; the probe's other raises (partly applied, no blob row, the collision guard) are FAILs either way. 25h counts the probe's
-# leftovers either way, by the probe's own identity, in two columns: tagged = rows only the probe writes - its auth users
+# sql/migrations/2026-11-17-app-shifts.sql (report-first; applied 2026-11-18 03:04:10Z, revision ac): app_call_days typed (shift_type, the
+# key day + shift_type + profile_id; read policy, grants and cascade as Prompt 29 left them); app_time_off (the APPs' vacations - read by
+# every signed-in role through app_time_off_read, never anon: no anon policy AND anon's table privileges revoked, so an anon request is
+# refused 401 / 403 - a 200 is a FAIL even with Content-Range */0, it would mean the revoke did not take); save_app_days re-created with
+# typed JSON lists and save_app_vacations (security definer, the only write paths; AP001-AP010 APP_DAY_* and AV001-AV008 APP_VACATION_*
+# refuse before any write) - EXECUTE for authenticated, never anon; silvis_app_shift_types (internal - EXECUTE for the service role only).
+# 25a-25e go over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the object exists and anon
+# holds no privilege; a 404 is a FAIL (25b: PGRST202 - the schema cache does not know the three keys, the gate before the Prompt 35 client
+# push), and so is 25c's 400 (the date-list signature answering a typed list - revision ac rolled back). 25f (only with SILVIS_SURGEON_JWT)
+# reads app_time_off as a surgeon and sends an empty save_app_vacations (refused AV001 at the first check). 25g runs
+# sql/probes/app-shifts-probe.sql through the linked CLI (rolls itself back - its edit of the blob's shift types and holiday included; 135
+# cases graded by name - its header lists each AFTER string - and the number of case lines it reports, whatever their names, must be exactly
+# 135). The tables and the functions exist since the apply, so the probe's PROBE_SETUP (app_call_days.shift_type is absent), a 404 and 25c's
+# 400 are FAILs - strict since the record step, which dropped the flag for the run right after the apply (before the apply they passed as
+# the not-applied picture); the probe's other raises (partly applied, no blob row, the collision guard) are FAILs too. 25h counts the
+# probe's leftovers either way, by the probe's own identity, in two columns: tagged = rows only the probe writes - its auth users
 # (probe-appshifts-<uuid>@example.test; profiles, shifts and vacations cascade), its appdays.save / appvac.save audit rows (summaries
 # 'probe shifts ...') and the probe's shift types or holiday left in the live blob; in_window = app_call_days rows in 2031-03, in 7031-03 or on 2020-06-01
 # and app_time_off rows touching 2031-03 or 2020-06 (read through query_to_xml, guarded by to_regclass: before the apply - or after a
 # rollback - the shift_type column and app_time_off do not exist). The collision guard refuses to start while an in_window row exists, so
 # after a run that ran its cases (PROBE_RESULTS) such rows can only be the probe's - a FAIL; after a PROBE_SETUP (every one sits in the
 # setup block, before the first window row) they are rows this run never wrote - listed for review, never counted, never given a DELETE.
-AP25_APPLIED="${SILVIS_APP_SHIFTS_APPLIED:-}"
-# not404_25 <label> <line>: a 404 is the not-applied picture (ok before the record step unless the flag is set)
-nf25() { if [ "$AP25_APPLIED" = "1" ]; then bad "$1: HTTP 404 (revision ac is applied - the run right after the apply - or the schema cache is stale)"; else ok "$1: HTTP 404 - revision ac is not applied yet (the picture before the apply)"; fi; }
 # 25a. anon may not read app_time_off (revoked: a refusal, never 200 + [])
 line=$(curl -s -o $T/vr25a.json -w 'HTTP %{http_code}' "$URL/rest/v1/app_time_off?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $ANON" -H "Prefer: count=exact")
 echo "   25a anon GET app_time_off: $line  body: $(head -c 160 $T/vr25a.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon read of app_time_off refused ($line - the table exists, anon holds no privilege)";;
-  "HTTP 404") nf25 "anon GET app_time_off";;
+  "HTTP 404") bad "anon GET app_time_off: HTTP 404 (the table exists since the 2026-11-18 apply - or the schema cache is stale)";;
   "HTTP 200") bad "anon read of app_time_off: HTTP 200 - anon's privileges are revoked, so a refusal (401 / 403) is expected, not an answer (an APP vacation must never reach anon)";;
   *) bad "anon GET app_time_off: $line (expected 401/403)";;
 esac
@@ -2353,7 +2351,7 @@ line=$(curl -s -o $T/vr25b.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc
 echo "   25b anon rpc save_app_vacations: $line  body: $(head -c 160 $T/vr25b.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc save_app_vacations refused ($line): PostgREST knows the three keys - the Prompt 35 client may be pushed";;
-  "HTTP 404") nf25 "anon rpc save_app_vacations (PGRST202 - do NOT push the Prompt 35 client while it answers 404)";;
+  "HTTP 404") bad "anon rpc save_app_vacations: HTTP 404 (PGRST202: the schema cache does not know the function or its three keys, which exist since the 2026-11-18 apply) - do NOT push the Prompt 35 client";;
   *) bad "anon rpc save_app_vacations: $line (expected 401/403; anything else - a 200 included - means anon reached the body)";;
 esac
 # 25c. anon may not execute save_app_days with a typed list (the same four keys as 18c; the list carries a {day, type} item)
@@ -2361,8 +2359,8 @@ line=$(curl -s -o $T/vr25c.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc
 echo "   25c anon rpc save_app_days (a typed list): $line  body: $(head -c 160 $T/vr25c.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc save_app_days with a typed list refused ($line)";;
-  "HTTP 404") nf25 "anon rpc save_app_days with a typed list";;
-  "HTTP 400") if [ "$AP25_APPLIED" != "1" ] && grep -q '22P02\|date\[\]\|malformed array' $T/vr25c.json; then ok "anon rpc save_app_days with a typed list: HTTP 400 - the date-list signature is still live (revision ac is not applied yet)"; else bad "anon rpc save_app_days with a typed list: HTTP 400 ($(head -c 160 $T/vr25c.json))"; fi;;
+  "HTTP 404") bad "anon rpc save_app_days with a typed list: HTTP 404 (PGRST202: the schema cache does not know the typed signature, which exists since the 2026-11-18 apply) - do NOT push the Prompt 35 client";;
+  "HTTP 400") bad "anon rpc save_app_days with a typed list: HTTP 400 (the typed signature exists since the 2026-11-18 apply - a 22P02 here is the date-list signature answering, a rollback: ask Claude Code) ($(head -c 160 $T/vr25c.json))";;
   *) bad "anon rpc save_app_days with a typed list: $line (expected 401/403)";;
 esac
 # 25d. anon may not execute silvis_app_shift_types (internal: EXECUTE for the service role only)
@@ -2370,7 +2368,7 @@ line=$(curl -s -o $T/vr25d.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc
 echo "   25d anon rpc silvis_app_shift_types: $line  body: $(head -c 160 $T/vr25d.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon rpc silvis_app_shift_types refused ($line - internal, the service role only)";;
-  "HTTP 404") nf25 "anon rpc silvis_app_shift_types";;
+  "HTTP 404") bad "anon rpc silvis_app_shift_types: HTTP 404 (the function exists since the 2026-11-18 apply - or the schema cache is stale)";;
   *) bad "anon rpc silvis_app_shift_types: $line (expected 401/403; anything else - a 200 included - means anon read the shift types through it)";;
 esac
 # 25e. anon may not write app_time_off directly (no privilege; the zero uuid names no profile, so even an acceptance could not land)
@@ -2378,23 +2376,23 @@ line=$(curl -s -o $T/vr25e.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/app
 echo "   25e anon POST app_time_off: $line  body: $(head -c 160 $T/vr25e.json)"
 case "$line" in
   "HTTP 401"|"HTTP 403") ok "anon insert into app_time_off refused ($line)";;
-  "HTTP 404") nf25 "anon POST app_time_off";;
+  "HTTP 404") bad "anon POST app_time_off: HTTP 404 (the table exists since the 2026-11-18 apply - or the schema cache is stale)";;
   *) if grep -q '42501' $T/vr25e.json; then ok "anon insert into app_time_off refused (42501)"; else bad "anon POST app_time_off: $line (expected 401/403 or 42501)"; fi;;
 esac
-# 25f. as a surgeon (read-only): app_time_off answers 200; two empty saves are refused at the first check, AP001 / AV001
+# 25f. as a surgeon (read-only): app_time_off answers 200; an empty save_app_vacations is refused at the first check, AV001
 if [ -n "${SILVIS_SURGEON_JWT:-}" ]; then
   line=$(curl -s -o $T/vr25f.json -w 'HTTP %{http_code}' "$URL/rest/v1/app_time_off?select=id&limit=1" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT")
   echo "   25f surgeon GET app_time_off: $line"
   case "$line" in
     "HTTP 200") ok "a surgeon reads app_time_off (every signed-in role sees the APP vacations)";;
-    "HTTP 404") nf25 "surgeon GET app_time_off";;
+    "HTTP 404") bad "surgeon GET app_time_off: HTTP 404 (the table exists since the 2026-11-18 apply - or the schema cache is stale)";;
     *) bad "surgeon GET app_time_off: $line (expected 200)";;
   esac
   line=$(curl -s -o $T/vr25g.json -w 'HTTP %{http_code}' -X POST "$URL/rest/v1/rpc/save_app_vacations" -H "apikey: $ANON" -H "Authorization: Bearer $SILVIS_SURGEON_JWT" -H "Content-Type: application/json" -d '{"p_profile":null,"p_add":[],"p_remove":[]}')
   echo "   25f surgeon rpc save_app_vacations (empty lists): $line  body: $(head -c 160 $T/vr25g.json)"
   case "$line" in
     "HTTP 400") if grep -q 'AV001' $T/vr25g.json; then ok "a surgeon's save_app_vacations is refused AV001 (only an APP, the scheduler or the office)"; else bad "surgeon rpc save_app_vacations: HTTP 400 without AV001 ($(head -c 160 $T/vr25g.json))"; fi;;
-    "HTTP 404") nf25 "surgeon rpc save_app_vacations";;
+    "HTTP 404") bad "surgeon rpc save_app_vacations: HTTP 404 (the function exists since the 2026-11-18 apply - or the schema cache is stale)";;
     *) bad "surgeon rpc save_app_vacations: $line (expected 400 AV001)";;
   esac
 else
@@ -2405,8 +2403,7 @@ if linked; then
   PROBE25="$(cd sql/probes && (pwd -W 2>/dev/null || pwd))/app-shifts-probe.sql"
   out=$(supabase db query --linked --workdir "$WORKDIR" -f "$PROBE25" 2>&1 | grep -v 'new version\|recommend updating\|Using workdir\|Initialising' | tr -d '\n')
   if ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: app_call_days.shift_type is absent'; then
-    if [ "$AP25_APPLIED" = "1" ]; then bad "APP shifts probe: PROBE_SETUP - app_call_days.shift_type is absent (revision ac is applied - the run right after the apply)"
-    else ok "APP shifts probe: PROBE_SETUP - app_call_days.shift_type is absent: revision ac is not applied yet (the picture before the apply)"; fi
+    bad "APP shifts probe: PROBE_SETUP - app_call_days.shift_type is absent (the column exists since the 2026-11-18 apply)"
   elif ! echo "$out" | grep -q 'PROBE_RESULTS' && echo "$out" | grep -q 'PROBE_SETUP: '; then
     bad "APP shifts probe: $(echo "$out" | grep -oE 'PROBE_SETUP: [^"\\]*' | head -1 | head -c 300) (partly applied, no blob row or a fixture collision - 25h lists window rows; ask Claude Code)"
   elif ! echo "$out" | grep -q 'PROBE_RESULTS .*;END'; then

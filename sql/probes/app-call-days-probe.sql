@@ -28,6 +28,10 @@
 -- absent) before it and all 69 cases below as listed after it (<today M/D> = 10/2). Until the record step verify-rls read
 -- PROBE_SETUP and the anon 404s as the not-applied picture (unless its flag for the run right after the apply was set); since the
 -- record step, which dropped that flag, section 18 FAILs a PROBE_SETUP or an anon 404 - the not-applied grading is history.
+-- As run (revision ac): sql/migrations/2026-11-17-app-shifts.sql was applied 2026-11-18 03:04:10Z; this probe read the 69 cases below
+-- as listed right before it (<today M/D> = 11/17) and PROBE_SETUP (superseded by revision ac) right after it (apply-app-shifts.sh
+-- steps 2 and 7). Since then verify-rls 18f reads that raise as one PASS (any other PROBE_SETUP still FAILs) and section 25 grades
+-- sql/probes/app-shifts-probe.sql on every run.
 --
 -- Fixtures: no app_call_days row is written by the setup. Every day a case touches is FAR-FUTURE (2030-12, and 2031-01-01 ..
 -- 2032-02-05 for the refused 401-day case), the past day 2020-05-04 or infinity / -infinity (A17, refused before any write).

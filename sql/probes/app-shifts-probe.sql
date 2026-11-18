@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Silvis Call Schedule - APP shifts PROBE (2026-11-17, revision ac - Faraz 11/17, Prompt 35: the APPs put themselves on shifts that have
--- hours and enter their own vacations; sql/migrations/2026-11-17-app-shifts.sql, REPORT-FIRST, NOT APPLIED). Proves the typed
+-- hours and enter their own vacations; sql/migrations/2026-11-17-app-shifts.sql, REPORT-FIRST; APPLIED 2026-11-18 03:04:10Z). Proves the typed
 -- app_call_days, app_time_off, save_app_days(), save_app_vacations(), app_call_names() and silvis_app_shift_types() on the LIVE database
 -- WITHOUT PERSISTING ANYTHING.
 --
@@ -30,6 +30,11 @@
 -- blob row 'PROBE_SETUP: the blob row main is absent ...'; then the collision guard (it reads the tables, so it cannot run before they
 -- exist): any app_call_days row in 2031-03, in 7031-03 or on 2020-06-01, or any app_time_off row touching 2031-03 or 2020-06, raises
 -- 'PROBE_SETUP: live rows already sit in the probe window ...'. AFTER the migration every case below must read as listed.
+-- As run: the migration was applied 2026-11-18 03:04:10Z (schema.sql revision ac); the probe read PROBE_SETUP (app_call_days.shift_type
+-- is absent) before it and all 135 cases below as listed after it (<today M/D> = 11/17, the run's Central date), leftover count 0
+-- (apply-app-shifts.sh steps 3 and 6). Until the record step verify-rls read PROBE_SETUP, a 404 (25a-25f) and 25c's date-list 400 as
+-- the not-applied picture (unless its flag for the run right after the apply was set); since the record step, which dropped that flag,
+-- section 25 FAILs a PROBE_SETUP, a 404 or that 400 - the not-applied grading is history.
 --
 -- Fixtures: no app_call_days or app_time_off row is written by the setup. Every day a case touches is FAR-FUTURE (2031-03 - 3/1 is a
 -- Saturday, 3/3 a Monday, 3/12 and 3/15 the probe holiday; 2031-04-01 .. 2032-05-05 for the refused 401-shift case; 2031-03-24 ..

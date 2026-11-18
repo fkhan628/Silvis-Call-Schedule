@@ -214,8 +214,9 @@ A coordinator account is created like any other (invite from the dashboard), the
 *The database part ran on 2026-10-02 (`apply-app-call-days.sh`); APP accounts work from the build that ships Prompt 29's
 client, then Faraz marks them in Setup → Users.*
 
-*Prompt 35 (Faraz 11/17) - shifts with hours and the APPs' own vacations: its database part (revision ac) is Faraz's apply
-(`apply-app-shifts.sh`), and its client ships right after it, on his go; what follows is what the APPs see from that build
+*Prompt 35 (Faraz 11/17) - shifts with hours and the APPs' own vacations: its database part (revision ac) ran on 2026-11-18
+(`apply-app-shifts.sh`; the evening of 11/17 in Central time); APP shifts and vacations work from the build that ships Prompt
+35's client (an earlier build's APP Save is refused - nothing is written), and what follows is what the APPs see from that build
 on. (Should either database part ever be rolled back, the APP line reads "APP shifts and vacations are available after the
 next database update.")*
 

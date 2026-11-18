@@ -183,7 +183,7 @@
 -- role's lock on the day stays). No table, column, policy, trigger, grant, other function or anon surface changes; claim_open_slot
 -- keeps CL007 (a locked OPEN slot stays the scheduler's to assign). Letter u stays taken by the weekend pair claim; aa was the last
 -- applied before it (2026-10-22 04:50:53Z; this body is y's, applied 2026-10-20 00:41:25Z, but for check (c) and the party test).
--- Revision 2026-11-17 ac (APP shifts and APP vacations, sql/migrations/2026-11-17-app-shifts.sql, report-first, NOT yet applied): Faraz 11/17
+-- Revision 2026-11-17 ac (APP shifts and APP vacations, sql/migrations/2026-11-17-app-shifts.sql, applied 2026-11-18 03:04:10Z after the probe): Faraz 11/17
 -- (Prompt 35) - the APPs put themselves on shifts that have hours and enter their own vacations; shift types are Setup data
 -- (groupRules.appShiftTypes { id, label, start, end, weekdays, holidays, perDay } - today one, Inbox 07:00-17:00 Mon-Fri, not on the six
 -- holidays, perDay 1; absent = that type, the code default helpers.js APP_SHIFT_TYPES_DEFAULT). app_call_days is EXTENDED, not replaced
@@ -2095,7 +2095,7 @@ revoke all on table public.app_call_days from authenticated;
 grant select on table public.app_call_days to authenticated;
 comment on table public.app_call_days is 'Prompt 29 (Faraz 10/1): the APP on call per day - ONE APP per day (day is the primary key). Read by every signed-in role, never anon (no anon policy, anon privileges revoked); written only through save_app_days() (authenticated holds SELECT only). Deleting the account removes its days (on delete cascade); the audit_log keeps the history.';
 
--- ---------- APP shifts and APP vacations (Prompt 35, revision ac; sql/migrations/2026-11-17-app-shifts.sql - report-first, NOT yet applied)
+-- ---------- APP shifts and APP vacations (Prompt 35, revision ac; sql/migrations/2026-11-17-app-shifts.sql - report-first; applied 2026-11-18 03:04:10Z)
 -- Faraz 11/17: the APPs put themselves on shifts that have hours and enter their own vacations. Shift types are Setup data
 -- (groupRules.appShiftTypes; absent = Inbox 07:00-17:00 Mon-Fri, not on holidays, perDay 1 - helpers.js APP_SHIFT_TYPES_DEFAULT); perDay
 -- (how many APPs may hold a shift on one day) is enforced here, in save_app_days. app_call_days keeps Prompt 29's read policy, grants and
@@ -3078,7 +3078,7 @@ create policy call_pay_logs_delete on public.call_pay_logs for delete to authent
 drop policy if exists app_call_days_read on public.app_call_days;
 create policy app_call_days_read on public.app_call_days for select to authenticated using (true);
 
--- app_time_off (Prompt 35, revision ac; sql/migrations/2026-11-17-app-shifts.sql - report-first, NOT yet applied): every signed-in role reads
+-- app_time_off (Prompt 35, revision ac; sql/migrations/2026-11-17-app-shifts.sql - report-first; applied 2026-11-18 03:04:10Z): every signed-in role reads
 -- the APP vacations (surgeon, coordinator, viewer, APP, follower, scheduler - Time off, Mine and the calendar's vacation bar); never anon (not
 -- in the read_all loop; anon's privileges revoked). No write policy and no write privilege for authenticated: save_app_vacations() is the door.
 drop policy if exists app_time_off_read on public.app_time_off;

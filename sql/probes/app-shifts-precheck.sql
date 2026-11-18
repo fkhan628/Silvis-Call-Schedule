@@ -1,8 +1,16 @@
 -- ============================================================================
 -- Silvis Call Schedule - APP shifts PRE-CHECK (2026-11-17, revision ac - Prompt 35; sql/migrations/2026-11-17-app-shifts.sql,
--- REPORT-FIRST, NOT APPLIED). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
+-- REPORT-FIRST; APPLIED 2026-11-18 03:04:10Z). READ-ONLY: one SELECT, nothing is written, locked or changed. Run it BEFORE the apply and again right
 -- after it (Faraz's apply script, kept outside the repo, does both); its rows are facts for the record - row 1 is the gate, row 2's
 -- appdays_rows must read 0 before the apply (the migration refuses to type Prompt 29 call days), row 5 is graded after the apply.
+-- As run (2026-11-18): before the apply the gate read shift_type=no pk=day vac_table=no types_fn=no save_sig=old vac_fn=no
+-- names_vac=no and right after it shift_type=yes pk=day,shift_type,profile_id vac_table=yes types_fn=yes save_sig=new vac_fn=yes
+-- names_vac=yes; row 2 appdays_rows=0 appvac_rows=absent appdays_audit=0 appvac_audit=0 before (no Prompt 29 call day to type) and
+-- appdays_rows=0 appvac_rows=0 appdays_audit=0 appvac_audit=0 after; row 5 save=- vac=- types=- names=t/f before and save=t/f vac=t/f
+-- types=f/f/t names=t/f after; rows 3, 4 and 6 the same both times (apps=2 named_apps=2 coordinators=2; blob_types=absent
+-- holiday_years=2026,2027; publication=yes all_tables=no app_call_days_published=no app_time_off_published=no) - docs/SCHEMA-REVIEW.md
+-- "2026-11-17 - APP shifts and APP vacations" quotes them. This header was kept byte for byte as reviewed until the apply (the apply
+-- script pinned its sha256); the record step turned it APPLIED.
 -- It runs before the migration, so it never names the new column, table or functions outside catalog lookups (pg_attribute,
 -- pg_constraint, to_regclass, to_regprocedure, pg_proc) and query_to_xml counts guarded by to_regclass.
 --

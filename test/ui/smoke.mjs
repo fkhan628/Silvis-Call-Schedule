@@ -670,7 +670,7 @@ const payForcedLine = (msg) => {
 const payForced404For = (pg) => payServed.filter(x => x.page === pg && x.status === 404).length;
 // Prompt 29 (APP call days) / Prompt 35 (APP shifts and vacations, Faraz 11/17 - revision ac): the APP tables and their
 // functions are answered by the harness ITSELF (appRoute below), never by the live project (revision v applied there
-// 2026-10-02; revision ac is report-first and NOT applied - the smoke never touches either). Defaults keep every existing
+// 2026-10-02, revision ac 2026-11-18 - the smoke never touches either). Defaults keep every existing
 // step's picture unchanged: mode "ok", no APP shift, no APP vacation and NO APP account (appProfiles empty), so app_call_names
 // answers the scheduler no APP and the day editor shows no APP block. The main page is always served the empty picture (its
 // later steps read the grid); the P29 / P35 steps use their own pages. Each non-2xx answer arms exactly ONE expected browser
@@ -13430,7 +13430,7 @@ try {
   // Decided 10/1: everyone signed in sees it, not the ?public=1 page; no e-mails, the Activity log only. Prompt 35 (revision ac):
   // the days are typed shifts (today one type, Inbox 7a-5p Mon-Fri, not on holidays, one APP a shift - its perDay), the lists
   // [{ day, type }] and p_replace the APP a change takes over from (uuid | null). The APP tables and their functions are MOCKED
-  // here (appRoute: revision v exists live since the 2026-10-02 apply, revision ac is NOT applied - nothing reaches the live
+  // here (appRoute: revision v exists live since the 2026-10-02 apply, revision ac since the 2026-11-18 apply - nothing reaches the live
   // project). M = next month (Central); D10 / D11 / D12 / D13 = four days in a row of it that the first offered type runs (named
   // after Prompt 29's 10th..13th; picked, never fixed - a weekend or a holiday unit's day has no Inbox shift), D14P / D16P / D20P
   // = three later such days. Each APP page runs in its own BrowserContext at 390 x 844 (the token is read at send time).
@@ -14449,7 +14449,7 @@ try {
     // APP), refused over the APP's own shift ("remove the shift first"), with no 2-around guard. Everyone signed in sees the shifts
     // (A <name> <hours>) and the vacations; ?public=1, share and print show nothing; no e-mails or notices - the functions' audit
     // rows only. Inside the P29 block (its page helpers), on fresh stores; the tables and functions are the harness's (appRoute -
-    // revision ac is NOT applied live). E1 / E2 = D10 / D11 (two days in a row of the first offered type), F1 = D12, VA..VB =
+    // revision ac exists live since the 2026-11-18 apply - nothing reaches it). E1 / E2 = D10 / D11 (two days in a row of the first offered type), F1 = D12, VA..VB =
     // D13..D14P (APP A's vacation, VA a day the shift runs), WA..WB = D16P..D20P (the office's vacation for APP B).
     //  a. APP A (390 x 844) adds E1 + E2 on My APP shifts (ONE save POST, the audit row "Pat Appleton: inbox E1, E2") and the
     //     vacation VA-VB on My vacations (ONE save_app_vacations POST { p_profile, p_add: [{ start, end }], p_remove: [] }, the audit
