@@ -2331,7 +2331,7 @@ echo "== 25. APP shifts and APP vacations (2026-11-17, revision ac - Prompt 35):
 # makes them FAILs; the probe's other raises (partly applied, no blob row, the collision guard) are FAILs either way. 25h counts the probe's
 # leftovers either way, by the probe's own identity, in two columns: tagged = rows only the probe writes - its auth users
 # (probe-appshifts-<uuid>@example.test; profiles, shifts and vacations cascade), its appdays.save / appvac.save audit rows (summaries
-# 'probe shifts ...') and the probe's shift types or holiday left in the live blob; in_window = app_call_days rows in 2031-03 or on 2020-06-01
+# 'probe shifts ...') and the probe's shift types or holiday left in the live blob; in_window = app_call_days rows in 2031-03, in 7031-03 or on 2020-06-01
 # and app_time_off rows touching 2031-03 or 2020-06 (read through query_to_xml, guarded by to_regclass: before the apply - or after a
 # rollback - the shift_type column and app_time_off do not exist). The collision guard refuses to start while an in_window row exists, so
 # after a run that ran its cases (PROBE_RESULTS) such rows can only be the probe's - a FAIL; after a PROBE_SETUP (every one sits in the
@@ -2562,7 +2562,7 @@ if linked; then
     expect_eq25  I2   "ok is_app=false" "UV self-inserts (viewer, no is_app key)"
   fi
   # 25h. leftovers, by the probe's identity only (see the section comment)
-  LEFTOVER25_SQL="select ((select count(*) from auth.users where email like 'probe-appshifts-%@example.test') + (select count(*) from public.audit_log where action in ('appdays.save', 'appvac.save') and detail->>'summary' like 'probe shifts %') + (select count(*) from public.call_schedule_data where id = 'main' and (data::text like '%probe-night%' or data::text like '%probe holiday%')))::int as tagged, (case when to_regclass('public.app_time_off') is null then 0 else (xpath('/row/n/text()', query_to_xml('select (select count(*) from public.app_call_days where day between ''2031-03-01'' and ''2031-03-31'' or day = ''2020-06-01'') + (select count(*) from public.app_time_off where (start_date <= ''2031-03-31'' and end_date >= ''2031-03-01'') or (start_date <= ''2020-06-30'' and end_date >= ''2020-06-01'')) as n', false, true, '')))[1]::text::int end) as in_window"
+  LEFTOVER25_SQL="select ((select count(*) from auth.users where email like 'probe-appshifts-%@example.test') + (select count(*) from public.audit_log where action in ('appdays.save', 'appvac.save') and detail->>'summary' like 'probe shifts %') + (select count(*) from public.call_schedule_data where id = 'main' and (data::text like '%probe-night%' or data::text like '%probe holiday%')))::int as tagged, (case when to_regclass('public.app_time_off') is null then 0 else (xpath('/row/n/text()', query_to_xml('select (select count(*) from public.app_call_days where day between ''2031-03-01'' and ''2031-03-31'' or day between ''7031-03-01'' and ''7031-03-31'' or day = ''2020-06-01'') + (select count(*) from public.app_time_off where (start_date <= ''2031-03-31'' and end_date >= ''2031-03-01'') or (start_date <= ''2020-06-30'' and end_date >= ''2020-06-01'')) as n', false, true, '')))[1]::text::int end) as in_window"
   r=$(q "$LEFTOVER25_SQL")
   rflat25=$(echo "$r" | tr -d ' \n')
   tagged25=$(echo "$rflat25" | grep -oE '"tagged":"?[0-9]+' | head -1 | tr -cd '0-9')
@@ -2576,7 +2576,7 @@ if linked; then
     bad "APP shifts probe leftover count could not be read: $(echo "$r" | tr -d '\n' | head -c 200)"
   else
     if [ "$tagged25" = "0" ] && [ "$win25" = "0" ]; then
-      ok "APP shifts probe persisted nothing (leftover count 0: auth.users probe-appshifts-* / audit_log appdays.save + appvac.save 'probe shifts ...' / no probe shift type or holiday in the blob / app_call_days in 2031-03 or on 2020-06-01, app_time_off touching 2031-03 or 2020-06)"
+      ok "APP shifts probe persisted nothing (leftover count 0: auth.users probe-appshifts-* / audit_log appdays.save + appvac.save 'probe shifts ...' / no probe shift type or holiday in the blob / app_call_days in 2031-03, in 7031-03 or on 2020-06-01, app_time_off touching 2031-03 or 2020-06)"
     fi
     if [ "$tagged25" != "0" ]; then
       bad "APP shifts probe LEFT ROWS BEHIND (tagged=$tagged25 - rows only the probe writes): the batch did not run as one transaction. Clean up NOW, then report:"
@@ -2592,7 +2592,7 @@ if linked; then
       else
         echo "   25h: $win25 app_call_days / app_time_off row(s) sit in the probe window - the run reported neither PROBE_RESULTS nor PROBE_SETUP (25g), so whether the probe wrote them is unknown; review them before removing anything:"
       fi
-      echo "      select * from public.app_call_days where day between '2031-03-01' and '2031-03-31' or day = '2020-06-01';"
+      echo "      select * from public.app_call_days where day between '2031-03-01' and '2031-03-31' or day between '7031-03-01' and '7031-03-31' or day = '2020-06-01';"
       echo "      select * from public.app_time_off where (start_date <= '2031-03-31' and end_date >= '2031-03-01') or (start_date <= '2020-06-30' and end_date >= '2020-06-01');"
     fi
   fi

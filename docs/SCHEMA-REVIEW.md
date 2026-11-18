@@ -5446,7 +5446,7 @@ blob's shift types and holiday years); row 5 the grants (after: `save=t/f vac=t/
 linked to s3, UC the coordinator, UV a plain viewer, UA an admin linked to s1; its own shift types and holiday in the blob (above);
 days in 2031-03, 2031-04-01 .. 2032-05-05 for the refused 401-shift case, 2031-03-24 .. 2032-03-24 for the refused 366-day vacation, the
 past day 2020-06-01 and the past vacation 2020-06-01 .. 06-05, and 7031-03 for W5-W9 (a far-future typo's vacation and one shift of
-U1's - past the int4 minute range); a row of a type the blob does not list (probe-gone, W1, written as postgres); readbacks filtered to the probe's own users, so later runs with real
+U1's - past the int4 minute range; its collision guard and verify-rls 25h's in_window count cover app_call_days in 7031-03 too); a row of a type the blob does not list (probe-gone, W1, written as postgres); readbacks filtered to the probe's own users, so later runs with real
 APP accounts read the same; BEFORE the migration every case = `PROBE_SETUP: app_call_days.shift_type is absent`; `<today M/D>` = the
 run's Central date):
 
@@ -5600,12 +5600,16 @@ run's Central date):
 6. This probe AFTER: every case as the table lists (135 cases, each name exactly once); its leftover count 0.
 7. Prompt 29's probe AFTER: `PROBE_SETUP: superseded by revision ac - app_call_days has shift_type ...`.
 8. `SILVIS_APP_SHIFTS_APPLIED=1 bash scripts/verify-rls.sh` - `RESULT: 731 passed, 0 failed` (section 25 strict, 18f superseded).
-9. The record step, ONE commit: this status -> APPLIED <timestamp> with the observed lines; table (a) / (b)'s `app_call_days` and
-   `app_time_off` notes and the helper line's `silvis_app_shift_types(p_data)` ("prepared ... NOT applied" -> "applied ...");
-   schema.sql revision ac ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the pre-check's headers;
-   verify-rls section 25 strict by default with `SILVIS_APP_SHIFTS_APPLIED` dropped; every other line that says prepared today - the
-   build guide's 4.2 row and 4.3 bullet, the rules doc's section 8 item 30 and CLAUDE.md's pending Prompt 35 steps; the test pins
-   with them, each "applied" wording pinned with a negative pin on "prepared" / "NOT applied" (as Prompt 29's record step did).
+9. The record step, ONE commit, turns every line that says revision ac is prepared, not applied or pending (Faraz's apply, the
+   client on his go) into the applied record: this status -> APPLIED <timestamp> with the observed lines; table (a) / (b)'s
+   `app_call_days` and `app_time_off` notes and the helper line's `silvis_app_shift_types(p_data)` ("prepared ... NOT applied" ->
+   "applied ..."); schema.sql revision ac ("applied ..."); the migration's trailer line and sha256 pin; the probe's and the
+   pre-check's headers; verify-rls section 25 strict by default with `SILVIS_APP_SHIFTS_APPLIED` dropped; the build guide's 4.2 row,
+   its 4.3 bullet AND its Proof line (the applied facts, `SILVIS_APP_SHIFTS_APPLIED` gone), section 27's intro note and its order
+   bullet (as run); the rules doc's section 1 "APP shifts and APP vacations" row (its Schema clause -> "applied <date>") and section
+   8 item 30; ONBOARDING's Prompt 35 note; CLAUDE.md's live-users sentence ("revision ac, report-first - his apply ...") and its
+   pending Prompt 35 steps; the smoke's comments that say revision ac is NOT applied; the test pins with them, each "applied" wording
+   pinned with a negative pin on "prepared" / "NOT applied" (as Prompt 29's record step did).
 10. The client push, on Faraz's go (the branch's merge to main - a live deploy).
 
 **One command (Faraz):** his apply script `apply-app-shifts.sh`, kept OUTSIDE the repo (Faraz 10/1: apply scripts carry machine paths)

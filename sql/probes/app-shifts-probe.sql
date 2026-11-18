@@ -28,14 +28,15 @@
 -- absent - sql/migrations/2026-11-17-app-shifts.sql is not applied' (nothing else runs - that is every case's BEFORE result); a typed
 -- table without the vacation table or function 'PROBE_SETUP: app_time_off or save_app_vacations is absent - ... is partly applied'; no
 -- blob row 'PROBE_SETUP: the blob row main is absent ...'; then the collision guard (it reads the tables, so it cannot run before they
--- exist): any app_call_days row in 2031-03 or on 2020-06-01, or any app_time_off row touching 2031-03 or 2020-06, raises 'PROBE_SETUP:
--- live rows already sit in the probe window ...'. AFTER the migration every case below must read as listed.
+-- exist): any app_call_days row in 2031-03, in 7031-03 or on 2020-06-01, or any app_time_off row touching 2031-03 or 2020-06, raises
+-- 'PROBE_SETUP: live rows already sit in the probe window ...'. AFTER the migration every case below must read as listed.
 --
 -- Fixtures: no app_call_days or app_time_off row is written by the setup. Every day a case touches is FAR-FUTURE (2031-03 - 3/1 is a
 -- Saturday, 3/3 a Monday, 3/12 and 3/15 the probe holiday; 2031-04-01 .. 2032-05-05 for the refused 401-shift case; 2031-03-24 ..
 -- 2032-03-24 for the refused 366-day vacation) or the past day 2020-06-01 (a Monday) and the past vacation 2020-06-01 .. 06-05, and
--- 7031-03 for W5-W9 (a far-future typo's vacation 7031-03-03 .. 03-05 and U1's inbox 7031-03-10 - past the int4 minute range; rows of
--- the probe's own U1 only, which verify-rls 25h's tagged count covers: its auth users, whose rows cascade).
+-- 7031-03 for W5-W9 (a far-future typo's vacation 7031-03-03 .. 03-05 and U1's inbox 7031-03-04 / 03-10 - past the int4 minute range;
+-- the collision guard and verify-rls 25h's in_window count cover app_call_days in 7031-03 too - a live shift there, an APP's year typo,
+-- would answer W7 / W8 AP005 - and the vacation reads only U1's own, so a live vacation there changes nothing).
 -- The acting users are seven throwaway auth.users rows (email probe-appshifts-<uuid>@example.test) whose user_profiles rows the
 -- handle_new_auth_user trigger creates; postgres then sets them: U1 / U2 / U3 viewer + is_app 'probe shifts one' / 'two' / 'three';
 -- US surgeon linked to s3 'probe shifts surgeon'; UC coordinator 'probe shifts office'; UV viewer (not an APP) 'probe shifts viewer';
@@ -223,9 +224,9 @@ begin
     raise exception 'PROBE_SETUP: the blob row main is absent - the probe sets its shift types there';
   end if;
   -- the collision guard (after the absent checks: it reads the tables)
-  if exists (select 1 from public.app_call_days d where d.day between '2031-03-01' and '2031-03-31' or d.day = '2020-06-01')
+  if exists (select 1 from public.app_call_days d where d.day between '2031-03-01' and '2031-03-31' or d.day between '7031-03-01' and '7031-03-31' or d.day = '2020-06-01')
      or exists (select 1 from public.app_time_off v where (v.start_date <= '2031-03-31' and v.end_date >= '2031-03-01') or (v.start_date <= '2020-06-30' and v.end_date >= '2020-06-01')) then
-    raise exception 'PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2031-03 or on 2020-06-01, app_time_off touching 2031-03 or 2020-06) - the probe fixtures would collide';
+    raise exception 'PROBE_SETUP: live rows already sit in the probe window (app_call_days in 2031-03, in 7031-03 or on 2020-06-01, app_time_off touching 2031-03 or 2020-06) - the probe fixtures would collide';
   end if;
   insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
                           created_at, updated_at, confirmation_token, recovery_token, email_change_token_new, email_change, is_sso_user)

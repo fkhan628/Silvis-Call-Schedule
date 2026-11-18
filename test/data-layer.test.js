@@ -12451,6 +12451,15 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const vNew = H.appVacationRows([{ id: "vn", profile_id: PA, start_date: "2026-12-22", end_date: "2026-12-26", source: "app" }], NAMES);
       assert.deepStrictEqual(plain(H.appShiftDraftPrune(draft, ctx({ myVacs: vNew }))), { "2026-12-21|inbox": true });
       assert.deepStrictEqual(["2026-12-22", "2026-12-23"].map(dd => H.appShiftCellState(dd, "inbox", ctx({ myVacs: vNew, draft: H.appShiftDraftPrune(draft, ctx({ myVacs: vNew })) }))), ["away", "away"], "the cells read away, never + You");
+      // the fix check (11/17): read from the last key back, an add goes only for something that stays - never for a later add that
+      // goes itself (a Friday inbox beside a night moved to 15:00-07:00 that now runs into a vacation)
+      const T2 = H.appShiftTypesOf({ appShiftTypes: [{ id: "inbox", label: "Inbox", start: "07:00", end: "17:00", weekdays: [1, 2, 3, 4, 5], perDay: 1 }, { id: "night", label: "Night", start: "15:00", end: "07:00", weekdays: [1, 2, 3, 4, 5], perDay: 2 }] });
+      const c2 = (o) => ctx({ byDay: {}, types: T2, myVacs: [], ...(o || {}) });
+      assert.deepStrictEqual(plain(H.appShiftDraftPrune({ "2026-12-11|inbox": true, "2026-12-11|night": true }, c2({ myVacs: [{ start: "2026-12-12", end: "2026-12-13" }] }))), { "2026-12-11|inbox": true }, "the night runs into the vacation and goes; the inbox it overlapped stays");
+      assert.deepStrictEqual(plain(H.appShiftDraftPrune({ "2026-12-09|inbox": true, "2026-12-09|night": true, "2026-12-10|inbox": true }, c2({ myVacs: [{ start: "2026-12-10", end: "2026-12-10" }] }))), { "2026-12-09|inbox": true }, "a chain: 12/10 on the vacation, the 12/9 night reaching it, the 12/9 inbox the night overlapped stays");
+      assert.deepStrictEqual(plain(H.appShiftDraftPrune({ "2026-12-09|inbox": true, "2026-12-09|night": true }, c2())), { "2026-12-09|night": true }, "two adds that came to overlap: the later key stays");
+      const keep2 = { "2026-12-09|inbox": true, "2026-12-10|night": false };
+      assert.strictEqual(H.appShiftDraftPrune(keep2, c2({ byDay: { "2026-12-10": [{ day: "2026-12-10", type: "night", profileId: PA, name: "Pat Appleton" }] } })), keep2, "nothing to drop: still the SAME object");
     });
     check("P35 helpers: appShiftSummary / appShiftSavedNote / appVacSavedNote - the database's audit wording ('inbox 11/18, 11/19; removed inbox 11/25', 'vacation 12/1-12/5')", () => {
       assert.strictEqual(H.appShiftSummary([{ day: "2026-12-09", type: "inbox" }, { day: "2026-12-03", type: "night" }, { day: "2026-12-04", type: "inbox" }, { day: "bad", type: "inbox" }, null]), "night 12/3; inbox 12/4, 12/9", "types by their first day, days in order");
@@ -13225,6 +13234,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // review 11/17 (client-2): the hours place every booked shift of the type (a row keeps none), so a saved type's hours are fixed
       // once any shift of it is on file (past days included), and while the shifts are not loaded
       assert.ok(typesCardSrc.includes("const onFile = (id) => Object.keys(appByDay || {}).reduce((n, d) => n + (appByDay[d] || []).filter(e => e.type === id).length, 0);") && typesCardSrc.includes('const hoursFixed = (t) => t.saved && (appState !== "ok" || onFile(t.id) > 0);'), "hoursFixed: a saved type with any shift on file, or the shifts unread");
+      assert.ok(typesCardSrc.includes("{appState === \"unavailable\" ? APP_DAYS_UNAVAILABLE_TEXT + \" Until then Retire and the saved types' hours are off.\" : \"The APP shifts are not loaded - Retire and the saved types' hours are off until they load.\"}"), "the fix check (11/17): the not-loaded line names the hours it turns off, not Retire alone (a phone shows no title)");
       assert.ok(typesCardSrc.includes('data-testid="appshift-start" aria-label={nm + " start"} disabled={fixed} title={fixedWhy}') && typesCardSrc.includes('data-testid="appshift-end" aria-label={nm + " end"} disabled={fixed} title={fixedWhy}'), "the start and end inputs are disabled while fixed, saying why");
       assert.ok(typesCardSrc.includes("else if (t.saved && savedHours(t.id) !== null && savedHours(t.id) !== t.start + \"-\" + t.end && hoursFixed(t)) out.push("), "Save refuses changed hours on a fixed type (a change drafted before a shift arrived)");
       assert.ok(typesCardSrc.includes("The hours place every shift of the type, so they are fixed once it has a shift on file: for new hours, add a new type and retire the old one once it has no shift from today on.") && !typesCardSrc.includes("Changing a type changes nothing already booked"), "the intro says what a change does to booked shifts");

@@ -6745,10 +6745,10 @@ function appShiftDraftDiff(draft, byDay, me, today) {
 }
 // appShiftDraftPrune(draft, ctx) -> the draft without what a reload made impossible and the days before today; the SAME object when
 // nothing goes. First what is impossible on its own: a day before today, a removal of a shift no longer mine, an add of a shift now
-// mine, an add on a shift that stopped running that day (off) or is full (taken). Then each add left, read against the rest of the
-// draft: one that reaches a vacation of mine (away - review 11/17: a vacation saved in My vacations over drafted adds) or overlaps
-// another shift of mine, saved or drafted (clash), goes too. Keys are read in order against the draft as pruned so far, so of two
-// drafted adds that came to overlap (the hours changed) the later one stays.
+// mine, an add on a shift that stopped running that day (off) or is full (taken). Then each add left, read from the last key back
+// against the removals and the adds already kept: one that reaches a vacation of mine (away - review 11/17: a vacation saved in My
+// vacations over drafted adds) or overlaps a saved shift of mine or a kept add (clash) goes too - so an add goes only for something
+// that stays, and of two drafted adds that came to overlap (the hours changed) the later key stays.
 function appShiftDraftPrune(draft, ctx) {
   const d = draft && typeof draft === "object" ? draft : {}, c = ctx || {}, b = c.byDay || {}, ts = Array.isArray(c.types) ? c.types : [];
   const t = appDayIsIso(c.today) ? c.today : null;
@@ -6762,11 +6762,12 @@ function appShiftDraftPrune(draft, ctx) {
     if (d[k] === false) { if (!mine) drop(k); return; }
     if (mine || !appShiftRunsOn(type, day, c.holidayDays).ok || list.filter(e => e.type === ty && e.profileId !== c.me).length >= type.perDay) drop(k);
   });
-  keys.forEach(k => {
+  const kept = {};
+  keys.forEach(k => { if (next[k] === false) kept[k] = false; });
+  keys.slice().reverse().forEach(k => {
     if (next[k] !== true) return;
-    const [day, ty] = k.split("|"), rest = { ...next };
-    delete rest[k];
-    if (appShiftCellState(day, ty, { ...c, draft: rest }) !== "free") drop(k);
+    const [day, ty] = k.split("|");
+    if (appShiftCellState(day, ty, { ...c, draft: kept }) === "free") kept[k] = true; else drop(k);
   });
   return next;
 }

@@ -986,8 +986,9 @@ const payDb = {
 //                                  (may be []), names = app_call_names() (display names of the holders of a shift or a vacation,
 //                                  of the caller's own APP profile and - for the scheduler and the office - of every APP)
 //   { state: "unavailable" }       the table or a function does not exist yet (404 PGRST205 / PGRST202 / 42P01 -
-//                                  helpers.appDaysReadFailureState): "APP days are available after the next database
-//                                  update", no toast. Also what a rollback leaves behind.
+//                                  helpers.appDaysReadFailureState; revision ac's 400 42703 too): helpers.APP_DAYS_UNAVAILABLE_TEXT
+//                                  ("APP shifts and vacations are available after the next database update."), no toast. Also what
+//                                  a rollback leaves behind.
 //   { state: "failed", error }     anything else (a non-2xx, a non-array body, a network error) - never an empty "ok"
 //   { state: "skipped" }           no fresh token - nothing was read
 // It stops at the first non-2xx: no further page and no names call after a failed table read. The rows are paged by
