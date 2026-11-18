@@ -2325,8 +2325,8 @@ echo "== 25. APP shifts and APP vacations (2026-11-17, revision ac - Prompt 35):
 # over REST as anon and write nothing (each is refused before a row or a body is used): 401/403 = the object exists and anon holds no
 # privilege. 25f (only with SILVIS_SURGEON_JWT) reads app_time_off as a surgeon and sends two empty saves (refused AP001 / AV001 at the
 # first check). 25g runs sql/probes/app-shifts-probe.sql through the linked CLI (rolls itself back - its edit of the blob's shift types and
-# holiday included; 122 cases graded by name - its header lists each AFTER string - and the number of case lines it reports, whatever their
-# names, must be exactly 122). Until revision ac's record step the not-applied picture (an anon 404, the probe's PROBE_SETUP
+# holiday included; 135 cases graded by name - its header lists each AFTER string - and the number of case lines it reports, whatever their
+# names, must be exactly 135). Until revision ac's record step the not-applied picture (an anon 404, the probe's PROBE_SETUP
 # app_call_days.shift_type is absent) reads as "not applied yet" - unless SILVIS_APP_SHIFTS_APPLIED=1 (the run right after the apply), which
 # makes them FAILs; the probe's other raises (partly applied, no blob row, the collision guard) are FAILs either way. 25h counts the probe's
 # leftovers either way, by the probe's own identity, in two columns: tagged = rows only the probe writes - its auth users
@@ -2416,7 +2416,7 @@ if linked; then
     results25=$(echo "$out" | grep -oE 'PROBE_RESULTS .*' | head -1 | sed 's/^PROBE_RESULTS //; s/;END.*$//')
     echo "$results25" | tr ';' '\n' | sed 's/^/   /'
     # one case per line, the CLI's JSON escapes decoded ONCE: an HTML character (> for '>', <, &) and the backslashes (an escaped double
-    # quote); the graders then read a case in plain bash (no process per case - 122 of them)
+    # quote); the graders then read a case in plain bash (no process per case - 135 of them)
     lines25=$(echo "$results25" | tr ';' '\n' | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g; s/\\//g')
     case_val25()   { CV25=""; local l; while IFS= read -r l; do case "$l" in "$1="*) CV25="${l#"$1="}"; return 0;; esac; done <<< "$lines25"; }
     expect_eq25()  { case_val25 "$1"; v="$CV25"; [ "$v" = "$2" ] && ok "APP shifts probe $1: $3" || bad "APP shifts probe $1: $3 (got '$v', expected '$2')"; }
@@ -2424,7 +2424,7 @@ if linked; then
     # expect_dt25 <case> <head> <tail> <words>: the exact text with the run's Central date (M/D) between head and tail
     expect_dt25()  { case_val25 "$1"; v="$CV25"; case "$v" in "$2"[0-9]*/[0-9]*"$3") ok "APP shifts probe $1: $4";; *) bad "APP shifts probe $1: $4 (got '$v', expected $2<M/D>$3)";; esac; }
     n25=$(echo "$lines25" | grep -c .)
-    [ "$n25" = "122" ] && ok "APP shifts probe: 122 cases reported (with the 122 graded below, exactly its header's)" || bad "APP shifts probe: $n25 cases reported, not the 122 of its header (a case lost, doubled or added without a grade here)"
+    [ "$n25" = "135" ] && ok "APP shifts probe: 135 cases reported (with the 135 graded below, exactly its header's)" || bad "APP shifts probe: $n25 cases reported, not the 135 of its header (a case lost, doubled or added without a grade here)"
     expect_eq25  P1   "table=yes rls=yes pk=day,shift_type,profile_id shape=app_call_days_shift_type_shape fk=cascade policies=app_call_days_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no" "postgres: app_call_days - RLS, key, shape check, cascade, policy, privileges"
     expect_eq25  P2   "table=yes rls=yes pk=id range=app_time_off_range fk=cascade policies=app_time_off_read/select/authenticated anon_sel=no auth_sel=yes auth_write=no" "postgres: app_time_off - RLS, key, range check, cascade, policy, privileges"
     expect_eq25  P3   "save=definer/volatile vac=definer/volatile names=definer/stable types=invoker/immutable paths=4 old_save=no save_anon=no save_auth=yes vac_anon=no vac_auth=yes names_anon=no names_auth=yes types_anon=no types_auth=no types_service=yes" "postgres: the four functions - security, volatility, search_path, grants; the old save_app_days signature is gone"
@@ -2500,11 +2500,13 @@ if linked; then
     expect_eq25  C6   "ERR AV003 APP_VACATION_NOT_APP: probe shifts viewer is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UC svac(UV - not an APP, 3/24-3/26)"
     expect_eq25  C7   "names=3 one=app two=app three=app" "UC app_call_names() - every APP, U3 holding nothing included"
     expect_eq25  C8   "rows=4 vrows=2" "UC reads the window and the vacations"
+    expect_eq25  C9   "ok added=1 source=office" "UC svac(U3, 3/29-3/30) - U3 holds no shift yet"
+    expect_eq25  S7   "names=3 one=probe shifts one two=probe shifts two three=probe shifts three" "US app_call_names() - U3 holds only a vacation (the vacation clause names it)"
     expect_eq25  T1   "ERR AP005 APP_DAY_TAKEN: 3/3 probe-night already has probe shifts one and probe shifts two (2 a day) - nothing was saved" "U3 adds probe-night 3/3 (U1 and U2 hold both of its 2)"
     expect_eq25  T2   "ok added=1 3/6=inbox:three/app" "U3 adds inbox 3/6"
     expect_eq25  V1   "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift" "UV sad(null, inbox 3/10)"
     expect_eq25  V2   "ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation" "UV svac(null, 3/24-3/26)"
-    expect_eq25  V3   "rows=5 vrows=2" "UV reads the window and the vacations"
+    expect_eq25  V3   "rows=5 vrows=3" "UV reads the window and the vacations"
     expect_eq25  D1   "ok added=1 source=scheduler 3/10=inbox:two/scheduler by=admin" "UA sad(U2, inbox 3/10)"
     expect_eq25  D2   "actor=s1 name=probe shifts admin sums=probe shifts two: inbox 3/10" "its audit row (read as postgres)"
     expect_eq25  D3   "ok removed=1 3/10=none" "UA clears it"
@@ -2518,23 +2520,34 @@ if linked; then
     expect_eq25  D11  "ERR AP003 APP_DAY_NOT_APP: that account is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UA sad(<a random uuid>, inbox 3/11)"
     expect_eq25  D12  "ERR AP001 APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)" "UA sad(null, inbox 3/11)"
     expect_eq25  D13  "ERR AP004 APP_DAY_BAD_DAY: a change takes a shift over from another APP - name the shift and that APP (nothing was saved)" "UA's change naming the same APP twice: sad(U2, inbox 3/11, null, U2)"
-    expect_eq25  D14  "ok added=1 source=scheduler vac=6/1-6/5:one/scheduler+3/17-3/22:one/app+3/27-3/28:two/app" "UA svac(U1, 2020-06-01 to 2020-06-05) - a past vacation (no past check on an add)"
+    expect_eq25  D14  "ok added=1 source=scheduler vac=6/1-6/5:one/scheduler+3/17-3/22:one/app+3/27-3/28:two/app+3/29-3/30:three/office" "UA svac(U1, 2020-06-01 to 2020-06-05) - a past vacation (no past check on an add)"
     expect_eq25  D15  "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts two holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)" "UA svac(U2, 3/3) over U2's inbox and probe-night 3/3"
     expect_eq25  D16  "ERR AP010 APP_DAY_VACATION: 3/19 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)" "UA sad(U1, inbox 3/19) - inside U1's vacation"
     expect_eq25  D17  "names=3 one=app two=app three=app" "UA app_call_names()"
     expect_eq25  D18  "updated=1 is_app=false" "UA sets is_app = false on U3"
+    expect_eq25  D19  "ERR AP007 APP_DAY_STALE: 3/3 probe-night is already probe shifts two's shift - reload the calendar (nothing was saved)" "UA's change of probe-night 3/3 from U1 to U2 - U2 holds it already (perDay 2)"
+    expect_eq25  D19s "3/3=inbox:two/scheduler+probe-night:one/app+probe-night:two/app" "state of 3/3 after D19 (U1's row stays)"
     expect_dt25  F1   "ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is " " in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)" "U1 removes its 2020-06-01 to 06-05 vacation"
     expect_dt25  G1   "ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is " " in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)" "UC removes U1's 2020-06-01 to 06-05 vacation"
     expect_eq25  H1   "ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift" "U3 sad(null, inbox 3/13)"
     expect_eq25  H2   "ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation" "U3 svac(null, 3/24-3/26)"
     expect_eq25  H3   "3/6=inbox:three/app" "U3 reads 3/6 (its shift stays)"
     expect_eq25  E1   "names=3 one=app two=app three=former" "UA app_call_names()"
-    expect_eq25  E2   "ok removed=1 vac=3/17-3/22:one/app+3/27-3/28:two/app" "UA removes U1's started vacation (the scheduler is exempt)"
+    expect_eq25  E2   "ok removed=1 vac=3/17-3/22:one/app+3/27-3/28:two/app+3/29-3/30:three/office" "UA removes U1's started vacation (the scheduler is exempt)"
     expect_eq25  E3   "ok removed=1 3/6=none" "UA clears the former APP's inbox 3/6 (AP003 binds adds only)"
     expect_eq25  E4   "ERR AV003 APP_VACATION_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UA svac(U3, 3/24-3/26) - a former APP"
     expect_eq25  E5   "ERR AP003 APP_DAY_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)" "UA sad(U3, inbox 3/13) - a former APP"
     expect_err25 E6   23514 'new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"' "UA sets is_app = true on US (a surgeon)"
     expect_err25 E7   23514 'new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"' "UA sets is_app = true on UC (the coordinator)"
+    expect_eq25  W1   "inserted 3/27=probe-gone:one/scheduler" "postgres writes U1 a row of a type the blob does not list (probe-gone, Thu 3/27)"
+    expect_eq25  W2   "ERR AP009 APP_DAY_OVERLAP: 3/27 inbox overlaps 3/27 probe-gone - one APP holds one shift at a time (nothing was saved)" "U1 adds inbox 3/27 (the unlisted row counts as its whole day)"
+    expect_eq25  W3   "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/27 probe-gone - remove the shift first (nothing was saved)" "U1 svac 3/27 over it"
+    expect_eq25  W4   "ok added=1 source=app" "U1 svac 3/28 (the whole day ends at midnight - touching, not overlapping)"
+    expect_eq25  W5   "ok added=1 source=app" "U1 svac(null, 7031-03-03 to 7031-03-05) - a far-future typo (the minutes are bigint)"
+    expect_eq25  W6   "ok added=1 3/31=inbox:one/app" "U1 adds inbox Mon 3/31 (AP010 reads the 7031 vacation)"
+    expect_eq25  W7   "ERR AP010 APP_DAY_VACATION: 3/4 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)" "U1 adds inbox Fri 7031-03-04 (inside that vacation)"
+    expect_eq25  W8   "ok added=1 3/10=inbox:one/app" "U1 adds inbox Thu 7031-03-10 (AP009 places it against U1's other shifts)"
+    expect_eq25  W9   "ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/10 inbox - remove the shift first (nothing was saved)" "U1 svac 7031-03-10 over it"
     expect_err25 N1   42501 "permission denied for table app_call_days" "anon: select count(*) from app_call_days"
     expect_err25 N2   42501 "permission denied for table app_time_off" "anon: select count(*) from app_time_off"
     expect_err25 N3   42501 "permission denied for function app_call_names" "anon: app_call_names()"

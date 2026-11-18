@@ -333,7 +333,7 @@ Proof: `sql/probes/east-reset-backstop-probe.sql` (rolled back; 15 cases in its 
 | `save_app_days` / `save_app_vacations` / `app_call_names` / `silvis_app_shift_types` | Prompt 29's date lists | typed shifts; vacations; the holders of either; the types of a blob (internal) | `appDaysDb.save` (POST, the four keys), `saveVacations` (POST, the three keys), `load` (GET `app_call_names`) |
 | anon | nothing | nothing: no policy, privileges revoked on both tables, EXECUTE revoked on the four functions | none (`?public=1`, share, print, the exports, the calendar feeds and the e-mails carry no APP shift or vacation) |
 
-Proof: `sql/probes/app-shifts-probe.sql` (rolled back; 122 cases in its header - the catalog, the types' reading, the APP's own shifts and vacations, perDay, the overlaps, the vacation refusals both ways, the weekdays and the holidays, the scheduler's set / change / clear, the office, a surgeon, a viewer, a former APP, account deletion, anon; it sets its shift types and one holiday unit in the blob INSIDE its rolled-back transaction - the first probe to edit the blob; PROBE_SETUP before the apply), `sql/probes/app-shifts-precheck.sql` (read-only: the gate `shift_type=no pk=day vac_table=no types_fn=no save_sig=old vac_fn=no names_vac=no` before and `shift_type=yes pk=day,shift_type,profile_id vac_table=yes types_fn=yes save_sig=new vac_fn=yes names_vac=yes` after; the row counts - `appdays_rows` must be 0 -, the APP accounts, the blob's types and holiday years, the grants, realtime), Prompt 29's probe superseded from the apply on (its setup says so; verify-rls 18f passes it), `scripts/verify-rls.sh` section 25 (25a-25e anon REST, 25f as a surgeon, 25g the graded probe - every case by name and the count of 122 -, 25h leftovers incl. the blob's probe types; the not-applied picture tolerated until the record step unless `SILVIS_APP_SHIFTS_APPLIED=1`; expected 664 / 0 before the apply and 718 / 0 right after it), one command: Faraz's apply script `apply-app-shifts.sh` (kept outside the repo; `--dry-run` first), the record in `docs/SCHEMA-REVIEW.md` "2026-11-17 - APP shifts and APP vacations"; offline proof (PGlite in a scratch folder, never a repo dependency): Prompt 29's probe 69 / 69 before, this probe 122 / 122 after, leftovers 0, a second run of the migration changes nothing, the guard refuses a Prompt 29 row with nothing changed, and `sql/schema.sql` from scratch equals main + the migration on 54 facts. The client ships after the apply, on Faraz's go - apply and push the same day.
+Proof: `sql/probes/app-shifts-probe.sql` (rolled back; 135 cases in its header - the catalog, the types' reading, the APP's own shifts and vacations, perDay, the overlaps, the vacation refusals both ways, the weekdays and the holidays, the scheduler's set / change / clear, the office, a surgeon, a viewer, a former APP, account deletion, anon; it sets its shift types and one holiday unit in the blob INSIDE its rolled-back transaction - the first probe to edit the blob; PROBE_SETUP before the apply), `sql/probes/app-shifts-precheck.sql` (read-only: the gate `shift_type=no pk=day vac_table=no types_fn=no save_sig=old vac_fn=no names_vac=no` before and `shift_type=yes pk=day,shift_type,profile_id vac_table=yes types_fn=yes save_sig=new vac_fn=yes names_vac=yes` after; the row counts - `appdays_rows` must be 0 -, the APP accounts, the blob's types and holiday years, the grants, realtime), Prompt 29's probe superseded from the apply on (its setup says so; verify-rls 18f passes it), `scripts/verify-rls.sh` section 25 (25a-25e anon REST, 25f as a surgeon, 25g the graded probe - every case by name and the count of 135 -, 25h leftovers incl. the blob's probe types; the not-applied picture tolerated until the record step unless `SILVIS_APP_SHIFTS_APPLIED=1`; expected 664 / 0 before the apply and 731 / 0 right after it), one command: Faraz's apply script `apply-app-shifts.sh` (kept outside the repo; `--dry-run` first), the record in `docs/SCHEMA-REVIEW.md` "2026-11-17 - APP shifts and APP vacations"; offline proof (PGlite in a scratch folder, never a repo dependency): Prompt 29's probe 69 / 69 before, this probe 135 / 135 after (the migration as first reviewed failed D19 and W5 / W7 / W8 / W9 - the review's fixes), leftovers 0, a second run of the migration changes nothing, the guard refuses a Prompt 29 row with nothing changed, and `sql/schema.sql` from scratch equals main + the migration on 54 facts. The client ships after the apply, on Faraz's go - apply and push the same day.
 
 ### 4.4 Data-loss safeguards (copy, don't reinvent)
 
@@ -2481,6 +2481,8 @@ since 2026-10-02 - main `bc6c89e`); then Faraz sets Role = `app` on each APP acc
 Faraz 10/1: "I want the APPs to be able to add themselves to call days - it would be a feature available to APPs or Me ...
 This would also show up on the calendar". **The four decisions (10/1): any day; ONE APP per day; everyone signed in sees it,
 not the `?public=1` page; no e-mails, the Activity log only.** The rules doc §1 row "APP call days" states them for the group.
+⟶ **11/17 (Prompt 35):** an APP day is now a typed shift with hours (perDay per type, the key day + type + APP) and the APPs
+enter their own vacations - section 27.
 
 ### 21.1 A flag, not a role
 
@@ -3683,8 +3685,10 @@ trades, give-away, open shifts, Totals, pay, the calendar feeds, the exports, th
   guard reads `groupRules.vacations.minSurgeonsAround`: `silvis_app_shift_types(p_data)` and `helpers.appShiftTypesOf` apply
   the same rule to the same list (absent or not a list = the decided Inbox; an entry counts with a valid id, HH:MM hours and a
   non-empty list of weekdays 0-6; the first entry of an id wins; perDay a whole number 1-20, else 1). Setup > APP shifts writes
-  the list through the group rules' save (its `rules.edit` audit row). The seed carries no `appShiftTypes`: the code default is
-  the decided type, and a seed apply must not undo a Setup edit.
+  the list through the group rules' save (its `rules.edit` audit row). The seed carries no `appShiftTypes` (the code default
+  is the decided type), and like every group rule the seed's group rules replace the live ones whole on Setup > Import seed's
+  Apply (its dry run shows `groupRules=update`; the command-line import refuses - RF2): after a Setup edit an in-app seed apply
+  puts the types back to the decided Inbox (rules doc section 8 item 30 (j); carrying them through is a follow-up).
 - **Spans.** A shift of type T on day D runs from T.start on D to T.end (the next day when end < start; 24 hours when end =
   start), Central wall clock, on a minute scale counted from 2000-01-01 with UTC arithmetic (a daylight-saving day is 1440
   minutes too). Two shifts of one APP overlap when their spans share a minute (touching is fine); a shift meets a vacation
@@ -3697,7 +3701,9 @@ trades, give-away, open shifts, Totals, pay, the calendar feeds, the exports, th
   `{day, type}`; `p_replace` names the APP a scheduler's change takes the shift over from. An APP for its own profile (from
   today on, Central), the scheduler for any APP and any day. Refusals, all before any write: AP001 not allowed, AP002 not yours,
   AP003 not an APP, AP004 a bad list, AP005 taken (perDay - it names the holders), AP006 past, AP007 stale, AP008 no such
-  shift that day (unknown or retired type, the weekday, a holiday), AP009 an overlap, AP010 on the APP's own vacation. The old
+  shift that day (unknown or retired type, the weekday, a holiday), AP009 an overlap, AP010 on the APP's own vacation (the
+  review, 11/17: AP007 also refuses a change to an APP who already holds that shift - taken, it removed the other holder with
+  no audit row; the time checks count minutes as bigint, so a far-future typo's vacation never overflows). The old
   date-list signature is dropped: an old build's Save is refused (HTTP 400 - its true / false replace flag is no uuid), never a
   row without a type.
 - `save_app_vacations(p_profile uuid, p_add jsonb, p_remove uuid[])` - `p_add` a JSON array of `{start, end}`, `p_remove`
@@ -3721,7 +3727,9 @@ trades, give-away, open shifts, Totals, pay, the calendar feeds, the exports, th
   retired / weekday / holiday); `appShiftDayMap` (the day's shifts as a list, in the types' order); `appVacationRows` /
   `appVacationMap` (the surgeons' vacation-map shape, so `groupVacationRows` and `vacRangeLabel` read APP vacations too) /
   `appVacationsOn`; `appShiftCellState` / `appShiftToggle` / `appShiftCellWords` / `appShiftPlan` / `appShiftDraftDiff` /
-  `appShiftDraftPrune` (My APP shifts); `appShiftSavedNote` / `appVacSavedNote` (the audit wording after "Saved: ");
+  `appShiftDraftPrune` (My APP shifts - since the review, 11/17, it also drops a drafted add a vacation of the APP's own or
+  another shift of its own made impossible, so Save never sends one the database refuses); `appShiftSavedNote` /
+  `appVacSavedNote` (the audit wording after "Saved: ");
   `appVacationEditable` (the surgeons' Time off rule) and `appVacationCheck` (the client's first look before a vacation save -
   the database checks again). The error words read the AV codes too, and a read answered 42703 (no `shift_type` column -
   revision ac absent or rolled back) is "unavailable", never an empty list.
@@ -3741,13 +3749,17 @@ trades, give-away, open shifts, Totals, pay, the calendar feeds, the exports, th
   mode `all`) beside the surgeons' - every signed-in role reads it; the scheduler and the office add one for any APP.
   **Setup > APP shifts** (`AppShiftTypesCard`, `setup_app_shifts`, between Users and Rules): add a type, rename one, change its
   hours, weekdays, holidays or perDay, retire one with no shift from today on (Restore offers it again); an id is fixed once
-  saved.
+  saved, and so are a type's hours once it has a shift on file (review 11/17: the hours place every booked shift of the type -
+  new hours are a new type). A former APP's vacation offers Remove, never Edit (an edit re-adds it, refused AV003); the phone
+  grid's short labels count the APPs on vacation too; the empty-list lines show only after a read that worked.
 
 ### 27.4 Follow-ups (not built - Faraz's step 7)
 
 - The APP's own calendar feed (today the feeds carry surgeons only).
 - APP shift counts in Totals.
 - APP coverage in the office digest.
+- Carrying Setup's shift types through a seed apply (today the seed's group rules replace them - rules doc section 8 item 30
+  (j)).
 
 ### 27.5 Tests, the apply and the ship
 
@@ -3760,15 +3772,17 @@ trades, give-away, open shifts, Totals, pay, the calendar feeds, the exports, th
   types and holidays read from the served blob): an APP adds two inbox shifts and a vacation, readable at 390 px in light and
   dark; a second APP is refused on the taken shift; a shift on the APP's own vacation is refused (the card, the vacation form,
   and AP010 through the scheduler's editor); the office adds, changes and removes an APP vacation; `?public=1` and the share page
-  show none of it; Setup > APP shifts adds a type and reverts it without a write. The P29 steps run on the typed client; the
-  phone row-height check (spec H) allows one hours line per APP shift. Not driven: a second offered type (the picker, an
+  show none of it; Setup > APP shifts adds a type and reverts it without a write and shows the served type's hours fixed while it
+  has shifts on file. The P29 steps run on the typed client, every page served the decided Inbox whatever Setup holds live
+  (review 11/17); the phone row-height check (spec H) allows one hours line per APP shift, each line bounded by its own line
+  height. Not driven: a second offered type (the picker, an
   overlap, "(n a day)"), Setup's Save / Retire, an APP changing its own vacation, the print view - the unit tests and the
   probe cover those rules.
-- `test/schema.test.js` "revision ac" (the migration, its mirror in `sql/schema.sql`, the probe's 122 cases, the pre-check,
+- `test/schema.test.js` "revision ac" (the migration, its mirror in `sql/schema.sql`, the probe's 135 cases, the pre-check,
   verify-rls section 25 graded against a faked CLI, section 18's superseded arm, the docs) - CI's run on the feature branch
   stands in for the local one.
 - The order (`docs/SCHEMA-REVIEW.md`'s ten steps; Faraz runs steps 1-8 with `apply-app-shifts.sh`, `--dry-run` first): the
   pre-check (`appdays_rows=0`), Prompt 29's probe BEFORE (69 / 69), this probe BEFORE (PROBE_SETUP), the migration after typing
-  APPLY, the gate after, this probe AFTER (122 / 122, leftovers 0), Prompt 29's probe AFTER (superseded),
-  `SILVIS_APP_SHIFTS_APPLIED=1 bash scripts/verify-rls.sh` (718 / 0); then the record step (one commit) and the client push, on
+  APPLY, the gate after, this probe AFTER (135 / 135, leftovers 0), Prompt 29's probe AFTER (superseded),
+  `SILVIS_APP_SHIFTS_APPLIED=1 bash scripts/verify-rls.sh` (731 / 0); then the record step (one commit) and the client push, on
   his go.

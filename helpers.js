@@ -6699,13 +6699,19 @@ function appShiftToggle(draft, day, typeId, ctx) {
   else delete next[k];
   return next;
 }
-// appShiftCellWords(state, day, entries, type) -> the hint a tap on a cell that cannot change shows
-function appShiftCellWords(st, day, entries, t) {
+// appShiftCellWords(state, day, entries, type, myVacs) -> the hint a tap on a cell that cannot change shows (myVacs: the APP's own
+// vacations [{ start, end }] - "away" names the vacation when the day itself is not one: an overnight shift that runs into it)
+function appShiftCellWords(st, day, entries, t, myVacs) {
   const md = fmtMD(day), label = t ? t.label : "That shift";
   if (st === "past" || st === "past-mine") return md + " is past - a past day stays as it was (ask the scheduler).";
   if (st === "taken") return md + " " + label + " already has " + (Array.isArray(entries) ? entries : []).map(e => e.name).join(" and ") + (t && t.perDay > 1 ? " (" + t.perDay + " a day)." : ".");
   if (st === "off") return !t ? md + " has no such shift (it is not offered)." : t.retired ? "The " + label + " shift is retired." : md + " has no " + label + " shift (" + appShiftWeekdayWords(t) + (t.holidays ? "" : ", not on holidays") + ").";
-  if (st === "away") return md + " is on your vacation - change the vacation first.";
+  if (st === "away") {
+    const vs = Array.isArray(myVacs) ? myVacs : [];
+    if (vs.some(v => v && day >= v.start && day <= v.end) || !vs.length) return md + " is on your vacation - change the vacation first.";
+    const span = appShiftSpan(day, t), v = vs.find(x => x && appSpansOverlap(span, appVacationSpan(x.start, x.end)));
+    return md + " " + label + " runs into your vacation" + (v ? " " + appVacRange(v.start, v.end) : "") + " - change the vacation first.";
+  }
   if (st === "clash") return md + " " + label + " overlaps another shift of yours - one shift at a time.";
   return "";
 }
@@ -6719,7 +6725,7 @@ function appShiftPlan(days, typeId, ctx) {
     const st = appShiftCellState(d, typeId, { ...c, draft });
     if (st === "free") { go.push(d); draft = { ...draft, [appShiftKey(d, typeId)]: true }; }
     else if (st === "mine" || st === "add") skipped.push({ day: d, why: fmtMD(d) + " is already yours" });
-    else skipped.push({ day: d, why: appShiftCellWords(st, d, ((c.byDay || {})[d] || []).filter(e => e.type === typeId && e.profileId !== c.me), t).replace(/\.$/, "") });
+    else skipped.push({ day: d, why: appShiftCellWords(st, d, ((c.byDay || {})[d] || []).filter(e => e.type === typeId && e.profileId !== c.me), t, c.myVacs).replace(/\.$/, "") });
   });
   return { go, skipped };
 }
@@ -6737,22 +6743,31 @@ function appShiftDraftDiff(draft, byDay, me, today) {
   });
   return { add, clear, count: add.length + clear.length };
 }
-// appShiftDraftPrune(draft, ctx) -> the draft without what a reload made impossible (an add on a full or no-longer-running shift,
-// a removal of a shift no longer mine) and the days before today; the SAME object when nothing goes
+// appShiftDraftPrune(draft, ctx) -> the draft without what a reload made impossible and the days before today; the SAME object when
+// nothing goes. First what is impossible on its own: a day before today, a removal of a shift no longer mine, an add of a shift now
+// mine, an add on a shift that stopped running that day (off) or is full (taken). Then each add left, read against the rest of the
+// draft: one that reaches a vacation of mine (away - review 11/17: a vacation saved in My vacations over drafted adds) or overlaps
+// another shift of mine, saved or drafted (clash), goes too. Keys are read in order against the draft as pruned so far, so of two
+// drafted adds that came to overlap (the hours changed) the later one stays.
 function appShiftDraftPrune(draft, ctx) {
   const d = draft && typeof draft === "object" ? draft : {}, c = ctx || {}, b = c.byDay || {}, ts = Array.isArray(c.types) ? c.types : [];
   const t = appDayIsIso(c.today) ? c.today : null;
-  const drop = Object.keys(d).filter(k => {
+  let next = d;
+  const drop = (k) => { if (next === d) next = { ...d }; delete next[k]; };
+  const keys = Object.keys(d).sort();
+  keys.forEach(k => {
     const [day, ty] = k.split("|"), list = Array.isArray(b[day]) ? b[day] : [], type = ts.find(x => x.id === ty) || null;
-    if (t && day < t) return true;
+    if (t && day < t) return drop(k);
     const mine = list.some(e => e.type === ty && c.me && e.profileId === c.me);
-    if (d[k] === false) return !mine;
-    if (mine) return true;
-    return !appShiftRunsOn(type, day, c.holidayDays).ok || list.filter(e => e.type === ty && e.profileId !== c.me).length >= type.perDay;
+    if (d[k] === false) { if (!mine) drop(k); return; }
+    if (mine || !appShiftRunsOn(type, day, c.holidayDays).ok || list.filter(e => e.type === ty && e.profileId !== c.me).length >= type.perDay) drop(k);
   });
-  if (!drop.length) return d;
-  const next = { ...d };
-  drop.forEach(k => { delete next[k]; });
+  keys.forEach(k => {
+    if (next[k] !== true) return;
+    const [day, ty] = k.split("|"), rest = { ...next };
+    delete rest[k];
+    if (appShiftCellState(day, ty, { ...c, draft: rest }) !== "free") drop(k);
+  });
   return next;
 }
 // appShiftSummary(items) -> "inbox 11/18, 11/19; weeknight 11/20" - the database's audit wording (type ids, days in order)

@@ -685,6 +685,9 @@ let appStale = null;    // { sub } or { page } (P35), { rows[, vacs] }: that cal
 // for the mock (a Setup save is recorded, never served back - the served blob stays the live / fixture one).
 let appMockBlob = null;
 let appTypesOverride = null;
+// review 11/17 (tests-2): while set, every call_schedule_data GET is served with groupRules.appShiftTypes = this list, so the pages and
+// the mock (appTypesOverride, set to the same list) agree on the decided type whatever Setup holds live (Inbox at two APPs a day, say)
+let appTypesServed = null;
 const APP_MOCK_COORDS = new Set([COORD_UID]); // silvis_is_coord(): the harness's office account (role coordinator)
 // 10/4 (P29 8b/8c timing windows): step 8c's own condition for the "fail500slow" answer - () => Promise; the 500 is held until it
 // settles AND at least 1.5 s have passed (null: the 1.5 s alone)
@@ -1731,7 +1734,7 @@ const offerModeRpc = (b, json) => {
 // [{ day, type }]), the same order of refusals and the same strings: AP001 for every caller that is neither an APP the mock
 // knows nor the scheduler FAKE_UID, AP002, AP004, AP003, AP006 by the harness's Central today, AP008 (the type: known, not
 // retired, its weekday, a holiday unit's day of the served blob), AP002 / AP007 on a clear another APP holds, AP007 on a change
-// whose holder moved, AP005 (perDay, naming the holders), AP010 (the APP's own vacation), AP009 (two shifts of one APP
+// whose holder moved or whose new APP holds the shift already, AP005 (perDay, naming the holders), AP010 (the APP's own vacation), AP009 (two shifts of one APP
 // overlapping) - the all-or-nothing writes and the one appdays.save audit row it would write. The shift types and the holiday
 // days are the served blob's (appMockBlob; appTypesOverride = a step's own list), read as silvis_app_shift_types reads them.
 const appMd = (d) => Number(d.slice(5, 7)) + "/" + Number(d.slice(8, 10));
@@ -1826,6 +1829,9 @@ const appDaysRpc = (b, sub) => {
     rName = rp && rp.display_name && rp.display_name.trim() ? rp.display_name.trim() : null;
     const gone = adds.filter(a => !holds(a, repl));
     if (gone.length) return err("AP007", "APP_DAY_STALE", gone.map(appShiftWord).join(", ") + " is no longer " + (rName || "another APP") + "'s shift - reload the calendar (nothing was saved)");
+    // the review's fix (11/17): a change to an APP who already holds the shift is a stale picture too
+    const already = adds.filter(a => holds(a, who));
+    if (already.length) return err("AP007", "APP_DAY_STALE", already.map(appShiftWord).join(", ") + " is already " + (tName || "the APP") + "'s shift - reload the calendar (nothing was saved)");
   }
   // perDay: other APPs (not the one a change takes over from) already fill the shift
   const taken = adds.map(a => {
@@ -2397,14 +2403,22 @@ const routeSupabase = async (route, scope) => {
   // ... and (rebase follow-up 9/23) the app's own last write stamp rides on every blob GET after a write; the
   // deliberate foreign stamp above still wins when it is armed.
   const scopedBlobTs = sessionScope ? sessBlobWriteTs : blobWriteTs;
-  if ((blobReadOverride || scopedBlobTs) && method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
+  if ((blobReadOverride || scopedBlobTs || appTypesServed) && method === "GET" && url.pathname.startsWith("/rest/v1/call_schedule_data")) {
     let rows = fixtureAnswer(url);
     if (!rows) {
       const res = await route.fetch({ headers: { ...req.headers(), authorization: "Bearer " + ANON_KEY } });
       rows = await res.json().catch(() => []);
     }
+    // the APP steps' fixed shift types (appTypesServed): the row's data with groupRules.appShiftTypes replaced, nothing else touched
+    const typed = (r) => {
+      if (!appTypesServed || !r || typeof r !== "object") return r;
+      let d = r.data; if (typeof d === "string") { try { d = JSON.parse(d); } catch (e) { return r; } }
+      if (!d || typeof d !== "object") return r;
+      const g = d.groupRules && typeof d.groupRules === "object" && !Array.isArray(d.groupRules) ? d.groupRules : {};
+      return { ...r, data: { ...d, groupRules: { ...g, appShiftTypes: appTypesServed } } };
+    };
     const stampRow = (r) => (r && typeof r === "object") ? { ...r, ...(scopedBlobTs ? { updated_at: scopedBlobTs } : {}), ...(blobReadOverride || {}) } : r;
-    return json(200, Array.isArray(rows) ? rows.map(stampRow) : stampRow(rows));
+    return json(200, Array.isArray(rows) ? rows.map(r => stampRow(typed(r))) : stampRow(typed(rows)));
   }
   // Prompt 13 part 3: a claimed day reads back with the claimer, version + 1 (what the function's UPDATE leaves).
   // ... and the harness-opened slot (LIVE mode, P13R-2) reads back blank with its live source and version.
@@ -13447,7 +13461,10 @@ try {
     const NM = cm === 12 ? { y: cy + 1, m: 1 } : { y: cy, m: cm + 1 };
     const isoM = (d) => NM.y + "-" + String(NM.m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
     const MLABEL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][NM.m - 1] + " " + NM.y;
-    // Prompt 35: the first offered type of the served blob (as the save function reads it) and the days it runs next month
+    // Prompt 35: the first offered type of the served blob (as the save function reads it) and the days it runs next month. Review
+    // 11/17 (tests-2): the steps below assume the decided Inbox (one APP a day: B refused AP005, "Change APP", "taken") - every page
+    // and the mock are served exactly it for the block (appTypesServed / appTypesOverride), whatever Setup holds live
+    appTypesOverride = APP_MOCK_TYPES_DEFAULT; appTypesServed = APP_MOCK_TYPES_DEFAULT;
     const P29T = appMockTypes().find(t => !t.retired) || null, P29HOL = appMockHolidayDays();
     const p29Runs = (d) => !!P29T && P29T.weekdays.includes(appDow(d)) && (P29T.holidays || !P29HOL.has(d));
     const nmAll = Array.from({ length: new Date(Date.UTC(NM.y, NM.m, 0)).getUTCDate() }, (_, i) => isoM(i + 1));
@@ -13455,6 +13472,7 @@ try {
     const run4 = r4at >= 0 ? nmAll.slice(r4at, r4at + 4) : [isoM(10), isoM(11), isoM(12), isoM(13)];
     const later29 = r4at >= 0 ? nmAll.filter(d => d > run4[3] && p29Runs(d)) : [];
     if (!P29T || r4at < 0 || later29.length < 3) fail(`${P}: ${MLABEL} has no four days in a row of the ${P29T ? P29T.id : "(none offered)"} shift with three more after them - the steps below run on fixed days and will fail`);
+    if (P29T && P29T.perDay !== 1) fail(`${P}: the served ${P29T.id} type takes ${P29T.perDay} APPs a day - the steps below assume one (appTypesServed should have pinned it)`);
     const D10 = run4[0], D11 = run4[1], D12 = run4[2];
     const D14P = later29[0] || isoM(14), D16P = later29[1] || isoM(16), D20P = later29[2] || isoM(20);
     const hourOf = (m) => { const h = Math.floor(m / 60) % 24, mm = m % 60; return (h % 12 === 0 ? 12 : h % 12) + (mm ? ":" + String(mm).padStart(2, "0") : "") + (h < 12 ? "a" : "p"); };
@@ -13820,7 +13838,7 @@ try {
             return { day: e.getAttribute("data-day"), hours: h.textContent, shown: cs.display !== "none" && cs.visibility !== "hidden" && hr.w > 0 && hr.h > 0,
               unclipped: h.scrollWidth <= h.clientWidth + 0.5, inside: hr.l >= cell.l - 0.5 && hr.r <= cell.r + 0.5 && hr.t >= cell.t - 0.5 && hr.b <= cell.b + 0.5,
               oneLine: Math.abs(hr.h - parseFloat(cs.lineHeight)) <= 0.5, own: !!tr && !!cr && Math.abs(tr.t - cr.t) <= 1 && hr.t >= nameBottom - 0.5,
-              h: r1(hr.h), add: r1(hr.b - nameBottom) };
+              h: r1(hr.h), add: r1(hr.b - nameBottom), lh: r1(parseFloat(cs.lineHeight)) };
           })));
           const wk = await A.pg.$$eval("[data-testid=cal-grid] .cal-cell", els => {
             const by = {}, dotDays = [];
@@ -13834,12 +13852,16 @@ try {
           const addOf = {}; hrs.forEach(x => { addOf[x.day] = Math.round(((addOf[x.day] || 0) + (x.add || 0)) * 10) / 10; });
           const allowOf = (w) => Math.max(0, ...w.days.map(d => addOf[d] || 0));
           const badHrs = hrs.filter(x => !x.hours || !x.shown || !x.unclipped || !x.inside || !x.oneLine || !x.own);
+          // review 11/17 (tests-7): the allowance is each line's own measured growth, so it is bounded on its own - an hours line adds
+          // at most its line height + 1.5 px (the row gap) under the name row; a margin or a gap added later fails here, not silently
+          const tooTall = hrs.filter(x => x.hours && !(x.add <= x.lh + 1.5));
           const overGrown = appWeeks.filter(w => w.h > maxPlain + allowOf(w) + 0.5);
           const allowMax = appWeeks.length ? Math.max(...appWeeks.map(allowOf)) : 0;
           if (!n10 || !n13) fail(`${P} 1 H (${theme}): ${D10} (Appleton) and ${D13H} (Applegate) should both carry an APP line: ${JSON.stringify(names)}`);
           else if (names.some(x => !x.codeShown || x.nameShown || x.cut)) fail(`${P} 1 H (${theme}): at 390 px every APP line should show its short label whole (cal-app-code shown, the name hidden, nothing cut): ${JSON.stringify(names)}`);
           else if (n10.code !== "P.App" || n13.code !== "J.App" || n10.code === n13.code) fail(`${P} 1 H (${theme}): Appleton and Applegate should read apart ("P.App" / "J.App"), got '${n10.code}' / '${n13.code}'`);
           else if (badHrs.length || hrs.length !== names.length) fail(`${P} 1 H (${theme}): every A line's hours (cal-app-hours) should be visible, unclipped, inside its cell and on ONE line of its own under the name (the tag and the label on one row above it): ${JSON.stringify(badHrs.length ? badHrs : hrs)}`);
+          else if (tooTall.length) fail(`${P} 1 H (${theme}): an A line's hours add more than their own line height + 1.5 px under the name row (a margin or a gap grew the week): ${JSON.stringify(tooTall)}`);
           else if (wk.dotDays.length) fail(`${P} 1 H (${theme}): ${wk.dotDays.length} cell(s) of the month carry a vacation bar (${wk.dotDays.slice(0, 6).join(", ")}) although the APP pages' time_off answer leaves out every row overlapping ${NM_GRID_LO}..${NM_GRID_HI} - a week with a vacation bar is not measurable (the heights would read live content), so the week comparison cannot run: ${JSON.stringify(wk.weeks)}`);
           else if (!appWeeks.length || !plainWeeks.length || !(wk.minH > 0)) fail(`${P} 1 H (${theme}): the month should have weeks with and without an APP line and a phone min-height to compare: ${JSON.stringify(wk)}`);
           else if (overGrown.length) fail(`${P} 1 H (${theme}): a week with an APP line is ${maxApp}px tall, the month's weeks without one at most ${maxPlain}px - more than one hours line per APP shift in its tallest cell (allowed ${overGrown.map(w => "+" + allowOf(w) + "px on the week of " + w.days[0]).join(", ")}): ${JSON.stringify(wk.weeks)}`);
@@ -14134,7 +14156,7 @@ try {
       if (!sameJson(sums.slice(-3), wantSums)) fail(`${P} 5: the audit rows should read ${JSON.stringify(wantSums)}, got ${JSON.stringify(sums)}`); else ok(`${P} 5: the audit rows: ${wantSums.join(" | ")}`);
     } catch (e) { fail(`${P} 5 (the scheduler's APP line): ` + errLine(e)); try { if (sc) await sc.screenshot({ path: path.join(OUT, "failure-p29-5.png"), fullPage: true }); } catch (e2) {} }
     // ---- 5b. Ship review 10/2: the scheduler's Set APP during an outage - save_app_days answers a 503 gateway page and the reload
-    //      after it (app_call_days) a 500. The editor's block turns to "APP days could not be loaded", and the save's own words stay
+    //      after it (app_call_days) a 500. The editor's block turns to "APP shifts and vacations could not be loaded", and the save's own words stay
     //      under it (editor-app-error, role=alert): the outcome is unknown, in the editor's words (never "My APP shifts") - they used
     //      to vanish behind the load line, leaving only the reload's toast. A fresh scheduler page; every answer is the harness's. ----
     {
@@ -14186,10 +14208,10 @@ try {
         if (holder0 !== "none") fail(`${P} 5b: ${D16} should have no APP before the outage step, got '${holder0}'`);
         else if (forced.save !== 1 || forced.read < 1) fail(`${P} 5b: the harness should have refused ONE save (503) and at least one reload (500): ${JSON.stringify(forced)}`);
         else if (got.err !== wantErr || got.role !== "alert") fail(`${P} 5b: the editor should keep the save's words '${wantErr}' (role=alert) under the failed line, got ${JSON.stringify(got)}`);
-        else if (!/^APP\s*APP days could not be loaded$/.test(got.line) || got.set) fail(`${P} 5b: the block should read 'APP days could not be loaded' with no controls, got ${JSON.stringify(got)}`);
+        else if (!/^APP\s*APP shifts and vacations could not be loaded$/.test(got.line) || got.set) fail(`${P} 5b: the block should read 'APP shifts and vacations could not be loaded' with no controls, got ${JSON.stringify(got)}`);
         else if (!got.toast.includes("Couldn't load the APP shifts and vacations - the last loaded ones are kept.") || /may or may not/.test(got.toast)) fail(`${P} 5b: the reload's failure should be the toast (and the save's words not), got '${got.toast}'`);
         else if (appDayStore.some(r => r.day === D16)) fail(`${P} 5b: ${D16} landed in the store although the harness refused the save`);
-        else ok(`${P} 5b: Set APP during an outage (save 503, reload 500) - the block says 'APP days could not be loaded' and keeps '${got.err}' under it (role=alert); the toast is the reload's`);
+        else ok(`${P} 5b: Set APP during an outage (save 503, reload 500) - the block says 'APP shifts and vacations could not be loaded' and keeps '${got.err}' under it (role=alert); the toast is the reload's`);
         await sb.screenshot({ path: path.join(OUT, "p29-editor-outage.png"), fullPage: false });
       } catch (e) { armed = false; fail(`${P} 5b (the editor during an outage): ` + errLine(e)); try { await sb.screenshot({ path: path.join(OUT, "failure-p29-5b.png"), fullPage: true }); } catch (e2) {} }
       try { await settleSb(); await sb.close(); } catch (e) {}
@@ -14353,9 +14375,9 @@ try {
         if (!toastTxt.includes(want)) fail(`${P} 8b: the load's toast should say '${want}', got '${toastTxt}'`);
         else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8b: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
         else if (reads !== 1) fail(`${P} 8b: the sign-in should read the APP days ONCE (the load's batch pays the reset effect's owed read), got ${reads}`);
-        else if (!/^APP days couldn't be loaded - the A lines may be missing$/.test(legend)) fail(`${P} 8b: the grid's legend should say the APP days couldn't be loaded, got '${legend}'`);
+        else if (!/^APP shifts and vacations couldn't be loaded - the A lines and APP vacations may be missing$/.test(legend)) fail(`${P} 8b: the grid's legend should say the APP shifts and vacations couldn't be loaded, got '${legend}'`);
         else if (gl.length) fail(`${P} 8b: the grid shows APP lines from a failed read: ${JSON.stringify(gl)}`);
-        else if (!/^APP\s*APP days could not be loaded$/.test(sum)) fail(`${P} 8b: the day summary should say 'APP days could not be loaded', got '${sum}'`);
+        else if (!/^APP\s*APP shifts and vacations could not be loaded$/.test(sum)) fail(`${P} 8b: the day summary should say 'APP shifts and vacations could not be loaded', got '${sum}'`);
         else ok(`${P} 8b: a failed APP-day read on a viewer's sign-in - ONE read, '${want}' in the load's one toast and on Recent errors ('${errPill}'), the legend and the day summary say it in place`);
         await rp.screenshot({ path: path.join(OUT, "p29-appfail-viewer-390.png"), fullPage: true });
       } catch (e) { fail(`${P} 8b (a failed APP-day read): ` + errLine(e)); try { await rp.screenshot({ path: path.join(OUT, "failure-p29-8b.png"), fullPage: true }); } catch (e2) {} }
@@ -14412,7 +14434,7 @@ try {
         else if (toastLater && !toastLater.includes(want)) fail(`${P} 8c: another toast replaced the load's while the sign-in's reads settled: '${toastLater}'`);
         else if (!/^\d+ errors?$/.test(errPill)) fail(`${P} 8c: the load's error toast should be on Recent errors (the header's 'N errors'), got '${errPill}'`);
         else if (reads !== 1) fail(`${P} 8c: ONE APP-day read for the sign-in (the SUBSCRIBED refreshAll joins the load's read out), got ${reads}`);
-        else if (!/^APP days couldn't be loaded - the A lines may be missing$/.test(legend)) fail(`${P} 8c: the grid's legend should say the APP days couldn't be loaded, got '${legend}'`);
+        else if (!/^APP shifts and vacations couldn't be loaded - the A lines and APP vacations may be missing$/.test(legend)) fail(`${P} 8c: the grid's legend should say the APP shifts and vacations couldn't be loaded, got '${legend}'`);
         else ok(`${P} 8c: Realtime joined (${rtq.joins} joins, SUBSCRIBED -> refreshAll) - ONE app_call_days read, '${want}' in the load's toast and on Recent errors ('${errPill}'), the legend says it`);
       } catch (e) { fail(`${P} 8c (a failed APP-day read with Realtime up): ` + errLine(e)); try { await rq.screenshot({ path: path.join(OUT, "failure-p29-8c.png"), fullPage: true }); } catch (e2) {} }
       try { await settleQ(); await rq.close(); } catch (e) {}
@@ -14763,21 +14785,25 @@ try {
           const r = document.querySelector(`[data-testid=appshift-row-${ty}]`), q = (s) => r.querySelector(s), ret = q("[data-testid=appshift-retire]");
           return { label: q("[data-testid=appshift-label]").value, start: q("[data-testid=appshift-start]").value, end: q("[data-testid=appshift-end]").value, perDay: q("[data-testid=appshift-perday]").value, holidays: q("[data-testid=appshift-holidays]").checked,
             wd: [0, 1, 2, 3, 4, 5, 6].filter(w => q(`[data-testid=appshift-wd-${w}]`).getAttribute("aria-pressed") === "true"), retire: ret ? { disabled: ret.disabled, title: ret.getAttribute("title") } : null,
-            rows: document.querySelectorAll("[data-testid^=appshift-row-]").length, save: document.querySelector("[data-testid=appshift-save]").disabled };
+            rows: document.querySelectorAll("[data-testid^=appshift-row-]").length, save: document.querySelector("[data-testid=appshift-save]").disabled,
+            // review 11/17 (client-2): the hours of a type with shifts on file are fixed - both inputs disabled, the title says why
+            hours: { start: q("[data-testid=appshift-start]").disabled, end: q("[data-testid=appshift-end]").disabled, title: q("[data-testid=appshift-start]").getAttribute("title"), label: q("[data-testid=appshift-start]").getAttribute("aria-label") } };
         }, TY);
         const nFuture = appDayStore.filter(r => r.shift_type === TY && r.day >= todayCentral).length;
+        const nOnFile = appDayStore.filter(r => r.shift_type === TY).length;
         const w0 = writes.length;
         await sc35.click("[data-testid=appshift-add]");
         await sc35.waitForTimeout(150);
-        const added = await sc35.evaluate(() => ({ rows: document.querySelectorAll("[data-testid^=appshift-row-]").length, idInput: !!document.querySelector("[data-testid=appshift-id]"), save: document.querySelector("[data-testid=appshift-save]").disabled }));
+        const added = await sc35.evaluate(() => { const rs = document.querySelectorAll("[data-testid^=appshift-row-]"), last = rs[rs.length - 1]; return { rows: rs.length, idInput: !!document.querySelector("[data-testid=appshift-id]"), save: document.querySelector("[data-testid=appshift-save]").disabled, newHours: !!last && !last.querySelector("[data-testid=appshift-start]").disabled && !last.querySelector("[data-testid=appshift-end]").disabled }; });
         await sc35.click("[data-testid=appshift-revert]");
         await sc35.waitForTimeout(150);
         const reverted = await sc35.evaluate(() => ({ rows: document.querySelectorAll("[data-testid^=appshift-row-]").length, save: document.querySelector("[data-testid=appshift-save]").disabled }));
         const blobW = writes.slice(w0).filter(w => /\/rest\/v1\/call_schedule_data\b/.test(w.path));
         if (!P29T || row.label !== TL || row.start !== hhmm(P29T.startMin) || row.end !== hhmm(P29T.endMin) || row.perDay !== String(P29T.perDay) || row.holidays !== P29T.holidays || row.wd.join(",") !== P29T.weekdays.join(",")) fail(`${Q} f: the ${TY} row should show the served type (${TL} ${P29T ? hhmm(P29T.startMin) + "-" + hhmm(P29T.endMin) : "?"}), got ${JSON.stringify(row)}`);
         else if (!row.retire || !row.retire.disabled || row.retire.title !== `${nFuture} shift${nFuture === 1 ? "" : "s"} from today on - clear them first`) fail(`${Q} f: Retire should be refused while ${TY} has ${nFuture} shift(s) from today on, got ${JSON.stringify(row.retire)}`);
-        else if (!row.save || added.rows !== row.rows + 1 || !added.idInput || added.save || reverted.rows !== row.rows || !reverted.save || blobW.length) fail(`${Q} f: Add a type should draft a row with its id field (Save enabled) and Revert drop it (Save disabled), with no write: ${JSON.stringify({ row, added, reverted, blobWrites: blobW.length })}`);
-        else ok(`${Q} f: Setup > APP shifts - the ${TY} row as served (${row.label} ${row.start}-${row.end}, weekdays ${row.wd.join(",")}, perDay ${row.perDay}); Retire refused ('${row.retire.title}'); Add drafts a row, Revert drops it - no write`);
+        else if (!nOnFile || !row.hours.start || !row.hours.end || row.hours.title !== `${nOnFile} shift${nOnFile === 1 ? " is" : "s are"} on file with these hours - add a new type for new hours` || row.hours.label !== TL + " start") fail(`${Q} f: the ${TY} hours should be fixed while ${nOnFile} shift(s) are on file (both inputs disabled, the title saying why, the input named '${TL} start'), got ${JSON.stringify(row.hours)}`);
+        else if (!row.save || added.rows !== row.rows + 1 || !added.idInput || added.save || !added.newHours || reverted.rows !== row.rows || !reverted.save || blobW.length) fail(`${Q} f: Add a type should draft a row with its id field and editable hours (Save enabled) and Revert drop it (Save disabled), with no write: ${JSON.stringify({ row, added, reverted, blobWrites: blobW.length })}`);
+        else ok(`${Q} f: Setup > APP shifts - the ${TY} row as served (${row.label} ${row.start}-${row.end}, weekdays ${row.wd.join(",")}, perDay ${row.perDay}); Retire refused ('${row.retire.title}'); its hours fixed ('${row.hours.title}'); Add drafts a row with editable hours, Revert drops it - no write`);
         await sc35.locator("[data-testid=card-setup_app_shifts]").screenshot({ path: path.join(OUT, "p35-setup-app-shifts.png") });
       } catch (e) { fail(`${Q} f (Setup > APP shifts): ` + errLine(e)); try { if (sc35) await sc35.screenshot({ path: path.join(OUT, "failure-p35-f.png"), fullPage: true }); } catch (e2) {} }
       if (sc35) { try { await settleSc35(); await sc35.close(); } catch (e) {} }
@@ -14795,6 +14821,7 @@ try {
     if (clientAudit.length || notifPosts.length || emailPosts.length) fail(`${P} 9: the client wrote an audit row (${clientAudit.length}), a notification (${notifPosts.length}) or an e-mail call (${emailPosts.length}) during the APP steps`);
     else ok(`${P} 9: no client audit row, no notification row, no e-mail call during the APP steps (the save function writes the audit row: ${appAudit.length - audit0} recorded)`);
     appDayStore = []; appVacStore = []; appProfiles = []; appStale = null; appDaysMode = "ok"; appSlowHold = null; appColumnFixture = false;
+    appTypesOverride = null; appTypesServed = null;   // the live blob's types again (review 11/17, tests-2)
     if (sc) { try { await settleSc(); await sc.close(); } catch (e) {} }
     if (A) { try { await A.ctx.close(); } catch (e) {} }
     await page.evaluate((t) => { try { localStorage.setItem("silvis-auth-token", t); } catch (e) {} }, FAKE_JWT);

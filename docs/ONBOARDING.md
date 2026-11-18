@@ -212,12 +212,11 @@ A coordinator account is created like any other (invite from the dashboard), the
 ## APPs: shifts and vacations (Prompt 29, 10/1; Prompt 35, 11/17)
 
 *The database part ran on 2026-10-02 (`apply-app-call-days.sh`); APP accounts work from the build that ships Prompt 29's
-client, then Faraz marks them in Setup → Users. (Should the database part ever be rolled back, the APP line reads "APP days
-are available after the next database update.")*
+client, then Faraz marks them in Setup → Users.*
 
 *Prompt 35 (Faraz 11/17) - shifts with hours and the APPs' own vacations: its database part (revision ac) is Faraz's apply
 (`apply-app-shifts.sh`), and its client ships right after it, on his go; what follows is what the APPs see from that build
-on. (Should that database part ever be rolled back, the APP line reads "APP shifts and vacations are available after the
+on. (Should either database part ever be rolled back, the APP line reads "APP shifts and vacations are available after the
 next database update.")*
 
 **What an APP account is.** A viewer account (read-only, no roster link) that you mark **APP**. It keeps everything a
@@ -238,17 +237,20 @@ feature away; that person's shifts and vacations stay until you clear them (dele
 
 **The shifts (Setup → APP shifts).** One row per shift: its name, its start and end (an end before the start runs into the
 next morning - 5p-7a; the same start and end is 24 hours), its weekdays, whether it runs on holidays, and **APPs a day**.
-**Add a type**, change one, then **Save APP shifts**. A change applies to shifts added from then on - nothing already booked
-moves. **Retire** a shift that nobody holds from today on: it is offered no more and its past days keep its name
-(**Restore** brings it back).
+**Add a type**, change one, then **Save APP shifts**. A new name shows on every shift of that type; weekdays, holidays and
+APPs a day apply to shifts added from then on - nothing already booked moves. The hours are fixed once a shift of that type
+is on file (every booked shift keeps them): for new hours, add a new type and retire the old one once nobody holds it from
+today on. **Retire** a shift that nobody holds from today on: it is offered no more and its past days keep its name and
+hours (**Restore** brings it back).
 
 **What the APP does.** **Mine → My APP shifts**: a month of days on the phone, for one shift at a time (a picker shows once
-there is a second one). Tap a day to put yourself on the shift; tap it again to take it off. A day with another APP's name
-on it is taken; a grey day has no shift for you (a weekend, a holiday, your vacation, or another shift of yours at that
+there is a second one). Tap a day to put yourself on the shift; tap it again to take it off. A full day shows who holds
+it; a grey day has no shift for you (a weekend, a holiday, your vacation, or another shift of yours at that
 time). **Range** (tap the first and the last day) and **Paste dates** ("12/2, 12/9, 12/14-12/16") add every free day at once
 and say which days they skipped and why. Nothing is saved while tapping: **Save** sends all the changes at once (if it is
 refused, nothing was saved, your other taps stay and the message says why - e.g. "12/10 inbox already has <APP name> -
-nothing was saved"; a tap the refusal made impossible, such as a day another APP just took, drops out). Past days stay as
+nothing was saved"; a tap the refusal made impossible, such as a day another APP just took, drops out - and so does an
+unsaved tap a vacation you just entered covers). Past days stay as
 they are. A tapped day shows "*" (unsaved) until Save; leaving Mine (another tab, Sign in again, a new-version banner's reload) with unsaved taps asks first - Cancel keeps them; closing the app asks only in a desktop browser (an iPhone never asks), so Save first.
 **Mine → My vacations**: pick the first and the last day and tap **Add vacation** - saved at once, no approval. **Edit** or
 **Remove** one that has not started; once it starts it stays on record (ask the scheduler). A vacation over one of your own
@@ -258,7 +260,7 @@ shifts is refused - remove the shift first.
 APP and **Set APP** (or **Change APP**, which puts another APP in the holder's place), or **Clear** a holder. It is saved at
 once, apart from the day's own Save, and works on past days too. **Time off → APP vacations** lists every APP's vacations for
 everyone signed in; you and the office pick an APP and **Add vacation**, or **Edit** / **Remove** one (the office: one that
-has not started).
+has not started; an account no longer marked APP keeps its vacations, which can be removed but not edited).
 
 **Who sees it.** The calendar shows each APP shift as a line "A <last name> 7a-5p" (on a phone the first four letters, or an initial + three letters when two APPs start alike - "P.App" / "J.App" - with the hours under the name) in a muted rose (the shift's name and the full name are in the day's
 hover and in the day summary); an APP on vacation shows in that day's vacation bar as "A <last name>"; the legend explains
@@ -271,7 +273,7 @@ show nothing of it. The generator, the rules, trades and the open shifts board i
 
 **Three lines to send an APP (phone):**
 1. Open the Silvis call schedule, sign in and tap **Mine**.
-2. Under **My APP shifts**, tap each weekday you will cover the inbox (7a-5p) - tap again to undo, the arrow by the month shows the next one, a day with someone else's name is taken - then tap **Save**.
+2. Under **My APP shifts**, tap each weekday you will cover the inbox (7a-5p) - tap again to undo, the arrow by the month shows the next one, a full day shows who has it - then tap **Save**.
 3. Under **My vacations**, pick your first and last day and tap **Add vacation** - no approval needed; if it covers one of your shifts, take that shift off first.
 
 ## Phone notifications (Prompt 30 - the database, the VAPID keys and send-notification are live since 2026-10-03; it works from the build that ships Prompt 30's client)

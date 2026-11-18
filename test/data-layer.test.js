@@ -12300,7 +12300,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         { id: "old", label: "Old", start: "08:00", end: "12:30", startMin: 480, endMin: 750, weekdays: [1], holidays: false, perDay: 1, retired: true },
         { id: "half", label: "Half", start: "12:00", end: "20:00", startMin: 720, endMin: 1200, weekdays: [1, 2, 3, 4, 5], holidays: false, perDay: 1, retired: false },
       ], "the junk skipped (a second inbox, a capital id, 7:00, no weekdays, weekday 7, a string weekday, a string, null, an array); 2.5 / 21 a day read 1");
-      assert.strictEqual(H.appShiftTypesOf({ appShiftTypes: RAW })[0] !== H.APP_SHIFT_TYPES_DEFAULT[0], true, "a new object - the default is never handed out");
+      // review 11/17 (tests-8): the DEFAULT path hands out fresh objects - two reads share nothing with each other or the frozen default
+      const dA = H.appShiftTypesOf({}), dB = H.appShiftTypesOf(null), dC = H.appShiftTypesOf({ appShiftTypes: "inbox" });
+      assert.ok(dA !== dB && dA[0] !== dB[0] && dA[0] !== H.APP_SHIFT_TYPES_DEFAULT[0] && dC[0] !== dA[0] && dA[0].weekdays !== H.APP_SHIFT_TYPES_DEFAULT[0].weekdays && dA[0].weekdays !== dB[0].weekdays, "a new object on every read - the default is never handed out");
+      dA[0].weekdays.push(6); dA[0].label = "changed";
+      assert.deepStrictEqual([plain(H.appShiftTypesOf({})[0].weekdays), H.appShiftTypesOf({})[0].label, plain(dB[0].weekdays)], [[1, 2, 3, 4, 5], "Inbox", [1, 2, 3, 4, 5]], "one caller's change reaches no other reader");
     });
     check("P35 helpers: appHourLabel / appShiftHours / appShiftWeekdayWords - the calendar's short hours ('7a–5p', '5p–7a' crosses midnight, '7a–7a' is 24 hours) and weekday words", () => {
       assert.deepStrictEqual([0, 420, 450, 720, 750, 1020, 1439, 1440, -60].map(H.appHourLabel), ["12a", "7a", "7:30a", "12p", "12:30p", "5p", "11:59p", "12a", "11p"]);
@@ -12400,6 +12404,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(H.appShiftCellWords("off", "2026-12-07", [], T("wk24")), "12/7 has no wk24 shift (Sat, Sun).", "a type that runs on holidays says no 'not on holidays'");
       assert.strictEqual(H.appShiftCellWords("off", "2026-12-07", [], null), "12/7 has no such shift (it is not offered).");
       assert.strictEqual(H.appShiftCellWords("away", "2026-12-14", [], T("inbox")), "12/14 is on your vacation - change the vacation first.");
+      // review 11/17 (client-6): with the APP's vacations, a day that is not a vacation day (a night that runs into one) is named as such
+      assert.strictEqual(H.appShiftCellWords("away", "2026-12-14", [], T("inbox"), VACS.filter(v => v.profileId === PA)), "12/14 is on your vacation - change the vacation first.");
+      assert.strictEqual(H.appShiftCellWords("away", "2026-12-11", [], T("night"), [{ start: "2026-12-12", end: "2026-12-13" }]), "12/11 Night runs into your vacation 12/12-12/13 - change the vacation first.");
+      assert.strictEqual(H.appShiftCellState("2026-12-11", "night", ctx({ myVacs: [{ start: "2026-12-12", end: "2026-12-13" }] })), "away", "the state those words answer");
+      assert.deepStrictEqual(plain(H.appShiftPlan(["2026-12-11"], "night", ctx({ myVacs: [{ start: "2026-12-12", end: "2026-12-12" }] })).skipped), [{ day: "2026-12-11", why: "12/11 Night runs into your vacation 12/12 - change the vacation first" }], "Range / Paste say the same");
       assert.strictEqual(H.appShiftCellWords("clash", "2026-12-03", [], T("half")), "12/3 Half overlaps another shift of yours - one shift at a time.");
       assert.strictEqual(H.appShiftCellWords("free", "2026-12-04", [], T("inbox")), "");
     });
@@ -12431,6 +12440,17 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const keep = { "2026-12-08|inbox": true, "2026-12-03|night": false };
       assert.strictEqual(H.appShiftDraftPrune(keep, ctx()), keep, "nothing to drop: the SAME object");
       assert.deepStrictEqual(plain(H.appShiftDraftPrune(keep, ctx({ today: "2026-12-04" }))), { "2026-12-08|inbox": true }, "12/3 is past now");
+    });
+    check("P35 helpers: appShiftDraftPrune (review 11/17) - a drafted add that a vacation of mine or another shift of mine has made impossible drops out too (away / clash), so Save never sends what the database refuses (AP010 / AP009); of two drafted adds that came to overlap, the later key stays", () => {
+      const d = { "2026-12-14|inbox": true, "2026-12-15|inbox": true, "2026-12-11|inbox": true, "2026-12-03|half": true, "2026-12-09|half": true, "2026-12-09|inbox": true };
+      const p = H.appShiftDraftPrune(d, ctx());
+      assert.deepStrictEqual(plain(p), { "2026-12-11|inbox": true, "2026-12-09|inbox": true }, "12/14-12/15 on my vacation, 12/3 half over my night, 12/9 half over the drafted inbox");
+      assert.deepStrictEqual(plain(H.appShiftDraftDiff(p, BY, PA, TODAY).add), [{ day: "2026-12-09", type: "inbox" }, { day: "2026-12-11", type: "inbox" }], "Save sends only what the database takes");
+      // the review's case: inbox drafted 12/21-12/23, then a vacation 12/22-12/26 saved in My vacations - the reload prunes 12/22 and 12/23
+      const draft = { "2026-12-21|inbox": true, "2026-12-22|inbox": true, "2026-12-23|inbox": true };
+      const vNew = H.appVacationRows([{ id: "vn", profile_id: PA, start_date: "2026-12-22", end_date: "2026-12-26", source: "app" }], NAMES);
+      assert.deepStrictEqual(plain(H.appShiftDraftPrune(draft, ctx({ myVacs: vNew }))), { "2026-12-21|inbox": true });
+      assert.deepStrictEqual(["2026-12-22", "2026-12-23"].map(dd => H.appShiftCellState(dd, "inbox", ctx({ myVacs: vNew, draft: H.appShiftDraftPrune(draft, ctx({ myVacs: vNew })) }))), ["away", "away"], "the cells read away, never + You");
     });
     check("P35 helpers: appShiftSummary / appShiftSavedNote / appVacSavedNote - the database's audit wording ('inbox 11/18, 11/19; removed inbox 11/25', 'vacation 12/1-12/5')", () => {
       assert.strictEqual(H.appShiftSummary([{ day: "2026-12-09", type: "inbox" }, { day: "2026-12-03", type: "night" }, { day: "2026-12-04", type: "inbox" }, { day: "bad", type: "inbox" }, null]), "night 12/3; inbox 12/4, 12/9", "types by their first day, days in order");
@@ -12555,6 +12575,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     check("P35 helpers: appGridLabels reads appShiftDayMap's lists (every holder of every shift; one label per APP across the month) and appDaysLeaveWords names My APP shifts", () => {
       assert.deepStrictEqual(plain(H.appGridLabels(BY)), { [PA]: "Appl", [PB]: "Bram", [PX]: "APP" });
+      // review 11/17 (client-3): an APP with only a vacation gets its label too (the 390 px vacation bar), and two alike stay distinct
+      const n3 = [{ profile_id: "pA", display_name: "Pat Appleton", is_app: true }, { profile_id: "pB", display_name: "Jo Applegate", is_app: true }];
+      const by3 = H.appShiftDayMap([{ day: "2026-12-07", shift_type: "inbox", profile_id: "pA", source: "app" }], n3, TYPES), v3 = H.appVacationRows([{ id: "v9", profile_id: "pB", start_date: "2026-12-07", end_date: "2026-12-09", source: "app" }], n3);
+      assert.deepStrictEqual([plain(H.appGridLabels(by3)), plain(H.appGridLabels({ ...by3, __vac: v3 }))], [{ pA: "Appl" }, { pA: "P.App", pB: "J.App" }]);
       assert.deepStrictEqual(plain(H.appGridLabels({ "2026-12-08": [{ profileId: "p1", name: "Pat Appleton" }, { profileId: "p2", name: "Jo Applegate" }] })), { p1: "P.App", p2: "J.App" }, "two APPs on one day's list start alike");
       assert.strictEqual(H.appDaysLeaveWords(2), "Discard 2 unsaved APP shift changes and leave Mine?\n\nCancel stays on My APP shifts - tap Save to keep them.");
       assert.strictEqual(H.appDaysLeaveWords(1, "signin"), "Discard 1 unsaved APP shift change and sign in again?\n\nCancel keeps them on My APP shifts (note the days, then sign in again).");
@@ -13115,8 +13139,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(cellB > 0 && cellA > cellB && cellA - cellB < 500, "the A lines come right after B");
       assert.ok(SRC.includes('? <span className="cal-vac-who" data-appvac={v.app.profileId} title={"APP " + v.app.name + " on vacation"}><span className="cal-vac-app-tag">A</span><span className="cal-name">{v.app.short}</span><span className="cal-code">{appGridLabel[v.app.profileId] || v.app.short}</span>'), "an APP in the bar: 'A' + its short name (its phone label on a phone)");
       assert.ok(SRC.includes('(appVacByDay[d] || []).length ? "APP on vacation: " + appVacByDay[d].map(v => v.name).join(", ") : ""'), "the bar's hover names the APPs");
-      assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP days couldn\'t be loaded - the A lines may be missing</span>}'), 1, "the legend's failed line");
-      assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP days not loaded yet - the A lines may be missing</span>}'), 1, "the legend's not-loaded line");
+      assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "failed" && <span data-testid="legend-app-failed" style={{color:T.open,fontWeight:700}}>APP shifts and vacations couldn\'t be loaded - the A lines and APP vacations may be missing</span>}'), 1, "the legend's failed line (review 11/17: the read carries the vacations)");
+      assert.strictEqual(cnt(SRC, '{!isPublicMode && appDaysState === "skipped" && <span data-testid="legend-app-unread" style={{color:T.open,fontWeight:700}}>APP shifts and vacations not loaded yet - the A lines and APP vacations may be missing</span>}'), 1, "the legend's not-loaded line");
+      assert.ok(!/APP days (couldn't|could not|not loaded)/.test(SRC.replace(/\/\/[^\n]*/g, "")), "no 'APP days' read-failure words left (comments aside)");
       assert.ok(SRC.includes('{!isPublicMode && gridDays.some(gd => (appByDay[gd] || []).length > 0) && <span data-testid="legend-app"><span style={{color:T.appText,fontStyle:"italic",fontWeight:700}}>A</span> name {legendAppHours.join(" / ") || "hours"} = APP shift (its hours)</span>}'));
       assert.ok(SRC.includes('{!isPublicMode && legendAppVac && <span data-testid="legend-appvac">') && SRC.includes("const legendAppVac = gridDays.some(gd => (appVacByDay[gd] || []).length > 0);") && SRC.includes("const legendVac = gridDays.some(gd => calVac(gd).some(v => !v.app));"), "the APP vacation legend line - the surgeons' line counts surgeons only");
       assert.ok(SRC.includes('<span className="cal-mobile-note">top line = primary, bottom line = backup (tap a day for details)</span>'), "the phone legend line is unchanged");
@@ -13134,8 +13159,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(blk.includes('if (appState !== "ok" || (!choices.length && !appList.length) || !lines.length) return null;'), "nothing while unread, nothing with no APP account and no holder, nothing with no line");
       assert.ok(blk.includes("const lines = appTypeList.filter(t => appShiftRunsOn(t, day, props.appHolidayDays).ok || appList.some(e => e.type === t.id))"), "a line per type that runs that day, or that a holder holds");
       assert.ok(blk.includes('const mode = !full ? "set" : ln.perDay === 1 && holders.length === 1 ? "change" : null;') && blk.includes('onClick={() => run(ln.id, mode, pick, mode === "change" ? holders[0].profileId : "")}') && blk.includes('onClick={() => run(ln.id, "clear", "", h.profileId)}'), "set a free place / change the one holder / clear one holder");
+      assert.ok(blk.includes('data-testid="editor-app-clear" data-app-profile={h.profileId} aria-label={"Clear " + h.name + " from " + ln.label}'), "review 11/17 (client-7): each Clear names the APP and the shift it removes");
       const notOk = blk.slice(blk.indexOf('if (appState === "unavailable" || appState === "failed" || appState === "skipped") return ('), blk.indexOf('if (appState !== "ok" || (!choices.length && !appList.length) || !lines.length) return null;'));
-      assert.ok(notOk.includes('{appState === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : appState === "skipped" ? "APP days not loaded yet" : "APP days could not be loaded"}') && notOk.includes('{appError && <div role="alert" data-testid="editor-app-error"') && notOk.includes('{appStatus && <div role="status" data-testid="editor-app-status"'), "the not-ok branch keeps a save's own words on screen");
+      assert.ok(notOk.includes('{appState === "unavailable" ? APP_DAYS_UNAVAILABLE_TEXT : appState === "skipped" ? "APP shifts and vacations not loaded yet" : "APP shifts and vacations could not be loaded"}') && notOk.includes('{appError && <div role="alert" data-testid="editor-app-error"') && notOk.includes('{appStatus && <div role="status" data-testid="editor-app-status"'), "the not-ok branch keeps a save's own words on screen");
       for (const t of ["editor-app", "editor-app-set", "editor-app-clear", "editor-app-status", "editor-app-error", "editor-app-unavailable", "editor-app-block", "editor-app-type", "editor-app-holder"]) {
         assert.strictEqual(cnt(edSrc, 'data-testid="' + t + '"'), cnt(blk, 'data-testid="' + t + '"'), t + " only inside the scheduler's block");
         assert.ok(cnt(blk, 'data-testid="' + t + '"') >= 1, t);
@@ -13153,7 +13179,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(rxCount(cardSrc, /onSave\(/g), 1, "one onSave call");
       const sv = between(cardSrc, "  const save = async () => {", "\n  };\n");
       assert.ok(sv.includes("const r = await onSave(diff.add, diff.clear);"), "Save sends the draft diff once");
-      assert.ok(cardSrc.includes("React.useEffect(() => { setDraft(d => appShiftDraftPrune(d, ctx)); }, [byDay, profileId, todayC, types, holidayDays]); // eslint-disable-line") && cardSrc.includes("const diff = appShiftDraftDiff(draft, held, profileId, todayC);"), "the draft is pruned after a reload and counted against today");
+      assert.ok(cardSrc.includes("React.useEffect(() => { setDraft(d => appShiftDraftPrune(d, ctx)); }, [byDay, profileId, todayC, types, holidayDays, myVacs]); // eslint-disable-line") && cardSrc.includes("const diff = appShiftDraftDiff(draft, held, profileId, todayC);"), "the draft is pruned after a reload - a vacation of mine arriving included (review 11/17) - and counted against today");
+      assert.ok(cardSrc.includes("setHint(appShiftCellWords(st, d, othersOn(d), type, ctx.myVacs))") && cardSrc.includes("appShiftCellWords(st, d, others, type, ctx.myVacs)"), "the hint and the hover name the vacation a shift runs into (review 11/17)");
+      assert.ok(cardSrc.includes('{(upcoming.length > 0 || state === "ok") && <div data-testid="appdays-upcoming"'), "'No APP shifts on file' only after a read that worked (review 11/17: never beside a failed or missing read)");
       assert.ok(cardSrc.includes('state === "failed" ? "Couldn\'t load the APP shifts - the calendar below may be out of date."') && !/nothing was changed/.test(cardSrc), "the failed line never claims 'nothing was changed'");
       assert.ok(!/onSave/.test(cardSrc.replace(sv, "").replace("function AppDaysCard({ css, dk, profileId, byDay, types, holidayDays, myVacs, state, today, weekStartsOn, busy, onSave, onRetry, onDirty }) {", "").replace('typeof onSave !== "function"', "")), "no other path calls onSave (a tap only drafts)");
       assert.ok(cardSrc.includes("{offered.length > 1 && (") && cardSrc.indexOf('data-testid="appdays-type"') > cardSrc.indexOf("{offered.length > 1 && ("), "the type picker shows once a second type is offered");
@@ -13162,7 +13190,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(cardSrc), "no literal hex colour - THEME tokens only");
       assert.ok(!/fetch\(|appDaysDb|db\.|supabase\./.test(cardSrc), "the card talks to nothing but its props");
       for (const t of ["appdays-card", "appdays-state", "appdays-retry", "appdays-type", "appdays-type-note", "appdays-month", "appdays-prev", "appdays-next", "appdays-cell", "appdays-range", "appdays-paste-toggle", "appdays-paste", "appdays-paste-year", "appdays-paste-add", "appdays-hint", "appdays-count", "appdays-discard", "appdays-save", "appdays-saved", "appdays-error", "appdays-upcoming"]) assert.ok(cardSrc.includes('data-testid="' + t + '"'), t);
-      assert.ok(cardSrc.includes(">My APP shifts</div>") && cardSrc.includes(">Tap a day to put yourself on the shift; tap it again to take it off. A day with a name on it is taken, and a grey day has no shift for you. Save sends all your changes at once. Past days stay as they are (ask the scheduler).<"), "the title and the intro words");
+      assert.ok(cardSrc.includes(">My APP shifts</div>") && cardSrc.includes(">Tap a day to put yourself on the shift; tap it again to take it off. A full day shows who holds it, and a grey day has no shift for you. Save sends all your changes at once. Past days stay as they are (ask the scheduler).<"), "the title and the intro words");
     });
     check("P35 pins: APP vacations - one module-scope card for Mine ('My vacations', the APP's own) and Time off ('APP vacations', every signed-in role; the scheduler and the office add for any APP); ONE onSave per Save (a change = remove + add); the client's check first; Edit / Remove only where appVacationEditable allows; the surgeons' Time off pieces; THEME tokens", () => {
       assert.ok(/^function AppVacationsCard\(/m.test(SRC), "module scope");
@@ -13173,7 +13201,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(addV.indexOf("const why = check(pid, start, end, null);") > 0 && addV.indexOf("const why = check(pid, start, end, null);") < addV.indexOf("run(pid, [{ start, end }], []"), "add: the client's check before the request");
       assert.ok(vacCardSrc.includes("excludeId, name: nameOfP(pid), self: !!(mine && pid === me) });"), "the APP's own card asks for the words that address it (You hold / You are)");
       assert.ok(editV.indexOf("const why = check(edit.profileId, edit.start, edit.end, edit.id);") < editV.indexOf("run(edit.profileId, [{ start: edit.start, end: edit.end }], [edit.id]"), "a change: checked without itself, then ONE request (remove + add)");
-      assert.ok(vacCardSrc.includes("const may = appVacationEditable(v, ctxEdit);") && vacCardSrc.includes('{may && <button type="button" data-testid="appvac-edit"') && vacCardSrc.includes('{may && <button type="button" data-testid="appvac-remove"'), "Edit / Remove only where allowed");
+      assert.ok(vacCardSrc.includes("const may = appVacationEditable(v, ctxEdit);") && vacCardSrc.includes('{may && v.isApp && <button type="button" data-testid="appvac-edit"') && vacCardSrc.includes('{may && <button type="button" data-testid="appvac-remove"'), "Edit / Remove only where allowed");
+      assert.ok(!vacCardSrc.includes('{may && <button type="button" data-testid="appvac-edit"'), "review 11/17 (client-8): a former APP's vacation offers Remove only - an edit re-adds the range, refused AV003");
+      assert.ok(vacCardSrc.includes('{state === "ok" && groups.length === 0 && <div data-testid="appvac-none"'), "review 11/17 (client-4): 'No upcoming APP vacations' only after a read that worked");
+      assert.ok(vacCardSrc.includes('data-testid="appvac-edit-start" aria-label="First day"') && vacCardSrc.includes('data-testid="appvac-edit-end" aria-label="Last day"'), "review 11/17 (client-7): the edit row's dates are named");
       assert.ok(vacCardSrc.includes("const groups = groupVacationRows(appVacationMap(list), ids, todayC, showPast, null);") && vacCardSrc.includes("{vacRangeLabel(r.vs, r.ve, todayC)}"), "the surgeons' Time off pieces");
       assert.ok(!/opacity/.test(vacCardSrc) && !/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(vacCardSrc) && !/fetch\(|appDaysDb|db\.|supabase\./.test(vacCardSrc), "THEME tokens, no opacity, props only");
       for (const t of ["appvac-state", "appvac-who", "appvac-start", "appvac-end", "appvac-add", "appvac-show-past", "appvac-none", "appvac-edit", "appvac-remove", "appvac-edit-start", "appvac-edit-end", "appvac-edit-save", "appvac-edit-cancel", "appvac-saved", "appvac-error"]) assert.ok(vacCardSrc.includes('data-testid="' + t + '"'), t);
@@ -13191,6 +13222,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(sv.indexOf("if (p.length) { setErr(p.join(\"; \")); return; }") < sv.indexOf("onSave(list);"), "validated before the save");
       assert.ok(typesCardSrc.includes('{t.saved ? <span style={{fontFamily: mono}}>{t.id}</span> : <input data-testid="appshift-id"'), "an id is editable only before its first save");
       assert.ok(typesCardSrc.includes('const canRetire = appState === "ok" && n === 0;'), "Retire: the shifts loaded and none from today on");
+      // review 11/17 (client-2): the hours place every booked shift of the type (a row keeps none), so a saved type's hours are fixed
+      // once any shift of it is on file (past days included), and while the shifts are not loaded
+      assert.ok(typesCardSrc.includes("const onFile = (id) => Object.keys(appByDay || {}).reduce((n, d) => n + (appByDay[d] || []).filter(e => e.type === id).length, 0);") && typesCardSrc.includes('const hoursFixed = (t) => t.saved && (appState !== "ok" || onFile(t.id) > 0);'), "hoursFixed: a saved type with any shift on file, or the shifts unread");
+      assert.ok(typesCardSrc.includes('data-testid="appshift-start" aria-label={nm + " start"} disabled={fixed} title={fixedWhy}') && typesCardSrc.includes('data-testid="appshift-end" aria-label={nm + " end"} disabled={fixed} title={fixedWhy}'), "the start and end inputs are disabled while fixed, saying why");
+      assert.ok(typesCardSrc.includes("else if (t.saved && savedHours(t.id) !== null && savedHours(t.id) !== t.start + \"-\" + t.end && hoursFixed(t)) out.push("), "Save refuses changed hours on a fixed type (a change drafted before a shift arrived)");
+      assert.ok(typesCardSrc.includes("The hours place every shift of the type, so they are fixed once it has a shift on file: for new hours, add a new type and retire the old one once it has no shift from today on.") && !typesCardSrc.includes("Changing a type changes nothing already booked"), "the intro says what a change does to booked shifts");
+      assert.ok(['aria-label={"Id of row " + (i + 1)}', 'aria-label={"Name of row " + (i + 1)}', 'aria-label={nm + " on " + APP_WEEKDAY_SHORT[w]}', 'aria-label={nm + " runs on holidays"}', 'aria-label={nm + " APPs a day"}'].every(a => typesCardSrc.includes(a)), "review 11/17 (client-7): every row control is named");
       assert.ok(typesCardSrc.includes("const readable = appShiftTypesOf({ appShiftTypes: stored || APP_SHIFT_TYPES_DEFAULT });") && typesCardSrc.includes("const fromBlob = () => readable.map(t => ({ id: t.id, label: t.label, start: t.start, end: t.end, weekdays: t.weekdays.slice(), holidays: t.holidays, perDay: t.perDay, retired: t.retired, saved: true }));") && typesCardSrc.includes('data-testid="appshift-types-unreadable"'), "the card shows the list as the app and the database read it (an unreadable entry is counted and dropped by the next Save - a saved row always passes the Save's checks)");
       for (const t of ["appshift-types", "appshift-table", "appshift-label", "appshift-start", "appshift-end", "appshift-holidays", "appshift-perday", "appshift-retire", "appshift-restore", "appshift-drop", "appshift-add", "appshift-revert", "appshift-save", "appshift-error"]) assert.ok(typesCardSrc.includes('data-testid="' + t + '"'), t);
       assert.ok(!/opacity/.test(typesCardSrc) && !/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/.test(typesCardSrc) && !/fetch\(|appDaysDb|db\.|supabase\./.test(typesCardSrc), "THEME tokens, no opacity, props only");
@@ -13258,9 +13296,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(RAISES.some(r => r.code === "AP004" && r.text === "at most " + H.APP_DAYS_MAX_SAVE + " shifts in one save - nothing was saved") && SRC.includes('return { ok: false, words: "at most " + APP_DAYS_MAX_SAVE + " shifts in one save - nothing was saved" };'), "the client's local shift refusal says the server's words");
       assert.ok(RAISES.some(r => r.code === "AV004" && r.text === "at most " + H.APP_VACATIONS_MAX_SAVE + " vacations in one save - nothing was saved") && SRC.includes('return { ok: false, words: "at most " + APP_VACATIONS_MAX_SAVE + " vacations in one save - nothing was saved" };'), "the client's local vacation refusal says the server's words");
     });
-    check("P35 cross pins (integration): APP_DAY_CODES / APP_VACATION_CODES = the codes and tokens revision ac raises (21 + 17 raises), every message '<TOKEN>: <text>' read back by appDaysErrorWords / appDaysErrorCode; the stale-picture reload codes exist on both sides", () => {
+    check("P35 cross pins (integration): APP_DAY_CODES / APP_VACATION_CODES = the codes and tokens revision ac raises (22 + 17 raises - the review's fix added AP007 'is already <name>'s shift'), every message '<TOKEN>: <text>' read back by appDaysErrorWords / appDaysErrorCode; the stale-picture reload codes exist on both sides", () => {
       const ap = RAISES.filter(r => /^AP/.test(r.code)), av = RAISES.filter(r => /^AV/.test(r.code));
-      assert.deepStrictEqual(ap.map(r => r.code), ["AP001", "AP001", "AP002", "AP002", "AP004", "AP004", "AP004", "AP004", "AP004", "AP004", "AP004", "AP003", "AP006", "AP008", "AP007", "AP002", "AP007", "AP005", "AP010", "AP009", "AP005"], "save_app_days' check order");
+      assert.deepStrictEqual(ap.map(r => r.code), ["AP001", "AP001", "AP002", "AP002", "AP004", "AP004", "AP004", "AP004", "AP004", "AP004", "AP004", "AP003", "AP006", "AP008", "AP007", "AP002", "AP007", "AP007", "AP005", "AP010", "AP009", "AP005"], "save_app_days' check order");
+      assert.ok(RAISES.some(r => r.code === "AP007" && r.text === "% is already %'s shift - reload the calendar (nothing was saved)"), "a change to an APP who already holds the shift is a stale picture (AP007) - the client's change never sends it (canSet excludes a holder)");
       assert.deepStrictEqual(av.map(r => r.code), ["AV001", "AV001", "AV002", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV004", "AV003", "AV007", "AV006", "AV008", "AV005"], "save_app_vacations' check order");
       assert.strictEqual(rxCount(MIGS, /errcode = 'A[PV]\d{3}'/g), RAISES.length, "every AP / AV errcode sits on a parsed raise");
       for (const [list, table] of [[ap, H.APP_DAY_CODES], [av, H.APP_VACATION_CODES]]) {
@@ -14422,7 +14461,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const labels = H.appGridLabels({ a: e("pa", "Pat Appleton"), b: e("pb", "Lee Bramble"), c: e("pc", "Jo Applegate") });
       assert.strictEqual(new Set(Object.values(labels)).size, 3, "distinct");
       assert.ok(Object.values(labels).every(l => l.replace(".", "").length <= 4), "four letters at most");
-      assert.ok(PSRC.includes("  const appGridLabel = useMemo(() => appGridLabels(appByDay), [appByDay]);"), "computed once per APP picture");
+      assert.ok(PSRC.includes("  const appGridLabel = useMemo(() => appGridLabels({ ...appByDay, __vac: appVacs }), [appByDay, appVacs]);"), "computed once per APP picture - over the shift holders and the APP vacations (review 11/17)");
       assert.ok(PSRC.includes("    .cal-app-code { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }"), "hidden on a wide grid");
       const phone = PSRC.slice(PSRC.indexOf("    @media (max-width: 600px) {"), PSRC.indexOf("      .cal-legend { font-size: 10px !important; }"));
       assert.ok(phone.includes("      .cal-app-name { display: none; }\n      .cal-app-code { display: inline; }"), "the phone block swaps the name for the label");

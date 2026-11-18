@@ -21,7 +21,8 @@
 -- The list: inbox (the decided type: Inbox 07:00-17:00 Mon-Fri, not on holidays, perDay 1), probe-night (17:00-07:00 Mon-Fri, perDay 2 -
 -- crosses midnight), probe-day (06:00-06:00 Sat/Sun, runs on holidays - 24 hours), probe-long (12:00-20:00 Mon-Fri, perDay given as the
 -- string "3" - read as 1), probe-old (inbox's hours, retired) and six junk entries the reader must skip (a second inbox, an id with
--- capitals, hours without a leading zero, an empty and a 7 in weekdays, a string).
+-- capitals, hours without a leading zero, an empty and a 7 in weekdays, a string). probe-gone is NOT listed: W1 writes a row of it as
+-- postgres - a type Setup has since removed, which the checks count as its whole calendar day.
 --
 -- The setup raises, in this order and before any fixture is written: BEFORE the migration 'PROBE_SETUP: app_call_days.shift_type is
 -- absent - sql/migrations/2026-11-17-app-shifts.sql is not applied' (nothing else runs - that is every case's BEFORE result); a typed
@@ -32,7 +33,9 @@
 --
 -- Fixtures: no app_call_days or app_time_off row is written by the setup. Every day a case touches is FAR-FUTURE (2031-03 - 3/1 is a
 -- Saturday, 3/3 a Monday, 3/12 and 3/15 the probe holiday; 2031-04-01 .. 2032-05-05 for the refused 401-shift case; 2031-03-24 ..
--- 2032-03-24 for the refused 366-day vacation) or the past day 2020-06-01 (a Monday) and the past vacation 2020-06-01 .. 06-05.
+-- 2032-03-24 for the refused 366-day vacation) or the past day 2020-06-01 (a Monday) and the past vacation 2020-06-01 .. 06-05, and
+-- 7031-03 for W5-W9 (a far-future typo's vacation 7031-03-03 .. 03-05 and U1's inbox 7031-03-10 - past the int4 minute range; rows of
+-- the probe's own U1 only, which verify-rls 25h's tagged count covers: its auth users, whose rows cascade).
 -- The acting users are seven throwaway auth.users rows (email probe-appshifts-<uuid>@example.test) whose user_profiles rows the
 -- handle_new_auth_user trigger creates; postgres then sets them: U1 / U2 / U3 viewer + is_app 'probe shifts one' / 'two' / 'three';
 -- US surgeon linked to s3 'probe shifts surgeon'; UC coordinator 'probe shifts office'; UV viewer (not an APP) 'probe shifts viewer';
@@ -129,11 +132,13 @@
 --   C6   UC svac(UV - not an APP, 3/24-3/26) -> ERR AV003 APP_VACATION_NOT_APP: probe shifts viewer is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
 --   C7   UC app_call_names() - every APP, U3 holding nothing included -> names=3 one=app two=app three=app
 --   C8   UC reads the window and the vacations -> rows=4 vrows=2
+--   C9   UC svac(U3, 3/29-3/30) - U3 holds no shift yet -> ok added=1 source=office
+--   S7   US app_call_names() - U3 holds only a vacation (the vacation clause names it) -> names=3 one=probe shifts one two=probe shifts two three=probe shifts three
 --   T1   U3 adds probe-night 3/3 (U1 and U2 hold both of its 2) -> ERR AP005 APP_DAY_TAKEN: 3/3 probe-night already has probe shifts one and probe shifts two (2 a day) - nothing was saved
 --   T2   U3 adds inbox 3/6 -> ok added=1 3/6=inbox:three/app
 --   V1   UV sad(null, inbox 3/10) -> ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift
 --   V2   UV svac(null, 3/24-3/26) -> ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation
---   V3   UV reads the window and the vacations -> rows=5 vrows=2
+--   V3   UV reads the window and the vacations -> rows=5 vrows=3
 --   D1   UA sad(U2, inbox 3/10) -> ok added=1 source=scheduler 3/10=inbox:two/scheduler by=admin
 --   D2   its audit row (read as postgres) -> actor=s1 name=probe shifts admin sums=probe shifts two: inbox 3/10
 --   D3   UA clears it -> ok removed=1 3/10=none
@@ -147,23 +152,34 @@
 --   D11  UA sad(<a random uuid>, inbox 3/11) -> ERR AP003 APP_DAY_NOT_APP: that account is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
 --   D12  UA sad(null, inbox 3/11) -> ERR AP001 APP_DAY_NOT_ALLOWED: name the APP (pick one in the day editor)
 --   D13  UA's change naming the same APP twice: sad(U2, inbox 3/11, null, U2) -> ERR AP004 APP_DAY_BAD_DAY: a change takes a shift over from another APP - name the shift and that APP (nothing was saved)
---   D14  UA svac(U1, 2020-06-01 to 2020-06-05) - a past vacation (no past check on an add) -> ok added=1 source=scheduler vac=6/1-6/5:one/scheduler+3/17-3/22:one/app+3/27-3/28:two/app
+--   D14  UA svac(U1, 2020-06-01 to 2020-06-05) - a past vacation (no past check on an add) -> ok added=1 source=scheduler vac=6/1-6/5:one/scheduler+3/17-3/22:one/app+3/27-3/28:two/app+3/29-3/30:three/office
 --   D15  UA svac(U2, 3/3) over U2's inbox and probe-night 3/3 -> ERR AV005 APP_VACATION_ON_SHIFT: probe shifts two holds 3/3 inbox, 3/3 probe-night - remove the shift first (nothing was saved)
 --   D16  UA sad(U1, inbox 3/19) - inside U1's vacation -> ERR AP010 APP_DAY_VACATION: 3/19 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)
 --   D17  UA app_call_names() -> names=3 one=app two=app three=app
 --   D18  UA sets is_app = false on U3 -> updated=1 is_app=false
+--   D19  UA's change of probe-night 3/3 from U1 to U2 - U2 holds it already (perDay 2) -> ERR AP007 APP_DAY_STALE: 3/3 probe-night is already probe shifts two's shift - reload the calendar (nothing was saved)
+--   D19s state of 3/3 after D19 (U1's row stays) -> 3/3=inbox:two/scheduler+probe-night:one/app+probe-night:two/app
 --   F1   U1 removes its 2020-06-01 to 06-05 vacation -> ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is <today M/D> in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)
 --   G1   UC removes U1's 2020-06-01 to 06-05 vacation -> ERR AV006 APP_VACATION_PAST: 6/1-6/5 has started or passed (today is <today M/D> in Central time) - it stays on record, ask the scheduler if it needs to go (nothing was saved)
 --   H1   U3 sad(null, inbox 3/13) -> ERR AP001 APP_DAY_NOT_ALLOWED: only an APP account or the scheduler can put an APP on a shift
 --   H2   U3 svac(null, 3/24-3/26) -> ERR AV001 APP_VACATION_NOT_ALLOWED: only an APP account, the scheduler or the office can enter an APP vacation
 --   H3   U3 reads 3/6 (its shift stays) -> 3/6=inbox:three/app
 --   E1   UA app_call_names() -> names=3 one=app two=app three=former
---   E2   UA removes U1's started vacation (the scheduler is exempt) -> ok removed=1 vac=3/17-3/22:one/app+3/27-3/28:two/app
+--   E2   UA removes U1's started vacation (the scheduler is exempt) -> ok removed=1 vac=3/17-3/22:one/app+3/27-3/28:two/app+3/29-3/30:three/office
 --   E3   UA clears the former APP's inbox 3/6 (AP003 binds adds only) -> ok removed=1 3/6=none
 --   E4   UA svac(U3, 3/24-3/26) - a former APP -> ERR AV003 APP_VACATION_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
 --   E5   UA sad(U3, inbox 3/13) - a former APP -> ERR AP003 APP_DAY_NOT_APP: probe shifts three is not an APP account - the admin marks APP accounts in Setup > Users (nothing was saved)
 --   E6   UA sets is_app = true on US (a surgeon) -> ERR 23514 new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"
 --   E7   UA sets is_app = true on UC (the coordinator) -> ERR 23514 new row for relation "user_profiles" violates check constraint "user_profiles_app_viewer"
+--   W1   postgres writes U1 a row of a type the blob does not list (probe-gone, Thu 3/27) -> inserted 3/27=probe-gone:one/scheduler
+--   W2   U1 adds inbox 3/27 (the unlisted row counts as its whole day) -> ERR AP009 APP_DAY_OVERLAP: 3/27 inbox overlaps 3/27 probe-gone - one APP holds one shift at a time (nothing was saved)
+--   W3   U1 svac 3/27 over it -> ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/27 probe-gone - remove the shift first (nothing was saved)
+--   W4   U1 svac 3/28 (the whole day ends at midnight - touching, not overlapping) -> ok added=1 source=app
+--   W5   U1 svac(null, 7031-03-03 to 7031-03-05) - a far-future typo (the minutes are bigint) -> ok added=1 source=app
+--   W6   U1 adds inbox Mon 3/31 (AP010 reads the 7031 vacation) -> ok added=1 3/31=inbox:one/app
+--   W7   U1 adds inbox Fri 7031-03-04 (inside that vacation) -> ERR AP010 APP_DAY_VACATION: 3/4 inbox is on probe shifts one's vacation - change the vacation first (nothing was saved)
+--   W8   U1 adds inbox Thu 7031-03-10 (AP009 places it against U1's other shifts) -> ok added=1 3/10=inbox:one/app
+--   W9   U1 svac 7031-03-10 over it -> ERR AV005 APP_VACATION_ON_SHIFT: probe shifts one holds 3/10 inbox - remove the shift first (nothing was saved)
 --   N1   anon: select count(*) from app_call_days -> ERR 42501 permission denied for table app_call_days
 --   N2   anon: select count(*) from app_time_off -> ERR 42501 permission denied for table app_time_off
 --   N3   anon: app_call_names() -> ERR 42501 permission denied for function app_call_names
@@ -176,7 +192,7 @@
 --   X1   postgres deletes U2's auth user (U2 holds inbox and probe-night 3/3 and the vacation 3/27-3/28) -> before=2/1 after=0/0 audit_kept=yes
 --   I1   postgres deletes UV's profile; UV self-inserts with is_app = true -> ERR 42501 new row violates row-level security policy for table "user_profiles"
 --   I2   UV self-inserts (viewer, no is_app key) -> ok is_app=false
--- 122 cases.
+-- 135 cases.
 -- ============================================================================
 
 create temp table probe_results (k text, v text);
@@ -660,10 +676,10 @@ do $$ declare u text; u1 text; r jsonb; begin
   execute 'reset role';
 end $$;
 
--- C1-C8: as the office COORDINATOR UC
-do $$ declare u text; u1 text; u2 text; uv text; vid uuid; r jsonb; begin
+-- C1-C9: as the office COORDINATOR UC
+do $$ declare u text; u1 text; u2 text; u3 text; uv text; vid uuid; r jsonb; begin
   select v into u from probe_ctx where k = 'uc';
-  select v into u1 from probe_ctx where k = 'u1'; select v into u2 from probe_ctx where k = 'u2'; select v into uv from probe_ctx where k = 'uv';
+  select v into u1 from probe_ctx where k = 'u1'; select v into u2 from probe_ctx where k = 'u2'; select v into u3 from probe_ctx where k = 'u3'; select v into uv from probe_ctx where k = 'uv';
   execute 'set local role authenticated';
   perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
   begin
@@ -698,6 +714,21 @@ do $$ declare u text; u1 text; u2 text; uv text; vid uuid; r jsonb; begin
   begin
     insert into probe_results values ('C8', replace(pg_temp.as_rows() || ' ' || pg_temp.as_vrows(), ';', ','));
   exception when others then insert into probe_results values ('C8', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_vacations(u3::uuid, '[{"start":"2031-03-29","end":"2031-03-30"}]'::jsonb, null);
+    insert into probe_results values ('C9', replace('ok added=' || (r ->> 'added') || ' source=' || (r ->> 'source'), ';', ','));
+  exception when others then insert into probe_results values ('C9', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  execute 'reset role';
+end $$;
+
+-- S7: as the SURGEON US again - U3 holds only a vacation (app_call_names' vacation clause, for a caller with no special role)
+do $$ declare u text; begin
+  select v into u from probe_ctx where k = 'us';
+  execute 'set local role authenticated';
+  perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  begin
+    insert into probe_results values ('S7', replace(pg_temp.as_names('names'), ';', ','));
+  exception when others then insert into probe_results values ('S7', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 
@@ -817,6 +848,13 @@ do $$ declare u text; u1 text; u2 text; u3 text; uv text; n int; r jsonb; begin
     get diagnostics n = row_count;
     insert into probe_results values ('D18', replace('updated=' || n || ' is_app=' || coalesce((select p.is_app::text from public.user_profiles p where p.id = u3::uuid), 'none'), ';', ','));
   exception when others then insert into probe_results values ('D18', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_days(u2::uuid, '[{"day":"2031-03-03","type":"probe-night"}]'::jsonb, null, u1::uuid);
+    insert into probe_results values ('D19', replace('saved (NO refusal) added=' || (r ->> 'added') || ' replaced=' || (r ->> 'replaced'), ';', ','));
+  exception when others then insert into probe_results values ('D19', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    insert into probe_results values ('D19s', replace(pg_temp.as_day('2031-03-03'), ';', ','));
+  exception when others then insert into probe_results values ('D19s', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 
@@ -902,6 +940,52 @@ do $$ declare u text; u1 text; u3 text; us text; uc text; vid uuid; n int; r jso
     get diagnostics n = row_count;
     insert into probe_results values ('E7', replace('updated=' || n || ' (NO refusal)', ';', ','));
   exception when others then insert into probe_results values ('E7', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  execute 'reset role';
+end $$;
+
+-- W1: as postgres - U1 gets a row of a type the blob does not list (Setup removed it); W2-W9: as U1 - that row counts as its whole
+-- calendar day, and a far-future vacation and shift (7031: past the int4 minute range) are placed in bigint minutes
+do $$ declare u text; r jsonb; begin
+  select v into u from probe_ctx where k = 'u1';
+  perform set_config('request.jwt.claims', '{}', true);
+  begin
+    insert into public.app_call_days (day, shift_type, profile_id, source, created_by) values ('2031-03-27', 'probe-gone', u::uuid, 'scheduler', null);
+    insert into probe_results values ('W1', replace('inserted ' || pg_temp.as_day('2031-03-27'), ';', ','));
+  exception when others then insert into probe_results values ('W1', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  execute 'set local role authenticated';
+  perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  begin
+    r := public.save_app_days(null, '[{"day":"2031-03-27","type":"inbox"}]'::jsonb, null);
+    insert into probe_results values ('W2', replace('saved (NO refusal)', ';', ','));
+  exception when others then insert into probe_results values ('W2', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_vacations(null, '[{"start":"2031-03-27","end":"2031-03-27"}]'::jsonb, null);
+    insert into probe_results values ('W3', replace('saved (NO refusal)', ';', ','));
+  exception when others then insert into probe_results values ('W3', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_vacations(null, '[{"start":"2031-03-28","end":"2031-03-28"}]'::jsonb, null);
+    insert into probe_results values ('W4', replace('ok added=' || (r ->> 'added') || ' source=' || (r ->> 'source'), ';', ','));
+  exception when others then insert into probe_results values ('W4', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_vacations(null, '[{"start":"7031-03-03","end":"7031-03-05"}]'::jsonb, null);
+    insert into probe_results values ('W5', replace('ok added=' || (r ->> 'added') || ' source=' || (r ->> 'source'), ';', ','));
+  exception when others then insert into probe_results values ('W5', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_days(null, '[{"day":"2031-03-31","type":"inbox"}]'::jsonb, null);
+    insert into probe_results values ('W6', replace('ok added=' || (r ->> 'added') || ' ' || pg_temp.as_day('2031-03-31'), ';', ','));
+  exception when others then insert into probe_results values ('W6', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_days(null, '[{"day":"7031-03-04","type":"inbox"}]'::jsonb, null);
+    insert into probe_results values ('W7', replace('saved (NO refusal)', ';', ','));
+  exception when others then insert into probe_results values ('W7', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_days(null, '[{"day":"7031-03-10","type":"inbox"}]'::jsonb, null);
+    insert into probe_results values ('W8', replace('ok added=' || (r ->> 'added') || ' ' || pg_temp.as_day('7031-03-10'), ';', ','));
+  exception when others then insert into probe_results values ('W8', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
+  begin
+    r := public.save_app_vacations(null, '[{"start":"7031-03-10","end":"7031-03-10"}]'::jsonb, null);
+    insert into probe_results values ('W9', replace('saved (NO refusal)', ';', ','));
+  exception when others then insert into probe_results values ('W9', 'ERR ' || sqlstate || ' ' || replace(sqlerrm, ';', ',')); end;
   execute 'reset role';
 end $$;
 

@@ -2103,7 +2103,7 @@ comment on table public.app_call_days is 'Prompt 29 (Faraz 10/1): the APP on cal
 -- (app_time_off_read below), never anon (anon's privileges revoked; not in the read_all loop); authenticated keeps SELECT only -
 -- save_app_vacations() (security definer, the table owner) is the only write path. Neither table is part of the blob, snapshots, the
 -- data export or a factory reset. A shift of type T on day D runs from T.start on D to T.end (the next day when end < start; 24 hours
--- when end = start, Central wall clock); two shifts of one APP overlap when their spans share a minute; a shift conflicts with a vacation
+-- when end = start, Central wall clock; minutes from 2000-01-01 counted as bigint); two shifts of one APP overlap when their spans share a minute; a shift conflicts with a vacation
 -- when its span reaches into a vacation day; a holiday is a day of a stored holiday unit (call_schedule_data.data.holidays.units).
 -- save_app_days refusals (all before any write; custom SQLSTATEs, HTTP 400 through PostgREST):
 --   AP001 APP_DAY_NOT_ALLOWED   no signed-in user / neither an APP nor the scheduler; the scheduler named no APP
@@ -2114,7 +2114,8 @@ comment on table public.app_call_days is 'Prompt 29 (Faraz 10/1): the APP on cal
 --   AP005 APP_DAY_TAKEN         an add on a shift other APPs already fill (perDay; the APP a change takes over from does not count)
 --   AP006 APP_DAY_PAST          a day before today (Central) - the APP only, adds and removals; the scheduler is exempt
 --   AP007 APP_DAY_STALE         the scheduler removes a shift another profile holds, or a change from an APP that no longer holds it
---   AP008 APP_DAY_NO_SHIFT      an unknown or retired type, a weekday the type does not run, a holiday it does not run on
+--                               or to an APP that already holds it
+--   AP008 APP_DAY_NO_SHIFT     an unknown or retired type, a weekday the type does not run, a holiday it does not run on
 --   AP009 APP_DAY_OVERLAP       two shifts of one APP overlapping (added against added or kept)
 --   AP010 APP_DAY_VACATION      an added shift reaching into one of the APP's vacation days
 -- save_app_vacations refusals (all before any write):
@@ -2334,6 +2335,14 @@ begin
     if bad is not null then
       raise exception 'APP_DAY_STALE: % is no longer %''s shift - reload the calendar (nothing was saved)', bad, coalesce(r_name, 'another APP') using errcode = 'AP007';
     end if;
+    -- ... and the APP it gives the shift to must not hold it already (a fresh picture never sends that; it would delete the other
+    -- holder's row with nothing inserted - and no audit row)
+    select string_agg(to_char(a.d, 'FMMM/FMDD') || ' ' || a.t, ', ' order by a.d, a.t) into bad
+      from unnest(a_day, a_type) a(d, t)
+     where exists (select 1 from public.app_call_days x where x.day = a.d and x.shift_type = a.t and x.profile_id = who);
+    if bad is not null then
+      raise exception 'APP_DAY_STALE: % is already %''s shift - reload the calendar (nothing was saved)', bad, coalesce(t_name, 'the APP') using errcode = 'AP007';
+    end if;
   end if;
   -- perDay: an added shift that other APPs already fill (the one taken over from does not count) is refused, naming them
   select string_agg(to_char(a.d, 'FMMM/FMDD') || ' ' || a.t || ' already has ' || h.names
@@ -2357,8 +2366,8 @@ begin
             from unnest(a_day, a_type) a(d, t)
             join public.silvis_app_shift_types(blob) st on st.id = a.t
             join public.app_time_off v on v.profile_id = who
-           where (a.d - date '2000-01-01') * 1440 + st.start_min < (v.end_date - date '2000-01-01' + 1) * 1440
-             and (v.start_date - date '2000-01-01') * 1440 < (a.d - date '2000-01-01') * 1440 + st.start_min
+           where (a.d - date '2000-01-01')::bigint * 1440 + st.start_min < (v.end_date - date '2000-01-01' + 1)::bigint * 1440
+             and (v.start_date - date '2000-01-01')::bigint * 1440 < (a.d - date '2000-01-01')::bigint * 1440 + st.start_min
                    + case when st.end_min > st.start_min then st.end_min - st.start_min else st.end_min - st.start_min + 1440 end) x;
   if bad is not null then
     raise exception 'APP_DAY_VACATION: % is on %''s vacation - change the vacation first (nothing was saved)', bad, coalesce(t_name, 'the APP') using errcode = 'AP010';
@@ -2375,8 +2384,8 @@ begin
   ),
   iv as (
     select m.d, m.t, m.added,
-           (m.d - date '2000-01-01') * 1440 + coalesce(st.start_min, 0) as s,
-           (m.d - date '2000-01-01') * 1440 + coalesce(st.start_min, 0)
+           (m.d - date '2000-01-01')::bigint * 1440 + coalesce(st.start_min, 0) as s,
+           (m.d - date '2000-01-01')::bigint * 1440 + coalesce(st.start_min, 0)
              + coalesce(case when st.end_min > st.start_min then st.end_min - st.start_min else st.end_min - st.start_min + 1440 end, 1440) as e
       from mine m left join public.silvis_app_shift_types(blob) st on st.id = m.t
   )
@@ -2560,8 +2569,8 @@ begin
             left join public.silvis_app_shift_types(blob) st on st.id = s.shift_type
             join unnest(a_s, a_e) a(s, e) on true
            where s.profile_id = who
-             and (s.day - date '2000-01-01') * 1440 + coalesce(st.start_min, 0) < (a.e - date '2000-01-01' + 1) * 1440
-             and (a.s - date '2000-01-01') * 1440 < (s.day - date '2000-01-01') * 1440 + coalesce(st.start_min, 0)
+             and (s.day - date '2000-01-01')::bigint * 1440 + coalesce(st.start_min, 0) < (a.e - date '2000-01-01' + 1)::bigint * 1440
+             and (a.s - date '2000-01-01')::bigint * 1440 < (s.day - date '2000-01-01')::bigint * 1440 + coalesce(st.start_min, 0)
                    + coalesce(case when st.end_min > st.start_min then st.end_min - st.start_min else st.end_min - st.start_min + 1440 end, 1440)) x;
   if bad is not null then
     raise exception 'APP_VACATION_ON_SHIFT: % holds % - remove the shift first (nothing was saved)', coalesce(t_name, 'the APP'), bad using errcode = 'AV005';
