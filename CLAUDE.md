@@ -13,7 +13,7 @@ developer, one of the six surgeons, and the user you're working with. Live users
 viewers / followers; APP accounts - viewers with `user_profiles.is_app` who put themselves on call days (Prompt 29, applied
 2026-10-02) - once Faraz switches them on; since Prompt 35 (Faraz 11/17; revision ac, applied 2026-11-18 03:04:10Z; the app part
 is Prompt 35's client build, pushed on his go) those days are typed shifts with hours (Setup data `groupRules.appShiftTypes`; one for now, Inbox 7a-5p Mon-Fri) and
-the APPs enter their own vacations (`app_time_off`, never `time_off`) - build guide §27. Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
+the APPs enter their own vacations (the scheduler and the office coordinator any APP's; `app_time_off`, never `time_off`) - build guide §27. Repo: `github.com/fkhan628/Silvis-Call-Schedule` (public); live: `fkhan628.github.io/Silvis-Call-Schedule`.
 
 ## Identity model — get this right
 
@@ -68,7 +68,8 @@ blob or any anon-readable table (a deliberate exception to "defaults are data in
 rates. No $ in notifications, e-mails, calendar feeds, the public page or exports others see; pay audit rows carry keys /
 roster ids / days / hours, never an amount.
 Carried over from Davenport on purpose: office notifications, calendar sync, refresh/version check, data management,
-every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs only put themselves on call days - Prompt 29,
+every safety feature, trades. Dropped: Davenport's APP shifts (Silvis APPs put themselves on call days, or the scheduler sets
+them in the day editor - Prompt 29,
 applied 2026-10-02; the generator, Totals, pay and e-mails ignore them - and the typed shifts and APP vacations of Prompt 35 too),
 Fierce backup weeks, no-call days, vacation
 approvals, Davenport's split-shift accounting (Silvis weighs whole days instead - the weighted load above, Prompt 32).

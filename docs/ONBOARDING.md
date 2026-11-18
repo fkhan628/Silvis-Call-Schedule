@@ -49,9 +49,11 @@ afterwards; the editor keeps query history).*
    never open the email. You can link them right away.
 3. **Setup → Users** (in the app: the card titled "Users (accounts, roles, roster links)", visible only when your role is
    admin): pick the new user, set **roster id** (s1–s6) and **role** (`surgeon` for the five
-   surgeons, `viewer` for the office contact, `scheduler` for anyone who should publish, `app` for an APP - no roster link;
-   see "APPs: shifts and vacations" below). Setup → Users is the normal path; if the
-   app is unreachable, the same thing in SQL:
+   surgeons, `coordinator` for an office user who enters vacations for the surgeons and the APPs, `viewer` for a read-only
+   account, `scheduler` for anyone who should publish, `app` for an APP - no roster link for a coordinator, a viewer or an
+   APP; see "APPs: shifts and vacations" below). Setup → Users is the normal path; if the
+   app is unreachable, the same thing in SQL (for an APP, `set role = 'viewer', person_id = null, is_app = true` and its
+   `display_name` - the database has no `app` role):
 
    ```sql
    update public.user_profiles set role = 'surgeon', person_id = 's2'
@@ -191,8 +193,6 @@ published Davenport weeks of the last 12 months (until then the months before th
 that runs past the last Davenport week in the cache shows what is counted, as the Davenport app's own card does, and a
 note under the month list names that week ("Davenport weeks are cached through ...").
 
-Roles: `admin` (everything, including user links and roles), `scheduler` (generate, publish, edit, import, snapshots),
-`surgeon` (own vacations, propose/accept trades, own preferences), `viewer` (read-only — the office contact).
 Roles (`user_profiles.role`, set in Setup → Users by the admin):
 
 | role | can | cannot |
@@ -200,7 +200,7 @@ Roles (`user_profiles.role`, set in Setup → Users by the admin):
 | `admin` | everything, including user links and roles | — |
 | `scheduler` | generate, publish, edit days, import, snapshots, Periods, enter vacations / offers for anyone (relayed as the scheduler) | change accounts (admin only) |
 | `surgeon` | own vacations, paint own offers, propose / accept trades, claim open shifts, own e-mail preferences | anything for another surgeon |
-| `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it) and **any APP's vacation** the same way (Time off → APP vacations; Prompt 35), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor, trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
+| `coordinator` (office users, Prompt 16 A7) | see the schedule read-only (calendar, open shifts, totals, alerts), enter / edit / remove **any surgeon's upcoming vacation** (Time off → person picker; the on-call refusal applies exactly as for the surgeon; a started or past vacation stays on record - the scheduler corrects it) and **any APP's vacation** (Time off → APP vacations; Prompt 35 - it enters one for any APP and changes or removes one only before it starts; one over the APP's own shift is refused), relay **any surgeon's offered dates** into the painter (Time off → "Offers - enter for a surgeon"; saved as `entered_by` the office account, `source office-relay`; frozen periods stay frozen), read its **own** Activity log entries | Setup, Generate, the day editor's controls (a day opens read-only, its APP lines included; it never sets or clears an APP shift), trades, Mine, publishing, accounts, snapshots, e-mail sends (the notification function answers 403); it is never linked to a roster id |
 | `viewer` | read-only — the office viewer | every write |
 | `app` (an APP: a `viewer` with `user_profiles.is_app`, Prompt 29 - database applied 2026-10-02) | everything a viewer has, plus putting itself on shifts and taking them off, and entering its own vacations (Mine → My APP shifts / My vacations - Prompt 35; shifts from today on; a vacation changed or removed only before it starts) | every other write; another APP's shifts or vacations; a roster link |
 
@@ -225,16 +225,18 @@ viewer has — the calendar, follows and the follower e-mails, its preferences �
 **shifts** and enters its own **vacations**. The decisions (Faraz 11/17, on top of 10/1's): one shift for now - **Inbox,
 7a-5p, Monday to Friday, not on the six holidays, one APP a day** (you change the shifts in **Setup → APP shifts**); the
 database enforces how many APPs a shift holds; one APP never holds two shifts at the same time, nor a shift on its own
-vacation; vacations need **no approval**; you and the office can enter, change or remove any APP's vacation; a vacation over
-the APP's own shift is refused ("remove the shift first"); the surgeons' vacation minimum does not count APPs; **everyone
-signed in sees** APP shifts and vacations, not the `?public=1` page; **no e-mails** — the Activity log only.
+vacation; vacations need **no approval**; you and the office (a `coordinator` account) can enter any APP's vacation and
+change or remove one (the office only before it starts); a vacation over the APP's own shift is refused
+("remove the shift first"); the surgeons' vacation minimum does not count APPs; **everyone signed in sees** APP shifts and
+vacations, not the `?public=1` page; **no e-mails** — the Activity log only.
 
 **How you mark one (Setup → Users).** Invite the APP like a viewer (above). Give the account a **display name** first (a
 nameless APP shows as "APP" on the calendar; the calendar shows the last name - a credential such as "PA-C" after it is
 dropped - and an APP cannot rename itself, so the name you set is the one everyone sees), leave the **roster link** at *none*, then set **Role** to `app`. The app
 refuses `app` on a linked account (and a roster link on an APP), and the database refuses it too. The switch writes the
 usual `users.link` Activity log row ("Account <APP name>: APP on"). Setting the role back to `viewer` takes the APP
-feature away; that person's shifts and vacations stay until you clear them (deleting the account removes them).
+feature away; that person's shifts and vacations stay until you clear them (the office can also remove one of its vacations
+that has not started; deleting the account removes them).
 
 **The shifts (Setup → APP shifts).** One row per shift: its name, its start and end (an end before the start runs into the
 next morning - 5p-7a; the same start and end is 24 hours), its weekdays, whether it runs on holidays, and **APPs a day**.
@@ -257,11 +259,15 @@ they are. A tapped day shows "*" (unsaved) until Save; leaving Mine (another tab
 **Remove** one that has not started; once it starts it stays on record (ask the scheduler). A vacation over one of your own
 shifts is refused - remove the shift first.
 
-**What you do (the day editor and Time off).** Every day's editor has one **APP** line per shift that runs that day: pick an
-APP and **Set APP** (or **Change APP**, which puts another APP in the holder's place), or **Clear** a holder. It is saved at
-once, apart from the day's own Save, and works on past days too. **Time off → APP vacations** lists every APP's vacations for
-everyone signed in; you and the office pick an APP and **Add vacation**, or **Edit** / **Remove** one (the office: one that
-has not started; an account no longer marked APP keeps its vacations, which can be removed but not edited).
+**What you do (the day editor and Time off).** Once an account is marked APP, every day's editor has one **APP** line per
+shift that runs that day: pick an APP and **Set APP** (when a shift of one APP a day has its one holder, the button reads
+**Change APP** and puts the picked APP in the holder's place), or **Clear** a holder; a shift held on a day it no longer
+runs keeps a line marked "not offered this day", with **Clear** only. Each click saves one shift at once, apart from the
+day's own Save, past days included; the shift's weekdays, holidays and APPs a day, the APP's own vacation and no overlap
+with its other shifts still bind you. **Time off → APP vacations** (your wide-screen tab reads **Time off & Trades**; the
+office's reads **Time off**) lists every APP's vacations for everyone signed in; you and the office (a `coordinator`
+account) pick an APP and **Add vacation**, or **Edit** / **Remove** one (the office: one that has not started; an account
+no longer marked APP keeps its vacations, which can be removed but not edited).
 
 **Who sees it.** The calendar shows each APP shift as a line "A <last name> 7a-5p" (on a phone the first four letters, or an initial + three letters when two APPs start alike - "P.App" / "J.App" - with the hours under the name) in a muted rose (the shift's name and the full name are in the day's
 hover and in the day summary); an APP on vacation shows in that day's vacation bar as "A <last name>"; the legend explains
