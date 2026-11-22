@@ -231,3 +231,7 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   Prompt 35 (APP shifts and APP vacations, 11/17): revision ac applied 2026-11-18 03:04:10Z (Faraz's `apply-app-shifts.sh`; recorded in
   `docs/SCHEMA-REVIEW.md` "2026-11-17 - APP shifts and APP vacations"); APP shifts and vacations work from the build that ships Prompt
   35's client (pushed on Faraz's go - an earlier build's APP Save is refused, nothing written); readings to confirm: §8 item 30.
+  Prompt 36 (the period, Faraz 11/22): the next period is Jan 2027 - Mar 2027 (1/4 - 3/31) and April onward gets its own period
+  later; the seed and the docs carry it. Faraz's own step: the one guarded SQL statement that cuts the live `call_periods` row back,
+  run in the SQL editor before any seed apply (`docs/SCHEMA-REVIEW.md` "2026-11-22 - data change" - prepared 11/22, not applied;
+  until it runs the live row still ends 6/30); readings to confirm: §8 item 31.
