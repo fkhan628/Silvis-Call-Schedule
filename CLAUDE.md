@@ -39,7 +39,7 @@ In-memory schedule: `{ "YYYY-MM-DD": { primary, backup, primaryLocked, backupLoc
 Persisted one row per day in `schedule_days` with compare-and-swap on `version`. Fri/Sat/Sun form a *weekend unit*
 (block / split / daily). Fairness is an **equal share per role** — water-filled over all of the month's primary slots (the
 open ones plus the days pool members already hold, which count against the holder; WF 9/23) and, separately, its backup
-slots — for every pool member, with per-surgeon caps and explicit targets on top (Prompt 12 J, 9/22), balanced across
+slots — for every pool member, with per-surgeon caps and explicit targets on top (Prompt 12 J, 9/22; an explicit BACKUP target - `monthlyTarget { backup }`, Prompt 37, 11/22 - counts for the days a surgeon is not away, is never prorated below his equal share and moves backup shares only: primary shares are worked out as if nobody had one), balanced across
 roles by a **weighted load** (primary 1, backup 0.5 - `groupRules.shiftAccounting.weights`, read only through
 `rules.shiftWeightsOf`; Prompt 32, Faraz 10/9-10/11): a surgeon short of his primary share makes it up in backups, two per
 primary, and the reverse - never pushed over a primary limit. Monthly caps: the group's **soft 7** primary days a month
@@ -173,7 +173,7 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
 - No surgeon-specific `if (name === ...)` in code: every rule is data in `call_schedule_data.data.surgeonRules` and
   editable in Setup. Fierce's derived weeks and Khan's East dependency are generic `eastFeed` features; Acton's rest
   preference is the generic soft `restBetweenStretches { minDaysOff, weight }` (10/18 - `short-rest` between call stretches,
-  both roles; Setup > Rules > Limits; it acts once Faraz enters it there). Since 11/11 (Faraz, on Prompt 34's preview)
+  both roles; Setup > Rules > Limits; it acts once Faraz enters it there); Khan's backup target is the generic `monthlyTarget { backup }` (prorated through the ONE reading `rules.backupTargetFor`) and his East-day switch the generic `eastFeed.backupFreeOnEastDays` (a backup on his own East call day carries no shape soft) - Prompt 37, 11/22; both are Setup data and act once Faraz enters them. Since 11/11 (Faraz, on Prompt 34's preview)
   `buildContext` reads two more generic things about a derived week (`rdDerivedUnitsAndVacations`; data:
   `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation }`, on unless exactly `false`): a holiday unit with a
   day in the week is the derived surgeon's in that role on all its days ("Give Fierce Memorial Day"), and the lock yields on
@@ -235,3 +235,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   later; the seed and the docs carry it. Faraz's own step: the one guarded SQL statement that cuts the live `call_periods` row back,
   run in the SQL editor before any seed apply (`docs/SCHEMA-REVIEW.md` "2026-11-22 - data change" - prepared 11/22, not applied;
   until it runs the live row still ends 6/30); readings to confirm: §8 item 31.
+  Prompt 37 (Khan's monthly backup target and the East-day switch, Faraz 11/22): the engine reads `monthlyTarget { backup }` and
+  `eastFeed.backupFreeOnEastDays`; the seed carries neither - Faraz enters the number (Setup > Rules > Limits > Backup target) and the
+  switch (Setup > Rules > East) after the preview, and the seed and its pins follow in a record change; readings to confirm: §8 item 32.

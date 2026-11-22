@@ -534,6 +534,24 @@ low / medium / strong select that keeps a custom weight). Pins: `test/rules.test
 `test/generator-regression.js` (`shortRests` restates the rule on every run and equals the preview's entries; the on / off
 runs), `test/data-layer.test.js` "10/18 rest between stretches", `test/importer.test.js` (the blob carries the rule only).
 
+**The East-day switch (Faraz 11/22, Prompt 37; rules doc §3 Khan, §8 item 32) — `eastFeed.backupFreeOnEastDays`.** A
+generic per-surgeon key, read only when exactly `true` (`P.backupFreeOnEast`); off for everyone until Setup sets it.
+`rdBackupFreeOn(P, day)` answers whether a day is one of his own East CALL days on which the switch acts: a published
+busy day (`P.eastBusy`, the overrides applied) or a standing day, with his East feature enabled - never a forecast day,
+never an East vacation day. In `eligibility()` a BACKUP on such a day pushes none of the five schedule-shape softs
+(`backup-after-primary`, `long-run`, `short-rest`, `back-to-back-weekend`, `pattern-mismatch`). Nothing else moves: the
+hard section is untouched (the run walk still feeds the hard max-consecutive), a primary is never exempt, his other soft
+terms stay, and his other days still read the East-day backup as held. In `weekendUnitPatterns` the style term of a
+BACKUP membership is dropped when every day of the membership is such a day (`eastFreeAll`: the one-day unit of a
+block-style surgeon, the split's Fri + Sun side or its Saturday side, a daily day); a membership with a day that is not
+one keeps its term. The generator's `genStyleMismatch` - the preview's style flag and the unit's fallback mark - reads
+the same answer through the exported `backupFreeOnEastDay(ctx, id, day)`. No new weight and no new reason code. Setup →
+Rules → East has the checkbox; `helpers.js` lists the key (`SU_SUM_KNOWN.eastFeed`) and words it in the East summary
+line only while it is on. Pins: `test/rules.test.js` "Prompt 37 ... eastFeed.backupFreeOnEastDays" (each term off and
+on, the day after, a primary, which days count, the unit's patterns) and `test/generator-regression.js` (seed-level
+November - December runs with the switch on: no shape soft on his East-day backups in the run's soft list, `checkRun`
+with the style exemption restated, and an explicit `false` byte-identical to the seed's own run).
+
 Every rule must be expressible in `call_schedule_data.data.surgeonRules` and editable in Setup — no surgeon-specific
 `if (name === "Philip")` in code. Fierce's derivation and Khan's East dependency are generic features
 (`eastFeed.enabled` + `eastBlocksPrimary` / `eastBlocksBackup` + a `derivedFrom` spec), so a future surgeon who splits
@@ -602,7 +620,7 @@ for backup; ⟶ 10/11, Prompt 32: the primary clip is the soft limit, else the h
 what the rules allow, and the backup fill is **weighted** across the roles — §23); a member's target is `min(level, clip)`,
 **never floored at his locked days** (they count against his share).
 `monthlyTarget: null` means that share, a number sets the primary target, `{ primary, backup }` sets each; there is no
-neutral term. The deviation term is convex (`|count − target| ^ weights.deviationConvexity`, 2). Step 4 scores backup
+neutral term (⟶ 11/22, Prompt 37: a backup number is prorated by the days away and moves backup shares only - §23). The deviation term is convex (`|count − target| ^ weights.deviationConvexity`, 2). Step 4 scores backup
 placements against the backup targets (caps count primary only — K), step 6 smooths primary days and then backup days
 separately, and `diagnostics.impliedTargets` shows every level plus, per member, the two targets, `lockedHeld` and the
 "allowed by rules" slot counts so an availability shortfall is visible. The model, the knob and the diagnostics are in §15.
@@ -1092,7 +1110,7 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
   whose clip is below the level takes the clip and the rest share the remainder; a member's target = min(level, clip),
   **never floored at `lockedHeld`** — his fixed days count against his share and, when they exceed it, he stands above
   target. A numeric `monthlyTarget` still overrides (the member leaves the fill for that role, his number comes off the
-  slots). The deviation term is `|count − target| ^ convexity` in every place it is read — `genTargetDelta` (day fill,
+  slots; ⟶ 11/22, Prompt 37: true of a PRIMARY number - a backup number leaves the primary side as it is, §23). The deviation term is `|count − target| ^ convexity` in every place it is read — `genTargetDelta` (day fill,
   weekend / holiday unit patterns summed per member, repair's `genBestFor`), `genSmooth` (donor = furthest above, receiver
   = furthest below, any pair whose convex sum strictly falls) and `genEvaluate` (`primaryDeviation` / `backupDeviation` are
   the convex sums; `GEN_SCORE_WEIGHTS` unchanged). *Knob*: `groupRules.weights.deviationConvexity`, seed **2** = code
@@ -1123,7 +1141,8 @@ RF2 (9/23) pins: `test/data-layer.test.js` [RF2] exercises `suHeldUnlockedSlotCh
 - **Caps count primary days only**; backup does not count toward any total cap (Burchett's 8, Fierce's 14). Philip's
   explicit backup cap (≤ 7 days, ≤ 1 weekend) remains.
 - **Khan contributes primary on weekends when available** (⟶ superseded 9/30, Prompt 23: weekdays preferred, at most 2
-  weekends a month across DSG and Silvis - §5); his backup count is balanced like everyone else's; East
+  weekends a month across DSG and Silvis - §5); his backup count is balanced like everyone else's (⟶ 11/22, Prompt 37:
+  or follows an explicit backup target once one is set in Setup - §23); East
   cross-reference covers all Davenport call (service weeks, nights, weekends, backup weeks, holiday coverage, forecast).
 - **Outside surgeons ("internal locums")**: roster entries of `type: "external"`, written in by hand in the day editor,
   never generated, tallied separately, exported like anyone else. Legacy `externalCover` stays for the Atwell import.
@@ -2213,7 +2232,11 @@ the `docs/SCHEMA-REVIEW.md` section; `<dir>` = the workdir linked with `supabase
    open-slot window; the strip's unreviewed count is not windowed, so the nag already reaches every horizon)? Open; the
    canonical text is `SILVIS-CALL-RULES.md` §8 item 17 (not built).
 2. **The command-line generate path** — `scripts/preview-generate.js` (and `publish-preview.js` after it) pass no
-   `eastVacationRanges` / `eastVacationReviews` inputs — open; see `SILVIS-CALL-RULES.md` §8 item 17.
+   `eastVacationRanges` / `eastVacationReviews` inputs — open; see `SILVIS-CALL-RULES.md` §8 item 17. ⟶ **11/22 (Prompt 37):**
+   `scripts/preview-generate.js` now passes `eastVacationRanges` from the cached feed rows (the app's own predicate,
+   restated in the script) and says so in its report; `eastVacationReviews` still needs a sign-in, so there every range
+   reads unreviewed - a vacation, stricter than the app for a range reviewed home - and the offers and periods are not
+   read either (rules only). `publish-preview.js`'s preflight still passes neither (more permissive, never stricter).
 3. **Server-side enforcement** (`claim_open_slot`, `apply_trade`, the `time_off` trigger) — open; see `SILVIS-CALL-RULES.md` §8 item 17. ⟶ 10/14 (Prompt 31 Part A): the
    `time_off` vacation guard counts these ranges since 9/30 and, with revision x, reads them through the database's derived rows
    (§25.1); `claim_open_slot` / `apply_trade` / `OF002` stay out (decision 17).
@@ -2893,11 +2916,32 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   primary_i) / wB, 0, fillClip.backup) summing to the backup slots (bisection, then exact on the unclamped members; equal
   primaries give the plain equal backup share); the **reverse makeup** — a member at his backup fill clip below W* is held at
   min(fillClip.primary, (W* − wB × clipB) / wP) primaries from the unclipped pool, at most 3 rounds, stop below 0.05. Windows
-  surgeons and numeric `monthlyTarget` overrides stay out of the weighted fill. The scored targets are still
+  surgeons and numeric `monthlyTarget` overrides stay out of the weighted fill (⟶ 11/22: a backup number - the next
+  bullet). The scored targets are still
   `diagnostics.targets[m][id] = { primary, backup }` (rounded to 0.1) and `tallies[id].months[m].target` stays exactly
   `{ primary, backup }`; the weighted view rides beside it (`impliedTargets` months `weightedShare`, `makeupRounds`,
   `weights`; members `weightedShare`, `fillClip`, `makeupPrimary`; tallies `weighted`, `weightedShare`). The Generate panel's
   shares head prints the weighted level, its table *Fill clip P / B* and *W share*; the tallies table *Weighted* and *W share*.
+- **An explicit backup target (Faraz 11/22, Prompt 37; rules doc §3 Khan, §6, §8 item 32).** `monthlyTarget: { backup: N }`.
+  `rules.js backupTargetFor(ctx, id, month)` is the ONE reading of the proration - `{ asked, days, away, target }`, target
+  = asked × (days − away) ÷ days to 0.1, away = `P.vacation` (the days `eligibility()` refuses as time off) - called by
+  `genTargets` and by the Totals card (a page global there; the generator reaches it through `genRulesApi`'s list).
+  `genWeightedShares(fm, slots, w)` is now a wrapper over the unchanged solve (`genWeightedSharesCore`): with no backup
+  number it returns the core's result, byte for byte; with one it (1) solves the core with every backup number set aside
+  - primary shares, level, makeup holds and rounds are that solution's, so a backup number moves no primary; (2) reads
+  each number as `max(ovB, min(ovBAsked, share))` - ovB the prorated number, share his backup share in that solution: the
+  proration never goes below the share, and a number set below it stays as set; (3) when a number differs from its
+  share, re-fills the members without one over the slots the numbers leave, each weighed at his unchanged primary share
+  (`genWeightedFill`) - otherwise the month is the no-target solution itself. A number is not clipped at the backup fill
+  clip (the preview's "(short)" flag shows one the rules cannot reach). `impliedTargets.months[m].members[id]`
+  `.backupOverride = { asked, days, away, prorated, share, target }` exists only on a member with a backup number (share
+  null outside the pool, where the prorated number is the target); the Generate panel and `scripts/preview-generate.js`
+  print it after Target B through `helpers.backupTargetNote`. `eligibility()` does not read a backup target. Pins:
+  `test/generator-regression.js` - the `genWeightedShares` unit pins (the no-target solution by hand, then a number
+  below, above and at the share, a prorated number, two members, both numbers on one member), the "Prompt 37
+  backup-target fixture" (a made-up month: no target, 20, 9, 5, a surgeon outside the pool) and seed-level January -
+  March runs through `checkRun`, whose `extraTarget` leg restates the proration, the share and the re-fill on its own;
+  `test/rules.test.js` "rules.backupTargetFor".
 - **Over the soft limit** (`rules.js overSoftLimitDays` / `overSoftLimitMonths`, the one reading). A primary day is over when
   it is the (L+1)th or later primary of its holder's calendar month in date order, L = his soft limit (a countsEastDays cap
   counts his East primary-week days not held as Silvis primary first; a hard-cap breach keeps its own wording and is not
@@ -2918,13 +2962,19 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   list after the score. Words: `helpers.overSoftLimitWords` / `overSoftLimitLine` / `overSoftLimitTitle` / `overSoftLimitLegend`
   ("over 7" when the limit is the group's 7, else "over L").
 - **Totals** (§8 Totals line): the Weighted column + CSV, the fairness view's weighted load vs weighted share, one-decimal
-  deviations, the per-month over-soft-limit flag. Totals → Pay unchanged.
+  deviations, the per-month over-soft-limit flag. Totals → Pay unchanged. ⟶ 11/22 (Prompt 37): an explicit backup target
+  reads the sum of the months' numbers - `backupTargetFor` per month, or the last preview's `backupOverride.target` for a
+  month that preview covers with the same number - and '-' without the rules context; `helpers.ttWeightedShare` answers
+  null without a primary target, so a backup-only target no longer reads as a weighted share made of his backups alone.
 - **Setup → Rules.** Per surgeon *Monthly cap*: "group default" (deletes the key) / "no limit" (writes `"none"`) / "a number"
   (writes `{ primary: N }`, starting from his own hard cap, else the group's soft limit, else 7 — no hard-coded 8) with
   *Primary days per month* (hard) and *Soft limit (primary days)*. *Advanced → Group rules*: *Group soft limit*
   (`defaultMonthlyCap.preferred`) and *Group hard cap* (`defaultMonthlyCap.primary`; blank deletes it). The weights have no
   field: *Edit group rules as JSON*. The plain-words summaries read one helper, `helpers.suMonthlyCapReading`
-  (`offerRulesWords`, `suRulesSummary`: "soft limit 7 primary days a month (the group's)").
+  (`offerRulesWords`, `suRulesSummary`: "soft limit 7 primary days a month (the group's)"). ⟶ 11/22 (Prompt 37): the
+  *Monthly target* field has two boxes - the primary number and *Backup target (days a month)* - stored as the plain
+  number (primary only), `{ backup }` or `{ primary, backup }`, and null when both are blank; the East field gains the
+  checkbox *Backup on East call days carries no run, rest or weekend-shape penalty* (`eastFeed.backupFreeOnEastDays`, §5).
 - **Painting (step 5, `test/painting.test.js`, its own chain and workflow step, 4000 ms budget).** A synthetic fixture
   measures painters who offer every day against partial painters and two controls. Prompt 32's soft 7 holds every painter-month
   at 7 primaries, but a full painter still ends above his weighted share (backup up to about share + 2.8) because a partial

@@ -367,7 +367,7 @@
         "holidaysOffNote": "Faraz to confirm (9/30)"
       },
       "primaryContribution": "weekdays",
-      "primaryContributionNote": "Faraz 9/30 (Prompt 23 B1): weekdays preferred - \"weekends\" -> \"weekdays\", the mirror: a weekday PRIMARY (Mon-Thu, or a standalone Friday) earns the soft weekday-primary bonus at groupRules.weights.weekendContribution (3); no weekend-block bonus, no backup term (his backups are balanced by the share alone). Never on a holiday-unit day.",
+      "primaryContributionNote": "Faraz 9/30 (Prompt 23 B1): weekdays preferred - \"weekends\" -> \"weekdays\", the mirror: a weekday PRIMARY (Mon-Thu, or a standalone Friday) earns the soft weekday-primary bonus at groupRules.weights.weekendContribution (3); no weekend-block bonus, no backup term (his backups are balanced by the share alone; 11/22, Prompt 37: or by an explicit backup target once one is set in Setup - monthlyTargetNote). Never on a holiday-unit day.",
       "standaloneFriday": true,
       "noLoneWeekendDay": true,
       "weekendShapeNote": "Faraz 9/30 (Prompt 23 B2): he may hold a Friday on its own as primary - the Sat-Sun then forms its own unit for someone else (the generator's 'friday' weekend pattern); his own weekends stay Sat-Sun or Fri-Sun, never a lone Saturday or Sunday (noLoneWeekendDay: hard for primary, lone-weekend-day; exempt where a holiday unit cuts the weekend; a dated row or offer of his for the day lifts it, and so does a 'home' East-vacation day - it counts as a dated row of his). weekendStyle 'block' keeps governing his backup weekends. Review 10/1: someone else's Sat-Sun block beside his Friday costs that surgeon his style's mismatch (+3) unless he carries standaloneFriday himself - a block-style holder included; a trade or give of one day of his Sat-Sun pair moves the pair (the card's weekend unit).",
@@ -401,7 +401,8 @@
         "eastBlocksBackup": false,
         "eastBackupCountsAsBusy": true,
         "forecast": true,
-        "forecastNote": "Uses groupRules.eastFeed.forecast while Davenport is unpublished (Faraz 9/21 evening)."
+        "forecastNote": "Uses groupRules.eastFeed.forecast while Davenport is unpublished (Faraz 9/21 evening).",
+      "backupFreeOnEastDaysNote": "Faraz 11/22 (Prompt 37): a second generic key, backupFreeOnEastDays (read only when exactly true). On his own East call days - a published East call day with the overrides applied, or a standing one; never a forecast day - a BACKUP carries no shape penalty: days in a row, rest between stretches, back-to-back weekends, weekend style, backup after his own primary. Hard rules, his other days and every primary are untouched. Setup data (Setup > Rules > East), off until Faraz turns it on after the preview: this seed does not carry the key. Rules doc section 3 Khan, section 8 item 32."
       },
       "eastStanding": [
         {
@@ -414,7 +415,7 @@
         }
       ],
       "monthlyTarget": null,
-      "monthlyTargetNote": "9/22 (Prompt 12 J), restated 9/23 (item WF): null = the water-filled share per role (rules doc section 6). The generator gives every pool member an implied target per role = his share of ALL the month's slots of the pool, open and fixed, water-filled across the members' clips and never floored at his locked count (diagnostics.impliedTargets; his backup count is balanced like everyone else's). A number here sets the PRIMARY target only; { primary, backup } sets each. There is no neutral or zero term.",
+      "monthlyTargetNote": "9/22 (Prompt 12 J), restated 9/23 (item WF): null = the water-filled share per role (rules doc section 6). The generator gives every pool member an implied target per role = his share of ALL the month's slots of the pool, open and fixed, water-filled across the members' clips and never floored at his locked count (diagnostics.impliedTargets; his backup count is balanced like everyone else's). A number here sets the PRIMARY target only; { primary, backup } sets each. There is no neutral or zero term. Faraz 11/22 (Prompt 37): he may carry an explicit BACKUP target - monthlyTarget { backup: N } - for the days he is not away: a month's number is N x the days he is not away / the days of the month (never taken below the backup share he has without a target; a number set below that share stays as set), and it moves backup shares only - every primary share, the primary level and the makeup are worked out as if nobody had one, and the others share the backup slots it leaves (rules doc section 3 Khan, section 6, section 8 item 32). The number is Setup data (Setup > Rules > Limits > Backup target), picked by Faraz after the preview: this seed carries none, so monthlyTarget stays null here.",
       "monthlyCap": null,
       "monthlyCapNote": "Faraz 9/21: no cap of his own. Prompt 32 (Faraz 10/11): null now means the group default - the soft limit of 7 PRIMARY days a month (groupRules.defaultMonthlyCap.preferred), no hard cap; it read 'no cap' until 10/11.",
       "notes": [
