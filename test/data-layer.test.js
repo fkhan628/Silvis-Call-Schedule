@@ -11969,6 +11969,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // ...and a feed that blocks no role: no East call day is read for him, so the switch has nothing to act on either - said so
       assert.strictEqual(east({ eastFeed: { enabled: true } }), "East / Davenport: East call days block no role.", "the no-role line without the switch (today's)");
       assert.strictEqual(east({ eastFeed: { enabled: true, backupFreeOnEastDays: true } }), "East / Davenport: East call days block no role; " + FREE + NOROLE + ".");
+      // ...with a standing East day listed too (itself "ignored while the East feed blocks no role"): the caveat still closes the line (fix check 11/22)
+      { const l = east({ eastFeed: { enabled: true, backupFreeOnEastDays: true }, eastStanding: [{ name: "Eve", days: ["12-24"] }] });
+        assert.ok(l.includes("on East call every year: Eve (12/24) - ignored while the East feed blocks no role") && l.endsWith("; " + FREE + NOROLE + "."), "a no-role feed with a standing day carries both caveats: " + l); }
       // blocks backup only (no primary): the backup caveat, never both
       assert.strictEqual(east({ eastFeed: { enabled: true, eastBlocksBackup: true, backupFreeOnEastDays: true } }).endsWith("; " + FREE + " (no effect while East call days block backup)."), true, "a feed that blocks backup only carries the backup caveat");
       // known to the summary: never on the Other line, true or false
@@ -11996,8 +11999,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // second review (11/22) - a feed that blocks NO role, the summary's "(no effect while East call days block no role)".
       // rules.js drops such a surgeon's override-added day and his standing day, each with its warning, so neither is an East
       // call day for the switch; and the callers derive no busy day for him at all - the gate is pinned where it lives, in
-      // the app's ctxInputs and in the preview script. (rules.js itself honours a busy set a caller hands in for such a
-      // feed - test/rules.test.js (F) - which is why the gate is pinned at the callers and not as an engine answer.)
+      // the app's ctxInputs, in the preview script and in the publish script (fix check 11/22: the third caller, and each
+      // of the three writes eastBusyDays in ONE place, right inside its gate - a second writer beside an untouched gate
+      // passed every suite). (rules.js itself honours a busy set a caller hands in for such a feed - test/rules.test.js
+      // (F) - which is why the gate is pinned at the callers and not as an engine answer.)
       const noRole = R.buildContext({ roster: [{ id: "a", name: "A", code: "AAA", active: true }, { id: "b", name: "B", code: "BBB", active: true }], surgeonRules: { a: { eastFeed: { enabled: true, backupFreeOnEastDays: true }, eastStanding: [{ name: "Eve", days: ["12-24"] }] }, b: {} }, groupRules: {}, holidays: {}, schedule: {}, eastOverrides: { a: { [DAY]: true } }, today: "2027-01-15" });
       assert.deepStrictEqual([R.backupFreeOnEastDay(noRole, "a", DAY), R.backupFreeOnEastDay(noRole, "a", "2027-12-24")], [false, false], "a feed that blocks no role: an override-added day and a standing day are no East call days for the switch");
       assert.deepStrictEqual(noRole.warnings.filter(w => /eastStanding|eastOverrides/.test(w)), [
@@ -12010,6 +12015,13 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const SRCG = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n"), PGG = fs.readFileSync(path.join(ROOT, "scripts", "preview-generate.js"), "utf8").replace(/\r\n/g, "\n");
       assert.strictEqual(SRCG.split("      if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n        meta.busyDays = true;\n").length - 1, 1, "ctxInputs derives East busy days only for a feed that blocks a role");
       assert.strictEqual(PGG.split("    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = ").length - 1, 1, "...and so does scripts/preview-generate.js");
+      const PPG = fs.readFileSync(path.join(ROOT, "scripts", "publish-preview.js"), "utf8").replace(/\r\n/g, "\n");
+      assert.strictEqual(PPG.split("    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = ").length - 1, 1, "...and scripts/publish-preview.js, the third caller");
+      for (const [name, text, gate] of [["index-source.html", SRCG, "      if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n        meta.busyDays = true;\n"], ["scripts/preview-generate.js", PGG, "    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = "], ["scripts/publish-preview.js", PPG, "    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = "]]) {
+        assert.strictEqual(text.split("eastBusyDays[s.id] =").length - 1, 1, name + ": East busy days are written in ONE place");
+        const gap = text.indexOf("eastBusyDays[s.id] =") - text.indexOf(gate);
+        assert.ok(gap > 0 && gap < 1500, name + ": ...and that place is right inside the gate (" + gap + " characters after its opening line)");
+      }
       // Prompt 37 fix round (11/22) - the clause's two sides, in the engine. Made-up days around his East call day 3/10/2027
       // (a Wednesday); `softs` = the soft reasons eligibility() gives him for a backup on a day.
       const row = (p, b) => ({ primary: p, backup: b, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null });
@@ -16309,7 +16321,7 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
   // ---- Prompt 34 (Faraz 11/11): Silvis reads Fierce's Davenport weeks from the DSG app's two lists, for the weeks Davenport
   // has not published. The behaviour is run where it lives - test/east-feed.test.js (the parse, the guard, the plan,
   // precedence), the lifted refreshEastFeed above ([P31A3] review: a trusted read written, every bad read kept),
-  // test/rules.test.js and the regression (Faraz's two calls), test/edge-functions.test.js (the server refresh). Here: the
+  // test/rules.test.js and test/derived-weeks.test.js (Faraz's two calls), test/edge-functions.test.js (the server refresh). Here: the
   // source pins of the app's wiring, the Setup issue, and the docs.
   console.log("\n[P34] Prompt 34 (Faraz 11/11): the East week lists - the Refresh, the rules inputs, Setup > East feed, the Setup issue, the docs");
   {

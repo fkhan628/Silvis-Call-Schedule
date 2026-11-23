@@ -76,11 +76,14 @@
 // three). What is left of the block (~0.6 s on those runners: the pinned R3 seed re-run, 10 Nov-Dec runs with the rule, 10 without, 10
 // Jan-Mar without) is the next lever - its own chain step, as water-fill and painting got. (2) R4 at bestOf 1
 // (BEST_OF_DEFAULT [6, 5, 2, 1]) buys only ~0.15-0.2 s (its 25 runs: 0.37-0.42 s there, 0.28-0.31 s locally).
-// 11/22 (Prompt 37's review, 81 hosted runs read): main had come back to 8.5-9.4 s on the slow runners (R3 at 19-21.6 ms
+// 11/22 (Prompt 37's review, 81 hosted runs read): main had come back to 8.5-9.5 s on the slow runners (R3 at 19-21.6 ms
 // per candidate), and Prompt 37's backup-target runs add about 10 % (0.45-0.55 s locally), which would have put those
 // draws at or over the budget. The lever taken: the 11/11 derived-week block (114 runs, no checkRun call, 0.52 s locally
-// and about 1.05 s there - more than Prompt 37 adds) moved to its own chain step, test/derived-weeks.test.js. Locally
-// the file went from 4.97-5.12 s to 4.50-4.53 s, back at main's own figure (4.47-4.64 s) with Prompt 37's runs inside.
+// and about 1.05 s there - more than Prompt 37 adds) moved to its own chain step, test/derived-weeks.test.js. Locally,
+// on a quiet machine, the file went from 4.97-5.12 s to 4.50-4.53 s, main's own figure (4.47-4.64 s), with Prompt 37's
+// runs inside. Hosted, the first run after the move read 6815 ms at R3 15.6 ms per candidate: 437 ms per unit of R3,
+// where main's suite reads 425-453 and the tree before the move read 486 - so 10 s is reached at R3 of about 22.9 (the
+// slowest of the 81 draws on record was 22.2). Back at main's margin, no better: the next lever is still (1) above.
 // The summary line names the CPU (os.cpus()). Never raise the budget to hide a slow runner.
 // ~77 % of a candidate is inside rules.weekendUnitPatterns
 // and eligibility, so nothing on the generator side can buy the 4x that

@@ -34,7 +34,7 @@ its paths filter is exactly the runtime inputs (no suite count is stated here on
 suite). `build.js` writes
 `index.html` locally as a byproduct - `git restore index.html` before committing, never commit it by hand. On a loaded
 machine the wall-clock gates can be raised locally with `SILVIS_RULES_BUDGET_MS` (rules, default 5000 ms) and
-`SILVIS_GEN_BUDGET_MS` (the generator regression, default 10000 ms, and the holidays suite, default 4000 ms, share it);
+`SILVIS_GEN_BUDGET_MS` (shared by the generator regression, default 10000 ms, and the fixture suites - water-fill 6000 ms; holidays, painting and derived-weeks 4000 ms);
 both are printed when set and CI keeps the defaults.
 
 ## Contact data

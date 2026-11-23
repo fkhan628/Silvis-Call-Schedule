@@ -13,7 +13,8 @@
 // of build.yml's `on:` block (section 2c: push to main + the paths list, the
 // manual run, no other trigger), pins the
 // offline switch on the exports step, pins the overridable wall-clock gates
-// (test/rules.test.js, test/generator-regression.js, test/water-fill.test.js, test/holidays.test.js, test/painting.test.js),
+// (test/rules.test.js, test/generator-regression.js, test/water-fill.test.js, test/holidays.test.js, test/painting.test.js,
+// test/derived-weeks.test.js),
 // and pins the docs statements that the 2026-09-23 whole-branch review found
 // stale.
 //

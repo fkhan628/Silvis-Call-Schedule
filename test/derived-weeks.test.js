@@ -2,8 +2,10 @@
 // Prompt 34 preview, and the 11/12 follow-up). Its own chain and workflow step since 11/22: the block lived in
 // test/generator-regression.js until Prompt 37's review, where its 114 runs cost about half a second locally and about
 // a second on the slowest hosted runners - with Prompt 37's backup-target runs added, that file would have gone over its
-// 10 s wall-clock budget there (a failing assertion by design), so this block moved out, as water-fill and painting did.
-// Nothing in it changed: the same contexts, runs and assertions, restated from the seed and the inputs alone. The few
+// 10 s wall-clock budget there (a failing assertion by design), so this block moved out, as the water-fill case did
+// (painting has had its own step from the start). Nothing in it changed: the same contexts, runs and assertions,
+// restated from the seed and the inputs alone - plus one count of the runs at the end (the fix check: with a loop
+// emptied the file would still have printed ok; inside the regression the count was printed, never asserted). The few
 // names it needs from the regression's prelude are copied below (the harness, the date helpers, the roster constants).
 //
 // Wall clock: SILVIS_GEN_BUDGET_MS (shared with the regression, water-fill, painting and holidays) overrides the
@@ -395,5 +397,7 @@ const DW_RUNS = { n: 0 };
 }
 
 const total = Date.now() - T_FILE;
+// the run count is asserted (8 seeds x 4 + 2 seeds x 13 + 4 seeds x 14 - the block's 31 call sites): an emptied loop must not pass
+eq(DW_RUNS.n, 114, "the derived-week runs");
 ok(total <= BUDGET_MS, "test file took " + total + " ms (budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ") - the derived-week runs must stay under it; never downgrade this to a warning");
 console.log("ok " + N + " assertions (derived weeks: " + DW_RUNS.n + " runs - a derived week, a holiday unit and his own vacation, Faraz 11/11; " + total + " ms; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ")");

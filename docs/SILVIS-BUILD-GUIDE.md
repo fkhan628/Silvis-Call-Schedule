@@ -3692,7 +3692,7 @@ meanwhile the app derives from published and stated weeks and says the lists are
 - **Tests (failing first):** `test/east-feed.test.js` (the parse, the cached copy, every guard verdict and its edges, the
   plan, the attach, precedence from unsorted lists, a Monday on both lists, `deriveFrom`, the failed-read keep end to end,
   the words); `test/rules.test.js` and `test/holiday-plan.test.js` (the two calls, their edges and their switches);
-  `test/generator-regression.js` (26.5); `test/edge-functions.test.js` (26.6); `test/data-layer.test.js` (the Refresh lifted
+  `test/derived-weeks.test.js` (26.5); `test/edge-functions.test.js` (26.6); `test/data-layer.test.js` (the Refresh lifted
   and run: a trusted read written, every bad read kept, a dropped entry named; the pins); `test/ui/smoke.mjs` (Setup's list
   on lists the harness serves).
 - **The preview** (read-only; `scripts/preview-generate.js --east-lists cache|live|none`: the cache's copy, the lists read
@@ -3712,7 +3712,7 @@ the two ways offered he chose: show the name, write nothing.*
   that yields to his vacation has left it, a day a holiday unit added is in it, the day before a vacation stays - 26.5),
   nobody holds that role in the schedule (he himself included - the row shows him then; an outside cover holds a primary),
   he does not hold the other role that day, and a day a unit added is still his (`derivedUnitLost`). **Every slot it names
-  is one a default Generate over that day seeds as his lock** (`test/generator-regression.js` checks "pending implies
+  is one a default Generate over that day seeds as his lock** (`test/derived-weeks.test.js` checks "pending implies
   seeded") - but for one narrow corner: a day a holiday unit added, while rows the run keeps without a lock flag (a claimed
   or traded day; any held row under fill-open-only) hold him in the other role on the unit's days of his week; and
   **the reverse does not hold**: where an unlocked row holds the role, or holds him in the other role, nothing is pending -
@@ -3741,7 +3741,7 @@ the two ways offered he chose: show the name, write nothing.*
   (26.6) the daily 10:30 UTC run rewrites the cache without them: those names disappear each morning and come back with the
   next in-app Refresh from Davenport (Setup's issues say when the lists are missing; the calendar itself does not).
 - **Tests:** `test/rules.test.js` (the reading case by case, and `eligibility` unchanged on a pending day);
-  `test/generator-regression.js` (pending implies seeded, with and without rows in the way); `test/data-layer.test.js` (the
+  `test/derived-weeks.test.js` (pending implies seeded, with and without rows in the way); `test/data-layer.test.js` (the
   gate lifted and run - public, signed out, each read missing, a past day, the preview overlay - the two call sites, the
   pins); `test/ui/contrast.mjs` (the name on the weekend and holiday tints); `test/ui/smoke.mjs` (the calendar and the
   painter on listed weeks the harness serves ten months ahead, restated from the page's own rules context; a non-scheduler's

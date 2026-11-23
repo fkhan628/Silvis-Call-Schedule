@@ -1576,11 +1576,14 @@ function rdEastBusyOn(ctx, P, d) {
 // standing East day. A forecast day is a guess and is not one. (His East vacations are a separate reading: a day of an
 // away range is hard time off and counts as away; a published call day inside one would still answer true here, with
 // nothing to act on but a backup already locked on it.) False without the switch or without his East feature. With
-// eastBlocksBackup on the day is hard-blocked for backup anyway, so the switch has nothing to act on. And for a feed
-// that blocks NO role the callers derive no busy day at all (the app's ctxInputs, scripts/preview-generate.js) while
-// buildContext drops his overrides and standing days with a warning each - so in the app the switch acts only while
-// East call days block primary and not backup (second review 11/22; Setup's title and summary say so). This function
-// itself still honours a busy set a caller hands in for such a feed (test/rules.test.js (F)).
+// eastBlocksBackup on the day is hard-blocked for backup anyway, so the switch has nothing to act on but a backup
+// already held on such a day (a manual edit over the warning, or a day Davenport published later) - that one is
+// still left out of his other days' counts. And for a feed that blocks NO role the callers derive no busy day at all
+// (the app's ctxInputs, scripts/preview-generate.js and scripts/publish-preview.js - each writes eastBusyDays in ONE
+// place, inside that gate; test/data-layer.test.js pins it) while buildContext drops his overrides and standing days
+// with a warning each - so in the app the switch acts only while East call days block primary and not backup (second
+// review 11/22; Setup's title and summary say so). This function itself still honours a busy set a caller hands in
+// for such a feed (test/rules.test.js (F)).
 function rdBackupFreeOn(P, d) {
   return !!P && P.backupFreeOnEast === true && P.eastEnabled && (P.eastBusy.has(d) || !!rdStandingName(P, d));
 }
@@ -1670,7 +1673,7 @@ function derivedUnitLost(ctx, schedule, date, role, id) {
 // derivedPending(ctx, schedule, date) -> { primary: id | null, backup: id | null }. Faraz 11/12 ("the app shows the areas
 // shaded that are his primary shifts but not his initials" - chosen: show them, write nothing). DISPLAY ONLY: the derived
 // surgeon of each role on a day the schedule does not hold yet. Every slot it names is one a default Generate over that day
-// seeds as his derived lock (the regression checks "pending implies seeded") - but for one narrow corner: a day a holiday
+// seeds as his derived lock (test/derived-weeks.test.js checks "pending implies seeded") - but for one narrow corner: a day a holiday
 // unit ADDED, while rows the run keeps without a lock flag (a claimed or traded day; any held row under fill-open-only)
 // hold him in the other role on the unit's days of his week (derivedUnitLost reads the row's own lock flag, the run's
 // working copy flags every fixed slot). The reverse does NOT hold - where an UNLOCKED row holds the role, or holds him in

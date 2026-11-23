@@ -898,7 +898,8 @@ the pool, within each person's availability:
   allowedPrimary, allowedBackup }` — `allowed` is the number of the month's open slots the rules let the surgeon take
   (a weekend day of a full Fri–Sat–Sun unit counts as a block member, a holiday day as a unit candidate), so a target
   above it is an availability shortfall. `lockedHeld`, `poolSlots` and the targets are whole-calendar-month figures even
-  where the range only touches the month (`rangeDays`). ⟶ 9/23: `poolSlots: { primary, backup }` = the pool's slots of
+  where the range only touches the month (`rangeDays`) - an explicit backup number excepted, which in such a month
+  counts the days in the schedule (the explicit-backup-target bullet above; §8 item 32 i). ⟶ 9/23: `poolSlots: { primary, backup }` = the pool's slots of
   the month (open + held by pool members), `heldByPool`, `primaryShare` / `backupShare` = the water **level** (the share
   of an unclipped member), `placeableAtTarget` = Σ max(0, target − lockedHeld) per role = the room below the targets (at
   least the open slots; above them by `heldAboveShare` = Σ max(0, lockedHeld − target), the fixed days already over share,
@@ -1635,9 +1636,9 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     on 4/1 – 4/4 counts towards its holder's April cap and April totals when the next period is generated - and in
     this run the shares for April are shares of those four days' slots; an explicit backup target counts for those
     days only (item 32 i). Painting splits the same way (second review 11/22): a day painted on April 5 – 30 no
-    longer counts as painting April for this period, so for a painter in the default mode the soft
-    outside-his-painted-days term does not apply on 4/1 – 4/4, whether or not he painted earlier months (the check
-    query cannot show this); and a surgeon whose painted days all lie after 4/4 no longer counts as having painted
+    longer counts as painting April for this period, so for a painter in the default mode who painted no day of
+    4/1 – 4/4 the soft outside-his-painted-days term no longer applies there, whether or not he painted earlier
+    months (the check query cannot show this); and a surgeon whose painted days all lie after 4/4 no longer counts as having painted
     for the period, so a claim or trade inside it reads his dated lists (his listed weeks) again.
     **confirm** (c) **The next period.** New period starts it the day after the last period on
     file (Mon 4/5) - keep that start: the form also accepts a later one, and the days in between would then lie in no
@@ -1674,7 +1675,9 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     standing East day (the shifts he holds in a week Davenport is backup count while that feature's key says so). The
     app does not tell the kinds apart. A forecast day is a guess and is not one, so the switch does nothing in weeks
     Davenport has not published yet. And it acts only for a surgeon whose East call days block primary and not
-    backup (his shape): where they block backup no backup is placed on such a day, and for an East feed that blocks
+    backup (his shape): where they block backup no backup is placed on such a day (one already held there - a manual
+    edit over the warning, or a day Davenport published later - is still left out of his other days' counts), and
+    for an East feed that blocks
     no role the app reads no East call day at all - the checkbox's hover text names the condition and the Setup
     summary says "no effect" (second review 11/22). **confirm** (d) **What the switch drops and what it keeps.** Dropped, for a
     backup on such a day: the any-role run term, the rest-between-stretches term, back-to-back weekends, the
@@ -1690,8 +1693,8 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     prefers weekends (not Khan since 9/30) and a weekend block penalty. Three terms on the generator's side also go
     on counting such a backup like any held day (second review 11/22): the holiday load of a holiday unit's
     candidates (units of that tier he already holds, either role), and in the candidate score the weekend spread
-    (Fri – Sun days held in either role) and the holiday spread (major units held in either role). Neither spread
-    weighs more than a hundredth of a soft point, and no holiday unit lies inside the coming period, so none of the
+    (Fri – Sun days held in either role) and the holiday spread (major units held in either role). A day of either
+    spread weighs no more than a hundredth of a soft point, and no holiday unit lies inside the coming period, so none of the
     three keeps a backup off his East days there. With the switch on and a high number the
     preview shows long Silvis runs across his East weeks - that is what the decision asks for; the number and the
     switch are his to weigh there. **confirm** (e) **Placed primaries may drift** with the number although the shares
