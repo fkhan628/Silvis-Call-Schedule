@@ -477,6 +477,13 @@ const ptSrc = read("test/painting.test.js");
 ok(/process\.env\.SILVIS_GEN_BUDGET_MS/.test(ptSrc), "test/painting.test.js has no SILVIS_GEN_BUDGET_MS override for its wall-clock budget");
 ok(/SILVIS_GEN_BUDGET_MS[\s\S]{0,80}:\s*4000\b/.test(ptSrc), "test/painting.test.js wall-clock default must be 4000 ms (the CI gate)");
 ok(/ok\(total <= BUDGET_MS/.test(ptSrc), "test/painting.test.js budget must stay a failing assertion (`ok(total <= BUDGET_MS ...)`), never a warning");
+// The derived-week suite (11/22: the 11/11 block moved out of the regression for the same reason) rides it too: default
+// 4000 ms, a failing `ok(total <= BUDGET_MS ...)` - and the regression no longer runs those cases itself.
+const dwSrc = read("test/derived-weeks.test.js");
+ok(/process\.env\.SILVIS_GEN_BUDGET_MS/.test(dwSrc), "test/derived-weeks.test.js has no SILVIS_GEN_BUDGET_MS override for its wall-clock budget");
+ok(/SILVIS_GEN_BUDGET_MS[\s\S]{0,80}:\s*4000\b/.test(dwSrc), "test/derived-weeks.test.js wall-clock default must be 4000 ms (the CI gate)");
+ok(/ok\(total <= BUDGET_MS/.test(dwSrc), "test/derived-weeks.test.js budget must stay a failing assertion (`ok(total <= BUDGET_MS ...)`), never a warning");
+ok(chain.includes("test/derived-weeks.test.js") && chain.indexOf("test/derived-weeks.test.js") < chain.indexOf("test/generator-regression.js") && !/DW_RUNS/.test(genSrc), "test/derived-weeks.test.js must be a chain entry of its own, before the regression, and the regression must not carry the derived-week runs as well (they would run twice)");
 flush("rules wall-clock gate");
 
 // ---- 5. docs statements the 2026-09-23 review found stale ------------------

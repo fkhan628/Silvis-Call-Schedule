@@ -1573,9 +1573,14 @@ function rdEastBusyOn(ctx, P, d) {
 // BACKUP carries no schedule-shape soft and is left out of the run, rest and back-to-back counts of his other days
 // (eligibility())? A call day here is a KNOWN one, of any kind the feed publishes - a service-week day, a weeknight, a
 // weekend or holiday call day, a day the scheduler's override added (the overrides applied - buildContext) - or a
-// standing East day. A forecast day is a guess and is not one; an East vacation day is time off, never a call day.
-// False without the switch or without his East feature. (With eastBlocksBackup on the day is hard-blocked for backup
-// anyway, so the switch has nothing to act on.)
+// standing East day. A forecast day is a guess and is not one. (His East vacations are a separate reading: a day of an
+// away range is hard time off and counts as away; a published call day inside one would still answer true here, with
+// nothing to act on but a backup already locked on it.) False without the switch or without his East feature. With
+// eastBlocksBackup on the day is hard-blocked for backup anyway, so the switch has nothing to act on. And for a feed
+// that blocks NO role the callers derive no busy day at all (the app's ctxInputs, scripts/preview-generate.js) while
+// buildContext drops his overrides and standing days with a warning each - so in the app the switch acts only while
+// East call days block primary and not backup (second review 11/22; Setup's title and summary say so). This function
+// itself still honours a busy set a caller hands in for such a feed (test/rules.test.js (F)).
 function rdBackupFreeOn(P, d) {
   return !!P && P.backupFreeOnEast === true && P.eastEnabled && (P.eastBusy.has(d) || !!rdStandingName(P, d));
 }

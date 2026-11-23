@@ -536,10 +536,14 @@ runs), `test/data-layer.test.js` "10/18 rest between stretches", `test/importer.
 
 **The East-day switch (Faraz 11/22, Prompt 37; rules doc §3 Khan, §8 item 32) — `eastFeed.backupFreeOnEastDays`.** A
 generic per-surgeon key, read only when exactly `true` (`P.backupFreeOnEast`; any other value is ignored, one that is
-not a boolean with a `ctx.warnings` entry); off for everyone until Setup sets it. `rdBackupFreeOn(P, day)` answers
+neither a boolean nor null with a `ctx.warnings` entry); off for everyone until Setup sets it. `rdBackupFreeOn(P, day)` answers
 whether a day is one of his own East CALL days on which the switch acts: a published busy day of any kind
-(`P.eastBusy`, the overrides applied) or a standing day, with his East feature enabled - never a forecast day, never
-an East vacation day. The switch works both ways. (1) In `eligibility()` a BACKUP on such a day pushes none of the
+(`P.eastBusy`, the overrides applied) or a standing day, with his East feature enabled - never a forecast day. In the
+app it acts only for a feed that blocks primary and not backup (second review 11/22): `ctxInputs` and the preview
+script derive busy days only for a feed that blocks a role, `buildContext` drops a no-role surgeon's overrides and
+standing days with a warning each, and where East days block backup no backup is placed there; the checkbox title
+names the condition and the summary appends "(no effect while East call days block backup)" or "... block no role)".
+The switch works both ways. (1) In `eligibility()` a BACKUP on such a day pushes none of the
 five schedule-shape softs (`backup-after-primary`, `long-run`, `short-rest`, `back-to-back-weekend`,
 `pattern-mismatch`). (2) When his OTHER days are judged, a day he holds as backup only on such a day is not a held
 day for the any-role run, the rest between stretches or the back-to-back test (`holdsShape`, which is `holdsAny`
@@ -554,10 +558,11 @@ membership is dropped when every day of the membership is such a day (`eastFreeA
 block-style surgeon, the split's Fri + Sun side or its Saturday side, a daily day); a membership with a day that is
 not one keeps its term. The generator's `genStyleMismatch` - the preview's style flag and the unit's fallback mark -
 reads the same answer through the exported `backupFreeOnEastDay(ctx, id, day)`. No new weight and no new reason
-code. Setup → Rules → East has the checkbox; `helpers.js` lists the key (`SU_SUM_KNOWN.eastFeed`) and words it in the
+code. Setup → Rules → East / Davenport has the checkbox; `helpers.js` lists the key (`SU_SUM_KNOWN.eastFeed`) and words it in the
 East summary line only while it is on. Pins: `test/rules.test.js` "Prompt 37 ... eastFeed.backupFreeOnEastDays" (each
 term off and on; the day after, the weekend after and the rest after an East-day backup, each against the same
-schedule without it; the hard run; a primary; which days count; the unit's patterns; the style flag) and
+schedule without it; the hard run; a primary; which days count; the unit's patterns; the style flag; since the
+second review the assume-slot leg at a limit of 2, the rest rule's after side and unit links, the split style) and
 `test/generator-regression.js` (seed-level November - December runs with the switch on and a milestone-range run
 with a number beside it: `checkRun` with the style exemption restated, no positive-weight soft on his East-day
 backups, every long-run term of his other days restated from the schedule without his East-day backups, and an
@@ -2990,6 +2995,8 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   month that preview covers WHOLE with the same number (a part-covered month's note is not the month's number) - and '-'
   without the rules context; `helpers.ttWeightedShare` answers
   null without a primary target, so a backup-only target no longer reads as a weighted share made of his backups alone.
+  The two readings differ in a month whose number Generate held at the share or kept as set (Totals alone cannot work
+  out the share), and the number counts for every month on screen - rules doc §8 item 32 (l), (m).
 - **Setup → Rules.** Per surgeon *Monthly cap*: "group default" (deletes the key) / "no limit" (writes `"none"`) / "a number"
   (writes `{ primary: N }`, starting from his own hard cap, else the group's soft limit, else 7 — no hard-coded 8) with
   *Primary days per month* (hard) and *Soft limit (primary days)*. *Advanced → Group rules*: *Group soft limit*
@@ -2999,7 +3006,8 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   *Monthly target* field has two boxes - the primary number and *Backup target (days a month)* - stored as the plain
   number (primary only), `{ backup }` or `{ primary, backup }`, and null when both are blank; the East field gains the
   checkbox *Backup on East call days carries no run, rest or weekend-shape penalty* (`eastFeed.backupFreeOnEastDays`, §5;
-  its hover text names the days that count and says the backup is left out of his other days' counts too); the Limits
+  its hover text names the days that count, says the backup is left out of his other days' counts too, and when the
+  switch acts); the Limits
   summary line adds "at most his backup cap of N" when a surgeon's backup cap is below his backup number.
 - **Painting (step 5, `test/painting.test.js`, its own chain and workflow step, 4000 ms budget).** A synthetic fixture
   measures painters who offer every day against partial painters and two controls. Prompt 32's soft 7 holds every painter-month
@@ -3651,7 +3659,7 @@ the finished schedule: the unit kept with him ("stays with", only when every add
 someone else's); or not kept whole, with what became of each added day (his; held by a named surgeon or an outside cover;
 left open; or his while named days of the unit in his week are not - a split to settle by hand); a held slot that keeps him
 on a vacation day is said so, and so is the day before a vacation his derived week keeps him on (11/12) - and
-`test/generator-regression.js` restates them from the seed (114 runs: the week of 3/29/2027 over a vacation - the day
+`test/derived-weeks.test.js` (its own chain step since 11/22; in the regression until then) restates them from the seed (114 runs: the week of 3/29/2027 over a vacation - the day
 before it kept, as his one lock violation - the same week with a vacation starting the Monday after, the 11/11 reading
 switched on as data, the kept-day line's own conditions (`yieldToVacation` false, a blob without the key, a unit's added
 day as the day before, two such days in one week, another surgeon's lock, another rule and his own lock in the other

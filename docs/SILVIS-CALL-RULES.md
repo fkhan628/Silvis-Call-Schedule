@@ -95,8 +95,8 @@ decides the Trauma Director role.
 - ⟶ **11/22 (Faraz, Prompt 37): a monthly BACKUP target, for the days he is not away.** Faraz: *"Khan gets a monthly
   backup target, the others share what's left."* One **generic** `surgeonRules` key (any surgeon; no name branch):
   `monthlyTarget: { backup: N }` (with `primary` beside it when a primary target is set too). **The number is Setup
-  data** (Setup → Rules → Limits → "Backup target (days a month)"): Faraz picks it after the preview, and the seed
-  carries none.
+  data** (Setup → Rules → Limits → "Backup target (days a month)" - while he has no target, add "Monthly target" from
+  "Choose a rule to add..." first): Faraz picks it after the preview, and the seed carries none.
   1. **Days away shrink it.** *"A month's target shrinks in proportion to the days he's away."* A month's number is
      N × (the days of the month he is not away) ÷ (the days of the month), to one decimal. "Away" is what already
      blocks him in both roles: a vacation of his, and a day of an East range that is *away* or still *unreviewed* -
@@ -129,8 +129,11 @@ decides the Trauma Director role.
      and weekend terms then landed on his neighbouring days, his total penalty rose with the switch on, and run
      limits still worked against those backups.) His weekend style still reads the day as held - a whole weekend
      with an East day in it is his whole weekend. Every hard rule stands, his other soft terms stay (his own dated
-     rows, the offers terms), and a primary is never exempt. The switch is Setup data too (Setup → Rules → East →
-     "Backup on East call days carries no run, rest or weekend-shape penalty") and is **off until Faraz turns it on**.
+     rows, the offers terms), and a primary is never exempt. The switch is Setup data too (Setup → Rules → East /
+     Davenport → "Backup on East call days carries no run, rest or weekend-shape penalty") and is **off until Faraz
+     turns it on**. It acts only for a surgeon whose East call days block primary and not backup - his shape: where
+     they block backup there is no backup to free, and for an East feed that blocks no role the app reads no East
+     call day at all (the Setup summary says "no effect" in both cases).
   The target steers Generate only: it never overrides a hard rule and never leaves a slot open, and claims, trades
   and the day editor do not read it. The preview's shares table shows each month's number with its note ("set 20,
   away 16 of 31 days"). Readings to confirm: §8 item 32.
@@ -822,7 +825,10 @@ the pool, within each person's availability:
   not a rule either: weekend units are filled before single days when they are equally tight, so a high number
   takes weekend backups first (§8 item 32). A surgeon outside the pool has no share: his number is only prorated,
   and nothing comes off the pool's slots for it. Totals shows the sum of the months' numbers, and for a month the
-  last Generate preview covered whole, the number that run used.
+  last Generate preview covered whole, the number that run used. Totals' own reading is the prorated number alone
+  (only Generate knows the share), so once that preview is accepted or discarded a month whose number was held at
+  the share, or kept as set, reads lower in Totals than the number Generate used; and Totals counts the number for
+  every month on screen, months published before it was set included (§8 item 32 l, m).
 - **The soft 7 (Faraz 10/11, Prompt 32; §1 Caps).** The share clip sits on the soft limit, so Generate stays at or under
   7 primaries a month for everyone on the group default when it can. When a slot can only go to candidates already at or
   over their soft limit, it is filled anyway (the soft `over-preferred-cap`), and it goes to the eligible candidate with
@@ -1618,9 +1624,9 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     on any day outside a period - it lifts that surgeon's weekday patterns and his dated lists for its date and role,
     earns no bonus and is not placed first. So those days are generated only after their period exists. A surgeon whose
     painted days all lie after 4/4 reads "following their rules" for this period (the statement's check query counts,
-    per surgeon, the painted days inside the period and after it). His schedule inside the period changes only if he
+    per surgeon, the painted days inside the period and after it). His schedule inside the period changes if he
     chose "only these days" for it: with no painted day left inside it that choice no longer applies there, and he is
-    placed by his rules (the check query's first line prints the modes). **confirm** (b) **The period ends on a Sunday,
+    placed by his rules (the check query's first line prints the modes); two smaller effects are in (b). **confirm** (b) **The period ends on a Sunday,
     four days into April.** No week, weekend unit, holiday unit or derived week is split: "Generate this period"
     writes through Sun 4/4, and a derived week that reaches the end (Fierce's week of 3/29 runs to Sun 4/4) is written
     whole. (With the first end, Wed 3/31, that week was written to 3/31 only and the run-length check could not see
@@ -1628,7 +1634,12 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     days are generated with this period and the rest with the next. Monthly counts stay calendar months - a primary
     on 4/1 – 4/4 counts towards its holder's April cap and April totals when the next period is generated - and in
     this run the shares for April are shares of those four days' slots; an explicit backup target counts for those
-    days only (item 32 i). **confirm** (c) **The next period.** New period starts it the day after the last period on
+    days only (item 32 i). Painting splits the same way (second review 11/22): a day painted on April 5 – 30 no
+    longer counts as painting April for this period, so for a painter in the default mode the soft
+    outside-his-painted-days term does not apply on 4/1 – 4/4, whether or not he painted earlier months (the check
+    query cannot show this); and a surgeon whose painted days all lie after 4/4 no longer counts as having painted
+    for the period, so a claim or trade inside it reads his dated lists (his listed weeks) again.
+    **confirm** (c) **The next period.** New period starts it the day after the last period on
     file (Mon 4/5) - keep that start: the form also accepts a later one, and the days in between would then lie in no
     period ("Generate this period" would not reach them). Its default length stays 6 months (`lengthMonths` 6; the
     3-month button gives 4/5 – 6/30, freeze 2/22, publish by 3/8). A heads-up whose day has already passed when a
@@ -1662,7 +1673,10 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     Faraz named, a holiday call day, a day-call override - plus a day the scheduler's own East override added and a
     standing East day (the shifts he holds in a week Davenport is backup count while that feature's key says so). The
     app does not tell the kinds apart. A forecast day is a guess and is not one, so the switch does nothing in weeks
-    Davenport has not published yet. **confirm** (d) **What the switch drops and what it keeps.** Dropped, for a
+    Davenport has not published yet. And it acts only for a surgeon whose East call days block primary and not
+    backup (his shape): where they block backup no backup is placed on such a day, and for an East feed that blocks
+    no role the app reads no East call day at all - the checkbox's hover text names the condition and the Setup
+    summary says "no effect" (second review 11/22). **confirm** (d) **What the switch drops and what it keeps.** Dropped, for a
     backup on such a day: the any-role run term, the rest-between-stretches term, back-to-back weekends, the
     weekend-style term (per day, and in the unit when every day of his holding is such a day) and backup after his
     own primary. **And it works both ways** (fix round 11/22): that backup is left out of the run, rest and
@@ -1673,13 +1687,19 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     primary on an East day; his weekend style's reading of the day as held; his own dated "avoid" rows and the
     offers terms; the unit-level daily-pattern weight; and three terms nobody's rules put on a backup today - a
     weekend cap whose roles list backup (his covers primary only), the weekend-contribution term of a surgeon who
-    prefers weekends (not Khan since 9/30) and a weekend block penalty. With the switch on and a high number the
+    prefers weekends (not Khan since 9/30) and a weekend block penalty. Three terms on the generator's side also go
+    on counting such a backup like any held day (second review 11/22): the holiday load of a holiday unit's
+    candidates (units of that tier he already holds, either role), and in the candidate score the weekend spread
+    (Fri – Sun days held in either role) and the holiday spread (major units held in either role). Neither spread
+    weighs more than a hundredth of a soft point, and no holiday unit lies inside the coming period, so none of the
+    three keeps a backup off his East days there. With the switch on and a high number the
     preview shows long Silvis runs across his East weeks - that is what the decision asks for; the number and the
     switch are his to weigh there. **confirm** (e) **Placed primaries may drift** with the number although the shares
     do not (§6, with the cause and the measurements): accepted 11/22. (f) **Clipped only by the hard cap:** a number
     above what his rules allow in a month (his availability) is kept and shown as "(short)" - the others' targets
     then sum to fewer than the slots and the soft terms place the rest - while a hard backup cap ("Backup days per
-    month") below the number wins, and a number above the days of the month reads as the days. **confirm** (g) **Not
+    month") below the number wins, a number above the days of the month reads as the days, and a negative one reads
+    as 0 (Setup's box stores what is typed). **confirm** (g) **Not
     built:** `eligibility()`'s per-day primary-target term for a surgeon who has both numbers (§6 key names) - nobody
     has a primary number; and a surgeon outside the pool with a backup number takes nothing off the pool's slots
     (the pool's targets then add up to more than what is left). (h) **The seed** carries neither the number nor the
@@ -1695,5 +1715,15 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     high number takes weekend backups first; how far depends on the calendar (the preview gives his Fri-Sun and
     Mon-Thu counts at each number). If they should be spread, the existing hard tool is the backup cap's weekends
     a month - which could also keep a backup off an East weekend day, so it is his call. **confirm** (k)
-    **Warnings.** A switch value that is not true / false, or a monthly target that is not a number, is ignored
-    with one rules warning - never silently.
+    **Warnings.** A switch value other than true / false, or a monthly target that is not a number, is ignored
+    with one rules warning - never silently (null reads as not set, with no warning, like the other keys). (l)
+    **Totals has two readings of a month's number** (second review 11/22). While the scheduler's Generate preview is
+    in memory, a month that preview covered whole shows the number that run used; otherwise - every other user, and
+    the scheduler after Accept, Discard or a reload - Totals shows the plain prorated number, because only Generate
+    can work out the share. In a month whose preview note reads "held at the equal share" or "kept as set" the plain
+    number is the lower one, so his Target B drops there once the preview is gone and the row can read over although
+    the schedule met Generate's number. **confirm** (m) **Totals counts the number for every month on screen** -
+    months published before it was set and months before the schedule began included (year to date 2026 counts
+    September whole; the 12-month view counts twelve months), as an explicit primary target always has. From the
+    day the number is saved, every signed-in user sees Target B and Deviation B on his row for the published months
+    too. A first month for the number would be a data decision of its own (both roles). **confirm**

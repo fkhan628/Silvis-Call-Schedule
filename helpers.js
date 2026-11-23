@@ -5806,8 +5806,10 @@ function suRulesSummary(rules, info) {
   // his OTHER days (rules.js holdsShape; the weekend-style test still reads it as held). The line's last clause; without
   // the switch (absent, false, any other value - rules.js warns about one that is not true / false) the line is what it
   // was. Where East call days block backup no backup is placed on such a day at all, so the switch has nothing to act on
-  // - said so.
-  if (efOn && ef.backupFreeOnEastDays === true) ea.push("a backup on an East call day carries no run, rest or weekend-shape penalty and is left out of his other days' run, rest and back-to-back counts" + (efBlocks.indexOf("backup") >= 0 ? " (no effect while East call days block backup)" : ""));
+  // - said so. And for a feed that blocks NO role (second review 11/22) no East call day is read at all: the app derives
+  // busy days only for a feed that blocks a role (ctxInputs) and rules.js drops such a surgeon's overrides and standing
+  // days - said so too, like the standing days' own "ignored while the East feed blocks no role" above.
+  if (efOn && ef.backupFreeOnEastDays === true) ea.push("a backup on an East call day carries no run, rest or weekend-shape penalty and is left out of his other days' run, rest and back-to-back counts" + (efBlocks.indexOf("backup") >= 0 ? " (no effect while East call days block backup)" : !efBlocks.length ? " (no effect while East call days block no role)" : ""));
   line("East / Davenport", ea);
 
   // Holidays

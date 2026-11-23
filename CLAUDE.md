@@ -115,9 +115,9 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   test/call-totals.test.js` beside the davenport-ref clone; guide §24).
 - **NEVER hand-edit `index.html` or `APP_VERSION`** — CI transpiles and bumps on a push to `main` that touches a runtime
   input (build.yml's paths filter; a test/docs-only push runs only test.yml), commits back with `[skip ci]`, Pages redeploys.
-- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 24 suites: rules, east-feed, data-layer,
+- Before ANY push: `npm test && node build.js` (= every suite in package.json's test chain — 25 suites: rules, east-feed, data-layer,
   contrast, schema, importer, week-rows, exports, totals, call-totals, pay, holidays, holiday-plan, publish, day-edit, open-shifts,
-  offers, offers-timeline, edge-functions, ci, privacy, push, water-fill, painting — then the generator regression as the 25th, then the build; `test/ci.test.js` keeps the chain and
+  offers, offers-timeline, edge-functions, ci, privacy, push, water-fill, painting, derived-weeks — then the generator regression as the 26th, then the build; `test/ci.test.js` keeps the chain and
   build.yml's steps aligned and pins build.yml's paths filter to exactly the runtime inputs (`.github/workflows/test.yml`
   runs the chain on every push and PR since 10/2), so trust it over this list; since 10/13, on the new laptop where
   `test/schema.test.js` takes 10+ hours, the FEATURE branch is pushed and test.yml's green run of the whole chain stands in for

@@ -1879,7 +1879,8 @@ After the apply, check: the statement's own read-back; then the app (Setup > Per
 
 **Order: run it BEFORE any seed apply.** The seed carries the cut-back row since 11/22 (`offerPeriods[1]`); the importer
 upserts a period by `start_day`, so an apply first would write the label and the end with no audit row, and the
-statement would then stop at "already ends 2027-04-04".
+statement would then stop at "already ends 2027-04-04". The label and the end are then already the decided ones and
+nothing needs undoing; the recovery is to write the `period.update` audit row by hand (the undo file reads that row).
 
 **Timing.** The period freezes by date: from 2026-11-23 00:00 Central a surgeon's change to a day inside it is refused
 (`OFFER_FROZEN`), and the offers cron closes the row that morning (13:00 UTC) as it stands then. When the statement runs

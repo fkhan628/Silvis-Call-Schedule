@@ -390,6 +390,8 @@ check("E6: offerPeriodLeadWarnings - short lead on the first period's 31-day lea
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2026-12-08", groupRules: GR, openCounts: { p1: 5 } }).periods.p1, [{ kind: "publish-passed", publishBy: "2026-12-07", daysToPublish: -1, open: 5 }], "Jan - Apr 2027's publish-by passed with slots open");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-01", groupRules: GR, openCounts: { p1: 5 } }).periods.p1, [{ kind: "publish-passed", publishBy: "2026-12-07", daysToPublish: -56, open: 5 }], "2/1/2027 (after the old Jan 2027's end 1/31): Jan - Apr still runs, so the passed line still shows");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-04-05", groupRules: GR, openCounts: { p1: 5 } }).periods, {}, "a period that is over (from 4/5/2027) warns no more");
+  // second review (11/22): the period's LAST day itself - 4/4 is still inside (an off-by-one that ended the warning a day early passed)
+  eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-04-04", groupRules: GR, openCounts: { p1: 5 } }).periods.p1, [{ kind: "publish-passed", publishBy: "2026-12-07", daysToPublish: -118, open: 5 }], "on its last day (4/4/2027) the period still runs: the passed line shows");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-07", groupRules: GR }).next, null, "2/7/2027: one day before the window");
   eq(H.offerPeriodLeadWarnings({ periods: SP, today: "2027-02-08", groupRules: GR }).next, { from: "2027-04-05", closeBy: "2027-02-22", daysToClose: 14 }, "2/8/2027 = 2/22 - 14: create the period starting 4/5, choices close 2/22");
   eq([H.offerPeriodLeadWarnings({ periods: SP, today: "2027-01-10", groupRules: GR927 }).next, H.offerPeriodLeadWarnings({ periods: SP, today: "2027-01-11", groupRules: GR927 }).next], [null, { from: "2027-04-05", closeBy: "2027-02-22", daysToClose: 42 }], "the window is noticeDaysBeforeClose: with the 9/27 value (42) it opens 1/11/2027 = 2/22 - 42");
@@ -463,6 +465,10 @@ check("E8 (Prompt 26): offerFreezeRollcall - offerRollcall's rows plus the vacat
   ], "kind and vacations per person");
   eq(roll.find(r => r.id === "s5").status, "rules_only", "s5's chosen 'go by my rules' is still offer_status()'s rules_only (the words, not the status, change)");
   eq(roll.find(r => r.id === "s2").offered, 2, "s2 painted two distinct days (a role_pref never counts twice)");
+  // second review (11/22): a vacation that STARTS on the period's last day is inside it, clipped to that one day (an
+  // off-by-one that dropped it passed) - a stand-alone call, so no pin above moves
+  { const last = H.offerFreezeRollcall(P1, [], [{ person_id: "s1", start_date: "2027-04-04", end_date: "2027-04-06" }], ["s1"]);
+    eq(last.map(r => [r.id, r.kind, r.vacations]), [["s1", "vacations", [{ start: "2027-04-04", end: "2027-04-04" }]]], "a vacation starting on the last day (4/4) counts, clipped to 4/4"); }
   eq([H.offerFreezeRollcall({ id: "x" }, offers, timeOff, ids), H.offerFreezeRollcall(P1, offers, timeOff, null), H.offerFreezeRollcall(P1, null, null, ["s1"])], [[], [], [{ id: "s1", status: "not_started", offered: 0, vacations: [], kind: "rules" }]], "junk: a period without dates or no id list -> []; no offers / time off -> following their rules");
 });
 check("E9 (Prompt 26): offerFreezeWords - 'painted N day(s)', 'added vacations M/D-M/D, M/D', both joined by ' and ', else 'following their rules' ('following your rules' to the person); never 'missing' / 'not started' / 'never answered'", () => {

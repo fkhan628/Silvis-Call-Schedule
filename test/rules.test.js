@@ -3838,6 +3838,15 @@ step("Prompt 37 (Faraz 11/22): eastFeed.backupFreeOnEastDays - a backup on his o
   { const busyW = { [KHAN]: ["2027-06-12"] }, whole = { "2027-06-12": { backup: KHAN }, "2027-06-13": { backup: KHAN } };
     lacksSoft(R.eligibility(cF(true, { schedule: whole, eastBusyDays: busyW }), "2027-06-11", B, KHAN), "pattern-mismatch", "(B3) switch on: Fri + East Sat + Sun is his whole weekend - no style term on the Friday");
     hasSoft(R.eligibility(cF(true, { schedule: { "2027-06-13": { backup: KHAN } }, eastBusyDays: busyW }), "2027-06-11", B, KHAN), "pattern-mismatch:block", "(B3) ...Fri + Sun without the Saturday is not"); }
+  // ...and for the SPLIT style too (second review 11/22: a mutant that dropped East-day backups from the split test passed
+  // both suites - the style reading was pinned for block style only). A made-up split-style variant of his rules (Friday
+  // goes with Sunday, Saturday stands alone) holding a backup on the East Saturday 6/12: Fri 6/11 beside it is a
+  // split-style mismatch with the switch on exactly as without it, and none when the Saturday is not held
+  { const split = { weekendStyle: "split" }, busyW = { [KHAN]: ["2027-06-12"] }, heldSat = { "2027-06-12": { backup: KHAN } };
+    const styleOf = (on, sched, day) => R.eligibility(cF(on, { schedule: sched, eastBusyDays: busyW }, split), day, B, KHAN).soft.filter((s) => s.reason.indexOf("pattern-mismatch") === 0);
+    eq([styleOf(false, heldSat, "2027-06-11"), styleOf(true, heldSat, "2027-06-11"), styleOf(true, {}, "2027-06-11")], [[{ reason: "pattern-mismatch:split", weight: 3 }], [{ reason: "pattern-mismatch:split", weight: 3 }], []], "(B3) split style: the Friday beside his held East Saturday is a mismatch with and without the switch - the style test reads the East-day backup as held");
+    // ...while the East Saturday ITSELF, beside a held Friday, pays the style term without the switch and none with it
+    eq([false, true].map((on) => styleOf(on, { "2027-06-11": { backup: KHAN } }, "2027-06-12")), [[{ reason: "pattern-mismatch:split", weight: 3 }], []], "(B3) split style: his East Saturday beside a held Friday - the term is dropped on the East day itself only"); }
   // (C) the rest between stretches (a surgeon who has that rule): primary Mon 6/28, backup Wed 6/30 = one day off
   const restRule = { restBetweenStretches: { minDaysOff: 2, weight: "medium" } }, schedC = { "2027-06-28": { primary: KHAN } }, busyC = { [KHAN]: ["2027-06-30"] };
   const cOff = R.eligibility(cF(false, { schedule: schedC, eastBusyDays: busyC }, restRule), "2027-06-30", B, KHAN), cOn = R.eligibility(cF(true, { schedule: schedC, eastBusyDays: busyC }, restRule), "2027-06-30", B, KHAN);
@@ -3854,6 +3863,20 @@ step("Prompt 37 (Faraz 11/22): eastFeed.backupFreeOnEastDays - a backup on his o
     const joinC = { "2027-06-29": { backup: KHAN }, "2027-06-30": { backup: KHAN } };
     const joinOf = (on, sched) => R.eligibility(cF(on, { schedule: sched, eastBusyDays: { [KHAN]: ["2027-06-29"] } }, restRule), "2027-06-28", B, KHAN).soft.filter((s) => s.reason.indexOf("short-rest") === 0);
     eq([joinOf(false, joinC), joinOf(true, joinC), joinOf(true, { "2027-06-30": { backup: KHAN } })], [[], [{ reason: "short-rest:1", weight: 3 }], [{ reason: "short-rest:1", weight: 3 }]], "(C) a held East-day backup does not join or bridge his stretches (switch on): Mon + Wed read one day apart, as with no backup on the East Tuesday"); }
+  // (C2) second review (11/22): the same reading on the rule's AFTER side and through the stretch's unit links - two legs
+  // no pin reached (a mutant reading every held day there passed both suites).
+  // After: a backup he HOLDS on his East Wednesday 6/30 is no stretch for the rest after Mon 6/28 either - while the same
+  // backup on a Wednesday that is no East call day is (one day off)
+  { const afterOf = (on, busy) => shape(R.eligibility(cF(on, { schedule: { "2027-06-30": { backup: KHAN } }, eastBusyDays: { [KHAN]: busy } }, restRule), "2027-06-28", B, KHAN));
+    eq([afterOf(false, ["2027-06-30"]), afterOf(true, ["2027-06-30"]), afterOf(true, ["2027-07-01"])], [[{ reason: "short-rest:1", weight: 3 }], [], [{ reason: "short-rest:1", weight: 3 }]], "(C2) a held East-day backup is no stretch for the rest AFTER his other days either (switch on); a backup on a day that is no East call day still is");
+    // Links: a held day joins the other held days of its weekend into one stretch whatever sits between them. A three-day
+    // rest rule, Fri 6/11 beside backups held on the East Sunday 6/13 and on Mon 6/14. Without the switch the Sunday
+    // links to the Friday and the Monday follows it - one stretch 6/11 - 6/14, no short rest. With it the East Sunday is
+    // no held day for the rule: nothing links, the Friday is a stretch of its own and the Monday starts another two days
+    // off later (weight 3 x (3 - 2)) - exactly what the rule reads when he holds no backup on that East Sunday
+    const rest3 = { restBetweenStretches: { minDaysOff: 3, weight: "medium" } }, linkC = { "2027-06-13": { backup: KHAN }, "2027-06-14": { backup: KHAN } };
+    const linkOf = (on, sched) => R.eligibility(cF(on, { schedule: sched, eastBusyDays: { [KHAN]: ["2027-06-13"] } }, rest3), "2027-06-11", B, KHAN).soft.filter((s) => s.reason.indexOf("short-rest") === 0);
+    eq([linkOf(false, linkC), linkOf(true, linkC), linkOf(true, { "2027-06-14": { backup: KHAN } })], [[], [{ reason: "short-rest:2", weight: 3 }], [{ reason: "short-rest:2", weight: 3 }]], "(C2) a held East-day backup is not linked into his stretch through its weekend (switch on): Fri + Mon read two days off apart, as with no backup on the East Sunday"); }
   // (D) the switch is about BACKUP on an East CALL day and nothing else
   blocked(R.eligibility(cF(true, { schedule: schedB, eastBusyDays: busyB }), "2027-06-24", P, KHAN), "east-busy", "(D) primary on the East day stays hard-blocked");
   const dCtx = (on) => cF(on, { schedule: schedB, eastBusyDays: { [KHAN]: ["2027-07-01"] } }); // the same run, but 6/24 is no East day
@@ -3934,6 +3957,19 @@ step("Prompt 37 (Faraz 11/22): eastFeed.backupFreeOnEastDays - a backup on his o
     ok(loneSat.length > 0, "(F) the variant holds primary patterns with him on the lone East Saturday (the comparison is not vacuous): " + pv(true).length + " patterns");
     eq(JSON.stringify(pv(true)), JSON.stringify(pv(false)), "(F) ...and every primary pattern, penalties included, is identical with and without the switch");
     eq(R.backupFreeOnEastDay(variant(true), KHAN, SAT), true, "(F) ...although the Saturday IS one of his East call days for backup"); }
+  // (F2) second review (11/22): the two-sided reading through ASSUME-slots - how weekendUnitPatterns and
+  // holidayUnitCandidates judge a block (each day with the unit's other days assumed held). At the seed's any-role limit
+  // of 4 a three-day block raises no run term, so no pin above reached this leg (a mutant that counted an ASSUMED
+  // East-day backup again passed both suites). A made-up limit of 2: his whole backup weekend with the East Saturday in
+  // it reads 3 in a row on each of its days without the switch (weight 3 x (3 - 2) a day, 9 for the block) and nothing
+  // with it - the East Saturday is left out of the Friday's and the Sunday's run and carries no term of its own
+  { const two = { maxConsecutiveAnyRole: 2 }, busyS = { [KHAN]: [SAT] }, WK = [FRI, SAT, SUN];
+    const runOf = (on, d, busy) => R.eligibility(cF(on, { eastBusyDays: busy || busyS }, two), d, B, KHAN, { asBlockMember: true, skipPatternSoft: true, assume: WK.filter((x) => x !== d).map((x) => ({ date: x, role: B })) }).soft.filter((s) => s.reason.indexOf("long-run") === 0);
+    eq(WK.map((d) => runOf(false, d)), [[{ reason: "long-run:3", weight: 3 }], [{ reason: "long-run:3", weight: 3 }], [{ reason: "long-run:3", weight: 3 }]], "(F2) switch off: each day of the block reads 3 in a row against a limit of 2 (the other two assumed)");
+    eq(WK.map((d) => runOf(true, d)), [[], [], []], "(F2) switch on: the ASSUMED East Saturday backup is left out of the Friday's and the Sunday's run, and the Saturday carries no term");
+    eq(runOf(true, FRI, { [KHAN]: ["2027-07-01"] }), [{ reason: "long-run:3", weight: 3 }], "(F2) ...an assumed backup on a day that is no East call day still counts (switch on)");
+    const blockPen = (on) => R.weekendUnitPatterns(cF(on, { eastBusyDays: busyS }, two), FRI, B).filter((p) => p.kind === "block" && khanDays(p.members).length === 3).map((p) => p.penalty);
+    eq([blockPen(false), blockPen(true)], [[9], [0]], "(F2) weekendUnitPatterns: his whole backup block costs 9 without the switch and 0 with it at a limit of 2"); }
   // (G) the generator's style-mismatch flag (genStyleMismatch - the preview's "style mismatch" and the unit's fallback mark)
   // reads the same answer: a BACKUP holding of his made only of East call days is no mismatch; one with a day that is not an
   // East call day still is; without the switch it is; and a primary holding never is exempt. Burchett (split style) holds

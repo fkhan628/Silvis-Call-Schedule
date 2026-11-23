@@ -11945,11 +11945,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // false, absent and anything that is not exactly true read as today - byte for byte
       for (const v of [false, undefined, null, "true", 1, "yes", {}]) assert.strictEqual(east({ eastFeed: Object.assign({}, base, v === undefined ? {} : { backupFreeOnEastDays: v }) }), today, "backupFreeOnEastDays " + JSON.stringify(v) + " must read as today");
       // the seed's East surgeons: unchanged without the switch (the verbatim pins above), the new words at the END with it
+      // pin moved deliberately 11/22 (second review): for a feed that blocks NO role - the seed's s5 - the clause now ends
+      // " (no effect while East call days block no role)". The app derives no East busy day for such a feed (ctxInputs) and
+      // rules.js drops its overrides and standing days, so the switch has nothing to read there (both pinned at the end of
+      // this check); the bare clause said the opposite. s1 (East blocks primary) reads the clause bare, as before.
+      const NOROLE = " (no effect while East call days block no role)";
       for (const id of ["s1", "s5"]) {
         const was = east(seed.surgeonRules[id]);
         assert.ok(was && !was.includes(FREE), id + ": the seed carries no switch");
+        const sef = seed.surgeonRules[id].eastFeed, noRole = !(sef.eastBlocksPrimary || sef.eastBlocksBackup);
+        assert.strictEqual(noRole, id === "s5", id + ": fixture - s1's East feed blocks a role, s5's blocks none");
         const withIt = JSON.parse(JSON.stringify(seed.surgeonRules[id])); withIt.eastFeed.backupFreeOnEastDays = true;
-        assert.strictEqual(east(withIt), was.replace(/\.$/, "") + "; " + FREE + ".", id + ": the seed line plus the new words");
+        assert.strictEqual(east(withIt), was.replace(/\.$/, "") + "; " + FREE + (noRole ? NOROLE : "") + ".", id + ": the seed line plus the new words");
         const off = JSON.parse(JSON.stringify(seed.surgeonRules[id])); off.eastFeed.backupFreeOnEastDays = false;
         assert.deepStrictEqual(lines(off), lines(seed.surgeonRules[id]), id + ": false reads exactly as the seed, every line");
         // only the East line moves
@@ -11959,6 +11966,11 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(east({ eastFeed: { enabled: false, eastBlocksPrimary: true, backupFreeOnEastDays: true } }), "East / Davenport: East feed off.");
       // East call days that block backup: no backup is placed there, so the switch has nothing to act on - the line says so
       assert.strictEqual(east({ eastFeed: { enabled: true, eastBlocksPrimary: true, eastBlocksBackup: true, backupFreeOnEastDays: true } }), "East / Davenport: East call days block primary and backup (shifts in East backup weeks count); " + FREE + " (no effect while East call days block backup).");
+      // ...and a feed that blocks no role: no East call day is read for him, so the switch has nothing to act on either - said so
+      assert.strictEqual(east({ eastFeed: { enabled: true } }), "East / Davenport: East call days block no role.", "the no-role line without the switch (today's)");
+      assert.strictEqual(east({ eastFeed: { enabled: true, backupFreeOnEastDays: true } }), "East / Davenport: East call days block no role; " + FREE + NOROLE + ".");
+      // blocks backup only (no primary): the backup caveat, never both
+      assert.strictEqual(east({ eastFeed: { enabled: true, eastBlocksBackup: true, backupFreeOnEastDays: true } }).endsWith("; " + FREE + " (no effect while East call days block backup)."), true, "a feed that blocks backup only carries the backup caveat");
       // known to the summary: never on the Other line, true or false
       for (const v of [true, false]) {
         assert.deepStrictEqual(H.suRulesUnknownKeys({ eastFeed: Object.assign({}, base, { backupFreeOnEastDays: v }) }), [], "backupFreeOnEastDays " + v + " is a key the summary knows");
@@ -11981,6 +11993,23 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(R.backupFreeOnEastDay(ctxOf({ enabled: false, eastBlocksPrimary: true, backupFreeOnEastDays: true }), "a", DAY), false, "the East feed off: the switch does nothing (the summary says 'East feed off')");
       assert.deepStrictEqual(R.eligibility(ctxOf({ enabled: true, eastBlocksPrimary: true, eastBlocksBackup: true, backupFreeOnEastDays: true }), DAY, "backup", "a").hard, ["east-busy"], "East call days that block backup: the day is hard-blocked for backup - 'no effect', as the summary says");
       assert.strictEqual(R.eligibility(ctxOf(Object.assign({}, base, { backupFreeOnEastDays: true })), DAY, "backup", "a").ok, true, "without the backup block he can be backup on his East call day");
+      // second review (11/22) - a feed that blocks NO role, the summary's "(no effect while East call days block no role)".
+      // rules.js drops such a surgeon's override-added day and his standing day, each with its warning, so neither is an East
+      // call day for the switch; and the callers derive no busy day for him at all - the gate is pinned where it lives, in
+      // the app's ctxInputs and in the preview script. (rules.js itself honours a busy set a caller hands in for such a
+      // feed - test/rules.test.js (F) - which is why the gate is pinned at the callers and not as an engine answer.)
+      const noRole = R.buildContext({ roster: [{ id: "a", name: "A", code: "AAA", active: true }, { id: "b", name: "B", code: "BBB", active: true }], surgeonRules: { a: { eastFeed: { enabled: true, backupFreeOnEastDays: true }, eastStanding: [{ name: "Eve", days: ["12-24"] }] }, b: {} }, groupRules: {}, holidays: {}, schedule: {}, eastOverrides: { a: { [DAY]: true } }, today: "2027-01-15" });
+      assert.deepStrictEqual([R.backupFreeOnEastDay(noRole, "a", DAY), R.backupFreeOnEastDay(noRole, "a", "2027-12-24")], [false, false], "a feed that blocks no role: an override-added day and a standing day are no East call days for the switch");
+      assert.deepStrictEqual(noRole.warnings.filter(w => /eastStanding|eastOverrides/.test(w)), [
+        "surgeonRules.a.eastStanding ignored - enable surgeonRules.a.eastFeed with eastBlocksPrimary or eastBlocksBackup (a standing day is a published East busy day, and busy days act only for the roles a surgeon's East feature blocks)",
+        "eastOverrides[a]: 1 entry ignored - this surgeon's East feature blocks no role (surgeonRules.a.eastFeed.eastBlocksPrimary / eastBlocksBackup)",
+      ], "...each dropped with its own warning, never silently");
+      // the same two days with East blocking primary ARE East call days (the control: the fixture can answer true)
+      const blocksP = R.buildContext({ roster: [{ id: "a", name: "A", code: "AAA", active: true }, { id: "b", name: "B", code: "BBB", active: true }], surgeonRules: { a: { eastFeed: { enabled: true, eastBlocksPrimary: true, backupFreeOnEastDays: true }, eastStanding: [{ name: "Eve", days: ["12-24"] }] }, b: {} }, groupRules: {}, holidays: {}, schedule: {}, eastOverrides: { a: { [DAY]: true } }, today: "2027-01-15" });
+      assert.deepStrictEqual([R.backupFreeOnEastDay(blocksP, "a", DAY), R.backupFreeOnEastDay(blocksP, "a", "2027-12-24"), blocksP.warnings.filter(w => /eastStanding|eastOverrides/.test(w))], [true, true, []], "with East blocking primary both days are East call days, no warning");
+      const SRCG = fs.readFileSync(path.join(ROOT, "index-source.html"), "utf8").replace(/\r\n/g, "\n"), PGG = fs.readFileSync(path.join(ROOT, "scripts", "preview-generate.js"), "utf8").replace(/\r\n/g, "\n");
+      assert.strictEqual(SRCG.split("      if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n        meta.busyDays = true;\n").length - 1, 1, "ctxInputs derives East busy days only for a feed that blocks a role");
+      assert.strictEqual(PGG.split("    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = ").length - 1, 1, "...and so does scripts/preview-generate.js");
       // Prompt 37 fix round (11/22) - the clause's two sides, in the engine. Made-up days around his East call day 3/10/2027
       // (a Wednesday); `softs` = the soft reasons eligibility() gives him for a backup on a day.
       const row = (p, b) => ({ primary: p, backup: b, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null });
@@ -12424,7 +12453,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // standing days - never a forecast day) and the switch's second side (left out of the run, rest and back-to-back counts
       // of his other days); label, testid, the exactly-true read and the write are unchanged. The summary check above pins
       // both to rules.js.
-      const sw = '<SuCheck testid="rules-east-backup-free" label="Backup on East call days carries no run, rest or weekend-shape penalty" title="On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply." checked={get("eastFeed.backupFreeOnEastDays", false) === true} onChange={v => set("eastFeed.backupFreeOnEastDays", v)} />';
+      // pin moved deliberately 11/22 (second review): the title gains its last sentence - "It acts only while 'East call days
+      // block Silvis primary' is ticked and 'East call days block Silvis backup' is not." A feed that blocks no role has no
+      // East call day read at all, and one that blocks backup has no backup placed there (the summary check above).
+      const sw = '<SuCheck testid="rules-east-backup-free" label="Backup on East call days carries no run, rest or weekend-shape penalty" title="On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply. It acts only while \'East call days block Silvis primary\' is ticked and \'East call days block Silvis backup\' is not." checked={get("eastFeed.backupFreeOnEastDays", false) === true} onChange={v => set("eastFeed.backupFreeOnEastDays", v)} />';
       assert.strictEqual(RE.split(sw).length - 1, 1, "the East switch, once, exactly-true");
       assert.strictEqual(RE.split('testid="rules-east-backup-free"').length - 1, 1, "one box with that testid (no copy with the old title left)");
       assert.ok(ef.indexOf(sw) > ef.indexOf('testid="rules-east-forecast"') && ef.indexOf(sw) > ef.indexOf('{get("eastFeed.enabled", false) && <>') && ef.indexOf(sw) < ef.indexOf('label="Derive Silvis weeks from"'), "after the forecast box, inside the enabled block, before the derive-from field");
@@ -12607,8 +12639,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const sw = E.node(SW);
       assert.ok(sw && sw.type && sw.type.name === "SuCheck", "the switch is a SuCheck");
       assert.deepStrictEqual([sw.props.checked, sw.props.label], [false, "Backup on East call days carries no run, rest or weekend-shape penalty"], "unticked without the key");
-      // the title (fix round): which days are East call days, and both sides of the switch
-      assert.strictEqual(sw.props.title, "On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply.", "the switch's title");
+      // the title (fix round): which days are East call days, and both sides of the switch; second review (11/22): and when it acts
+      assert.strictEqual(sw.props.title, "On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply. It acts only while 'East call days block Silvis primary' is ticked and 'East call days block Silvis backup' is not.", "the switch's title");
       assert.deepStrictEqual([E.draft(), E.status()], [{ eastFeed: base }, "Saved"], "showing the box writes nothing");
       assert.ok(!E.lines().some(l => l.includes(FREE)), "the summary does not name it while it is off");
       E.tick(SW, true);
@@ -12630,6 +12662,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(E.node(SW), null);
       E.add("eastFeed");
       assert.deepStrictEqual([E.draft().eastFeed, E.node(SW).props.checked], [{ enabled: true }, false], "Add writes { enabled: true } only - the switch is not part of the start value");
+      // second review (11/22): ticked on that feed - it blocks no role - the East line says the switch has no effect there
+      E.tick(SW, true);
+      assert.deepStrictEqual(E.draft().eastFeed, { enabled: true, backupFreeOnEastDays: true }, "ticking on a no-role feed writes the one key");
+      assert.ok(E.lines().includes("East / Davenport: East call days block no role; " + FREE + " (no effect while East call days block no role)."), "a feed that blocks no role: the East line says 'no effect': " + E.lines().join(" | "));
     });
   })();
 
