@@ -539,8 +539,8 @@ generic per-surgeon key, read only when exactly `true` (`P.backupFreeOnEast`; an
 neither a boolean nor null with a `ctx.warnings` entry); off for everyone until Setup sets it. `rdBackupFreeOn(P, day)` answers
 whether a day is one of his own East CALL days on which the switch acts: a published busy day of any kind
 (`P.eastBusy`, the overrides applied) or a standing day, with his East feature enabled - never a forecast day. In the
-app it acts only for a feed that blocks primary and not backup (second review 11/22): `ctxInputs` and the preview
-script derive busy days only for a feed that blocks a role, `buildContext` drops a no-role surgeon's overrides and
+app it acts only for a feed that blocks primary and not backup (second review 11/22): `ctxInputs`, the preview
+script and the publish script derive busy days only for a feed that blocks a role, `buildContext` drops a no-role surgeon's overrides and
 standing days with a warning each, and where East days block backup no backup is placed there; the checkbox title
 names the condition and the summary appends "(no effect while East call days block backup)" or "... block no role)".
 The switch works both ways. (1) In `eligibility()` a BACKUP on such a day pushes none of the

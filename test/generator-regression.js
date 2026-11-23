@@ -82,8 +82,10 @@
 // and about 1.05 s there - more than Prompt 37 adds) moved to its own chain step, test/derived-weeks.test.js. Locally,
 // on a quiet machine, the file went from 4.97-5.12 s to 4.50-4.53 s, main's own figure (4.47-4.64 s), with Prompt 37's
 // runs inside. Hosted, the first run after the move read 6815 ms at R3 15.6 ms per candidate: 437 ms per unit of R3,
-// where main's suite reads 425-453 and the tree before the move read 486 - so 10 s is reached at R3 of about 22.9 (the
-// slowest of the 81 draws on record was 22.2). Back at main's margin, no better: the next lever is still (1) above.
+// where main's suite reads 425-453 and the tree before the move read 486 - so 10 s is reached at R3 of about 22.9 at
+// that ratio and about 22.1 at main's top ratio (the slowest of the 81 draws on record was 22.2). The next hosted run
+// was a slow draw: 8629 ms at R3 20.0, 431 per unit (the derived-week suite 1219 ms of its 4000). Back at main's
+// margin, no better: the next lever is still (1) above.
 // The summary line names the CPU (os.cpus()). Never raise the budget to hide a slow runner.
 // ~77 % of a candidate is inside rules.weekendUnitPatterns
 // and eligibility, so nothing on the generator side can buy the 4x that

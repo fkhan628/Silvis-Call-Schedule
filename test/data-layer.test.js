@@ -12019,8 +12019,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(PPG.split("    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = ").length - 1, 1, "...and scripts/publish-preview.js, the third caller");
       for (const [name, text, gate] of [["index-source.html", SRCG, "      if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n        meta.busyDays = true;\n"], ["scripts/preview-generate.js", PGG, "    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = "], ["scripts/publish-preview.js", PPG, "    if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {\n      let eastId = "]]) {
         assert.strictEqual(text.split("eastBusyDays[s.id] =").length - 1, 1, name + ": East busy days are written in ONE place");
-        const gap = text.indexOf("eastBusyDays[s.id] =") - text.indexOf(gate);
-        assert.ok(gap > 0 && gap < 1500, name + ": ...and that place is right inside the gate (" + gap + " characters after its opening line)");
+        // ...INSIDE the gate's block: the writer comes after the gate line and no line closes that block before it (the
+        // closer = a line break, the gate's own indentation, "}"). Reading check 11/23: the first form of this pin was a
+        // distance (under 1500 characters after the gate line), which a writer moved below the closing brace still met.
+        const gateAt = text.indexOf(gate), writerAt = text.indexOf("eastBusyDays[s.id] ="), closer = "\n" + /^ */.exec(gate)[0] + "}";
+        assert.ok(gateAt >= 0 && writerAt > gateAt && !text.slice(gateAt, writerAt).includes(closer), name + ": ...and that place is inside the gate's block (no line closes the block before the writer)");
+        assert.ok(text.slice(writerAt).includes(closer), name + ": the gate's block closes after the writer (the closer this pin looks for exists)");
       }
       // Prompt 37 fix round (11/22) - the clause's two sides, in the engine. Made-up days around his East call day 3/10/2027
       // (a Wednesday); `softs` = the soft reasons eligibility() gives him for a backup on a day.
