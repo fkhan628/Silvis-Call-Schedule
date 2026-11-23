@@ -23,7 +23,7 @@ function seedToSchedule(seed) { return IMP.impSeedSchedule(seed); }
 // Full buildContext() input from the seed plus caller extras (East feed, etc.).
 // Prompt 23 B4 (9/30): the rules' today (ctx.today - the hardNeverWeekdays notice is measured from it) is FIXED for
 // every test that builds from the seed, never the clock - a test must not change its answer with the date:
-// SEED_TEST_TODAY = 2026-11-23, the day the Jan 2027 - Mar 2027 period (Jan - Jun 2027 until 11/22, Prompt 36) freezes
+// SEED_TEST_TODAY = 2026-11-23, the day the Jan 2027 - Apr 2027 period (Jan - Jun 2027 until 11/22, Prompt 36) freezes
 // and is generated. The published Nov - Dec then reads Khan's Tue/Thu inside the notice (hard, as published) and the
 // notice edge (56 days -> 2027-01-18) falls inside the regression's Jan - Mar range. A caller's own extras.today wins.
 var SEED_TEST_TODAY = "2026-11-23";

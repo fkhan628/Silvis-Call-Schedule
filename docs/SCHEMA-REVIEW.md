@@ -1770,15 +1770,17 @@ the offers cron's next mornings (11/9 reminder, 11/20 last call, 11/23 close). T
 
 observed: applied by Faraz in the Supabase SQL editor, committed 2026-10-01 04:33:12Z (the file above, one batch; the orchestrator's own apply had been refused by the session's permission classifier earlier that night). Verified read-only right after by Cowork and again by the orchestrator (linked CLI): `call_periods` holds two rows - Nov 2026 - Jan 2027 unchanged (published, updated_at 2026-09-23 21:26:53Z) and **Jan 2027 - Jun 2027** (2027-01-04 .. 2027-06-30, offers close 2026-11-23, publish by 2026-12-07, upcoming, rules_only_ids ["s5"], offer_modes {}, updated_at 2026-10-01 04:33:12.509979Z); the Feb 2027 - Apr 2027 row is gone; `audit_log` holds `period.update` (label Jan 2027 - Jun 2027) and `period.delete` (label Feb 2027 - Apr 2027), both actor s1 / Khan at 04:33:12.509979Z. The app (build 2026.09.30d) shows the one period to 6/30 in Setup > Periods. The fold ran before any seed apply (the order this section requires), and the seed already mirrors it, so a later apply changes nothing for periods. Fierce's "go by my rules" choice for January now covers January - June.
 
-### 2026-11-22 - data change: the same row is cut back to Jan 2027 - Mar 2027 (Faraz 11/22, Prompt 36)
+### 2026-11-22 - data change: the same row is cut back to Jan 2027 - Apr 2027 (Faraz 11/22, Prompt 36)
 
-**Status: PREPARED 2026-11-22 - not applied.** Faraz 11/22: the next schedule runs Jan 4 - Mar 31, 2027; April onward gets
-its own period later. One `call_periods` row changes - `end_day` 2027-06-30 -> 2027-03-31, `label` "Jan 2027 - Jun 2027" ->
-"Jan 2027 - Mar 2027", `updated_at` - and one `audit_log` row (`period.update`) is written. No schema, RLS, policy,
-schedule row, lock, offer, availability row or vacation changes: `call_periods` has no foreign key and no trigger
-pointing at it, and offers, availability rows and vacations belong to a period only by their dates, so everything dated
-after 2027-03-31 stays on file, outside any period, until the next period covers it. Faraz runs the statement below in
-the Supabase SQL editor, once (the 10/1 route). No Claude Code session applies it.
+**Status: PREPARED 2026-11-22 - not applied.** Faraz 11/22: the next schedule runs Jan 4 - Apr 4, 2027 (a Sunday, so the
+run after it starts on a Monday); the days from April 5 get their own period later. The end was first set to 2027-03-31
+the same day and moved to 2027-04-04 before anything was run; the statement recorded here is the 4/4 one. One
+`call_periods` row changes - `end_day` -> 2027-04-04, `label` -> "Jan 2027 - Apr 2027", `updated_at` - and one `audit_log`
+row (`period.update`) is written. No schema, RLS, policy, schedule row, lock, offer, availability row or vacation
+changes: `call_periods` has no foreign key and no trigger pointing at it, and offers, availability rows and vacations
+belong to a period only by their dates, so everything dated after 2027-04-04 stays on file, outside any period, until the
+next period covers it. Faraz runs the statement below in the Supabase SQL editor, once (the 10/1 route). No Claude Code
+session applies it.
 
 Before (the live row as given for Prompt 36 on 11/22; the statement finds the row by its start day, re-checks the label,
 the end day, the close and publish-by dates and the status, and stops on any difference. It does not compare
@@ -1789,18 +1791,22 @@ scheduler's at any time; both are kept as found, shown on the check query's firs
 |---|---|---|---|---|---|---|
 | Jan 2027 - Jun 2027 | 2027-01-04 .. 2027-06-30 | 2026-11-23 | 2026-12-07 | upcoming on 11/22; the 11/23 morning run closes it - the statement accepts `upcoming` or `closed` and keeps it | ["s5"] | {} |
 
-Read on 11/22 with no sign-in: `schedule_days` holds no row after 2027-01-03, so no generated day lies in the part being
-cut (the statement counts 2027-04-01 .. 2027-06-30 again and stops on any row).
+The statement accepts one other starting state: "Jan 2027 - Mar 2027" ending 2027-03-31, the row the first version of
+the statement (the 3/31 one, superseded and never recorded as run) would have left. Its audit row names the state it
+found.
 
-After: the same row, **Jan 2027 - Mar 2027**, 2027-01-04 .. 2027-03-31; offers close 2026-11-23, publish by 2026-12-07, the
+Read on 11/22 with no sign-in: `schedule_days` holds no row after 2027-01-03, so no generated day lies after the new end
+(the statement counts 2027-04-05 .. 2027-06-30 again and stops on any row).
+
+After: the same row, **Jan 2027 - Apr 2027**, 2027-01-04 .. 2027-04-04; offers close 2026-11-23, publish by 2026-12-07, the
 status, `rules_only_ids` and `offer_modes` as they are found (["s5"] and {} on 11/22); one audit row holding the previous
 label and end, those two values and the per-surgeon offer counts inside the new range and after it. Fierce's "go by my
-rules" choice (rules_only s5) covers January - March.
+rules" choice (rules_only s5) covers the period.
 
-The statement (`period-jan-mar.sql`; kept outside the repo with `period-jan-mar-check.sql`, a read-only query that reads
-what the statement will check, and `period-jan-mar-undo.sql`, the same change backwards with its own checks). The checks
+The statement (`period-jan-apr4.sql`; kept outside the repo with `period-jan-apr4-check.sql`, a read-only query that reads
+what the statement will check, and `period-jan-apr4-undo.sql`, the same change backwards with its own checks). The checks
 and the change are one statement: a failed check raises an error that starts with `P36_PRECHECK` and nothing is changed,
-and a second run is refused the same way ("already ends 2027-03-31"):
+and a second run is refused the same way ("already ends 2027-04-04"):
 
 ```sql
 do $$
@@ -1811,73 +1817,75 @@ begin
   if jan.id is null then
     raise exception 'P36_PRECHECK: no period starts 2027-01-04 - nothing was changed';
   end if;
-  if jan.end_day = date '2027-03-31' and jan.label = 'Jan 2027 - Mar 2027' then
-    raise exception 'P36_PRECHECK: the period already ends 2027-03-31 (this file ran before) - nothing was changed';
+  if jan.end_day = date '2027-04-04' and jan.label = 'Jan 2027 - Apr 2027' then
+    raise exception 'P36_PRECHECK: the period already ends 2027-04-04 (this file ran before) - nothing was changed';
   end if;
-  if jan.label <> 'Jan 2027 - Jun 2027' or jan.end_day <> date '2027-06-30' or jan.offers_close_at <> date '2026-11-23'
-     or jan.publish_by <> date '2026-12-07' or jan.status not in ('upcoming', 'closed') then
+  if not ((jan.label = 'Jan 2027 - Jun 2027' and jan.end_day = date '2027-06-30') or (jan.label = 'Jan 2027 - Mar 2027' and jan.end_day = date '2027-03-31'))
+     or jan.offers_close_at <> date '2026-11-23' or jan.publish_by <> date '2026-12-07' or jan.status not in ('upcoming', 'closed') then
     raise exception 'P36_PRECHECK: the row is not as it was read on 11/22 - nothing was changed: %', row_to_json(jan);
   end if;
-  select count(*) into n from public.schedule_days where day between date '2027-04-01' and date '2027-06-30';
+  select count(*) into n from public.schedule_days where day between date '2027-04-05' and date '2027-06-30';
   if n > 0 then
-    raise exception 'P36_PRECHECK: % schedule day row(s) exist in 2027-04-01 .. 2027-06-30, the part being cut - nothing was changed', n;
+    raise exception 'P36_PRECHECK: % schedule day row(s) exist in 2027-04-05 .. 2027-06-30, after the new end - nothing was changed', n;
   end if;
   select count(*) into n from public.call_periods
-   where id <> jan.id and start_day <= date '2027-03-31' and end_day >= date '2027-01-04';
+   where id <> jan.id and start_day <= date '2027-04-04' and end_day >= date '2027-01-04';
   if n > 0 then
-    raise exception 'P36_PRECHECK: % other period(s) overlap 2027-01-04 .. 2027-03-31 - nothing was changed', n;
+    raise exception 'P36_PRECHECK: % other period(s) overlap 2027-01-04 .. 2027-04-04 - nothing was changed', n;
   end if;
   select coalesce(jsonb_object_agg(person_id, c), '{}'::jsonb) into inside
     from (select person_id, count(*) as c from public.call_offers
-           where day between date '2027-01-04' and date '2027-03-31' group by person_id) t;
+           where day between date '2027-01-04' and date '2027-04-04' group by person_id) t;
   select coalesce(jsonb_object_agg(person_id, c), '{}'::jsonb) into outside
-    from (select person_id, count(*) as c from public.call_offers where day > date '2027-03-31' group by person_id) t;
+    from (select person_id, count(*) as c from public.call_offers where day > date '2027-04-04' group by person_id) t;
   update public.call_periods
-     set end_day = date '2027-03-31', label = 'Jan 2027 - Mar 2027', updated_at = now()
-   where id = jan.id and end_day = date '2027-06-30' and label = 'Jan 2027 - Jun 2027';
+     set end_day = date '2027-04-04', label = 'Jan 2027 - Apr 2027', updated_at = now()
+   where id = jan.id and end_day = jan.end_day and label = jan.label;
   get diagnostics n = row_count;
   if n <> 1 then raise exception 'P36: the update touched % row(s), expected 1 - nothing was changed', n; end if;
   insert into public.audit_log (actor_id, actor_name, action, detail) values
     ('s1', 'Khan', 'period.update', jsonb_build_object(
-      'period_id', jan.id, 'label', 'Jan 2027 - Mar 2027', 'previous_label', jan.label,
-      'start_day', jan.start_day, 'end_day', date '2027-03-31', 'previous_end_day', jan.end_day,
+      'period_id', jan.id, 'label', 'Jan 2027 - Apr 2027', 'previous_label', jan.label,
+      'start_day', jan.start_day, 'end_day', date '2027-04-04', 'previous_end_day', jan.end_day,
       'offers_close_at', jan.offers_close_at, 'publish_by', jan.publish_by, 'status', jan.status,
       'rules_only_ids', jan.rules_only_ids, 'offer_modes', jan.offer_modes,
       'offers_in_period', inside, 'offers_after_end', outside,
-      'summary', 'Period Jan 2027 - Jun 2027 -> Jan 2027 - Mar 2027: end moved 2027-06-30 -> 2027-03-31 (Faraz 11/22); offers close 2026-11-23 and publish by 2026-12-07 kept; offers, availability rows and vacations after 2027-03-31 stay on file, outside any period; applied by SQL'));
+      'summary', 'Period ' || jan.label || ' -> Jan 2027 - Apr 2027: end moved ' || jan.end_day::text || ' -> 2027-04-04 (Faraz 11/22); offers close 2026-11-23 and publish by 2026-12-07 kept; offers, availability rows and vacations after 2027-04-04 stay on file, outside any period; applied by SQL'));
 end $$;
 ```
 
 The file ends with a read-back the editor shows when the statement worked: every period on file and the new
 `period.update` row.
 
-Checked offline before the hand-over (PGlite holding this repo's `sql/schema.sql`; the test is kept with the files): 71
-checks, 0 failed - the check query on the row as given; the change on an `upcoming` row and on a `closed` one (label and
-end changed, everything else as it was, exactly one audit row with the previous values and the counts, the read-back's
-rows in order); a second run refused; a changed rules-only list or mode not stopping it (both kept as found and
-recorded); nine refusals that leave every table as it was (the row missing; a status of `generated` or `published`;
-another label, end, close date or publish-by date; a schedule row in the part being cut; another period overlapping the
-new range); a schedule row inside January - March and a period starting 4/1 not stopping it; the period row unchanged
-when the audit row cannot be written; the undo (the row back as it was, with a second audit row marked UNDO, on an
-`upcoming` and on a `closed` row; refused before any change, on a second run, on a row changed since, when the row is
-gone and when another period overlaps through June); and the freeze following the row's new end - on the closed row a
-surgeon's write on a day after 3/31 is accepted again while one inside January - March is still refused (`OFFER_FROZEN`).
-`offer_status()` follows the new end too: a surgeon with a painted day inside January - March still reads `submitted`,
-and one whose painted days all lie after 3/31 reads `not_started` for this period (`rules_only` if he is on the
-rules-only list; his days stay on file).
+Checked offline before the hand-over (PGlite holding this repo's `sql/schema.sql`; the test is kept with the files): 91
+checks, 0 failed - the check query on the row as given; the change on an `upcoming` row, on a `closed` one and on the row
+ending 3/31 (label and end changed, everything else as it was, exactly one audit row with the previous values and the
+counts, the read-back's rows in order); a second run refused; a changed rules-only list or mode not stopping it (both
+kept as found and recorded); twelve refusals that leave every table as it was (the row missing; a status of `generated`
+or `published`; another label or end, or a mix of the two known states; another close date or publish-by date; a
+schedule row after the new end, 4/5 included; another period overlapping the new range, one starting 4/1 included); a
+schedule row inside the new range (4/4 included) and a period starting 4/5 not stopping it; the period row unchanged
+when the audit row cannot be written; the undo (the row back at the state the statement found, read from its audit row,
+with a second audit row marked UNDO, on an `upcoming` and on a `closed` row; refused before any change, on a second run,
+on a row changed since, when the row is gone, when another period overlaps the range it would restore, when going back
+to 3/31 would leave a schedule day of 4/1 - 4/4 outside, and when no audit row of the statement is on file); and the
+freeze following the row's new end - on the closed row a surgeon's write on a day after 4/4 is accepted again while one
+inside the period (4/2, a February day) is still refused (`OFFER_FROZEN`). `offer_status()` follows the new end too: a
+surgeon with a painted day inside the period still reads `submitted`, and one whose painted days all lie after 4/4
+reads `not_started` for this period (`rules_only` if he is on the rules-only list; his days stay on file).
 
-After the apply, check: the statement's own read-back; then the app (Setup > Periods shows Jan 2027 - Mar 2027, 1/4 - 3/31;
-"Generate this period" proposes that range; New period proposes a start of 4/1/2027).
+After the apply, check: the statement's own read-back; then the app (Setup > Periods shows Jan 2027 - Apr 2027, 1/4 - 4/4;
+"Generate this period" proposes that range; New period proposes a start of 4/5/2027).
 
 **Order: run it BEFORE any seed apply.** The seed carries the cut-back row since 11/22 (`offerPeriods[1]`); the importer
 upserts a period by `start_day`, so an apply first would write the label and the end with no audit row, and the
-statement would then stop at "already ends 2027-03-31".
+statement would then stop at "already ends 2027-04-04".
 
 **Timing.** The period freezes by date: from 2026-11-23 00:00 Central a surgeon's change to a day inside it is refused
 (`OFFER_FROZEN`), and the offers cron closes the row that morning (13:00 UTC) as it stands then. When the statement runs
 after that, the 11/23 roll call and its `period.close` audit row name "Jan 2027 - Jun 2027" and count the offers through
 June; neither is rewritten. Until the statement runs, "Generate this period" proposes 1/4 - 6/30, New period refuses a
-start in April (it overlaps), and offers dated April - June stay frozen for the surgeons.
+start in April (it overlaps), and offers dated April 5 - June 30 stay frozen for the surgeons.
 
 observed: _not applied - waiting for Faraz_
 

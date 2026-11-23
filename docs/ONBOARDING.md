@@ -73,9 +73,9 @@ afterwards; the editor keeps query history).*
 
 Silvis runs offers-first. **Paint the dates you'll cover, any time**: primary, backup or either, one tap per day on your
 phone, for any date ahead, whenever you like — the app is where the offers live now (no more e-mailing lists around).
-**Each period (the next is Jan 2027 – Mar 2027, Jan 4 – Mar 31; April onward gets its own period later - Faraz 11/22)
-freezes six weeks before it starts**: what you painted inside that period is what the generator places first, then it
-fills the gaps. Days you painted for April onward stay painted and, once the period is cut back, are yours to change
+**Each period (the next is Jan 2027 – Apr 2027, Jan 4 – Apr 4; the days from April 5 get their own period later - Faraz
+11/22) freezes six weeks before it starts**: what you painted inside that period is what the generator places first, then
+it fills the gaps. Days you painted from April 5 on stay painted and, once the period is cut back, are yours to change
 again; they are placed first when their own period is generated. **Two weeks before the freeze and
 once more 3 days before, everyone in the pool gets the heads-up** (Prompt 26, 9/30 - whatever you have entered; it honours
 your e-mail preference): enter your vacations for the period; if there are days you'd like to work, or can't, paint them
