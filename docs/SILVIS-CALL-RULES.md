@@ -28,7 +28,7 @@ the two disagree, fix both.*
 | Backup contract | Backup should never be called if the primary stays true to the location. (Stipend transfer on activation is a group/admin matter.) **Backup is never paid in the app.** ~~The app carries no compensation logic or $ display at all.~~ ⟶ **9/27: primary call pay is tracked in the app** (next row). | Burchett 9/18, Khan 9/21, **9/27** |
 | Call pay (9/27) | ⟶ **9/27 (Faraz; reverses the 9/21 "no compensation" rule): the app tracks PRIMARY call pay.** Per primary 24-h call day (07:00 → 07:00): a **stipend** per shift; a **call-in rate** when the primary is called in that day — the weekday rate on a weekday, the weekend / holiday rate (paid in addition to the stipend) on a weekend or holiday day; an **activation rate** for the hours worked (on a weekday the after-hours hours the surgeon enters, on a weekend / holiday all hours) — or, by a setting, per call-in. wRVU conversion is not tracked yet. A day is paid to whoever is its primary in the **current** schedule (a trade moves the pay with the day; a call-in logged on a day that later moved is listed as not counted). Days up to today are *earned*, later days *projected* (stipend only). **The figures are data, never in this document, the seed, the repo or any public table:** the scheduler enters them in Setup → Pay rates (`call_pay_settings`, authenticated only); surgeons log call-ins in My schedule → My pay (`call_pay_logs`, own rows only; a future day, a backup day and more than 24 h a day are refused; the optional note carries **no patient and no contact details** — hours only, e.g. "OR till 2am"). Who sees pay: each surgeon his own, the scheduler everyone's (Totals → Pay, with a CSV), and — **9/27 decision (item 5a)** — the office coordinator read-only (Totals → Pay and its CSV, for preparing the stipends; no My pay, no call-in entry, no rates screen); viewers, followers and the public page see none. **Paid by the call stipend (9/27, item 5b):** a per-surgeon switch in Setup → Pay rates, on for everyone by default; the scheduler switches off a surgeon who is not paid by the call stipend — he then gets no My pay, is left out of Totals → Pay and its CSV, and cannot read the rates (the database enforces it). Which surgeons are switched off is data the scheduler sets, never in this document. No amount in notifications, e-mails, calendar feeds or exports others see. Defaults taken for the open questions (§8 item 22): Friday is a weekday for pay, every day of a holiday unit is a holiday, the call-in rates need a logged call-in, activation is per hour. Schema: `sql/migrations/2026-09-27-call-pay.sql` (applied 2026-09-28 01:15:26Z, recorded in `docs/SCHEMA-REVIEW.md`; a missing table - the guard - still makes the cards say "Pay tracking is available after the next database update"). | Khan **9/27** |
 | Practice hygiene | No operating at another facility while on Silvis primary. 30-minute response time. | Khan 8/29, Burchett 8/27 |
-| Consecutive days | Default max **2 consecutive 24-h PRIMARY periods** (hard, real days); per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). ⟶ **9/22 (Prompt 12 A): a holiday unit counts as one day only for a surgeon who opted in (Khan); any-role runs (primary or backup) have a SOFT per-surgeon limit (Burchett 3, Sarkar 2, Khan 4, Acton 4, Philip 4, Fierce 7) with a penalty that grows per day beyond it.** ⟶ **10/29 (Faraz): Sarkar's any-role limit removed - none for her (§3 Sarkar, §8 item 28); her hard 2 consecutive primary days stand.** ⟶ **10/18: a per-surgeon SOFT rest between call stretches (`restBetweenStretches` - Acton 2 days off; §3 Acton, §8).** ⟶ **11/11 (Faraz): a holiday unit that one of Fierce's derived weeks touches is his on all its days - his week of 5/24/2027 plus Memorial Day Monday is 8 locked primary days (a derived lock is not measured against the limit; a ninth day is still refused) - §3 Fierce, §8 item 29.** ⟶ **11/22 (Faraz, Prompt 37): with the East-day switch on (`eastFeed.backupFreeOnEastDays` - Khan's, off until it is set in Setup; §3 Khan) a BACKUP on a surgeon's own East call day is not charged the any-role penalty; the day still counts in the runs of his other days.** | Burchett 8/27, Khan 8/29, review 9/22, Khan 11/11, Faraz 11/22 |
+| Consecutive days | Default max **2 consecutive 24-h PRIMARY periods** (hard, real days); per-surgeon overrides below (weekend blocks are 3; Fierce weeks are 7). ⟶ **9/22 (Prompt 12 A): a holiday unit counts as one day only for a surgeon who opted in (Khan); any-role runs (primary or backup) have a SOFT per-surgeon limit (Burchett 3, Sarkar 2, Khan 4, Acton 4, Philip 4, Fierce 7) with a penalty that grows per day beyond it.** ⟶ **10/29 (Faraz): Sarkar's any-role limit removed - none for her (§3 Sarkar, §8 item 28); her hard 2 consecutive primary days stand.** ⟶ **10/18: a per-surgeon SOFT rest between call stretches (`restBetweenStretches` - Acton 2 days off; §3 Acton, §8).** ⟶ **11/11 (Faraz): a holiday unit that one of Fierce's derived weeks touches is his on all its days - his week of 5/24/2027 plus Memorial Day Monday is 8 locked primary days (a derived lock is not measured against the limit; a ninth day is still refused) - §3 Fierce, §8 item 29.** ⟶ **11/22 (Faraz, Prompt 37): with the East-day switch on (`eastFeed.backupFreeOnEastDays` - Khan's, off until it is set in Setup; §3 Khan) a BACKUP on a surgeon's own East call day is not charged the any-role penalty and is left out of the any-role run of his other days (their rest and back-to-back counts too).** | Burchett 8/27, Khan 8/29, review 9/22, Khan 11/11, Faraz 11/22 |
 | Week-long stints | No more week-long call stints for the general pool (Atwell/Fierce legacy pattern). Fierce's derived weeks are the explicit exception (§3). | Burchett 8/27, Khan 9/21 |
 | Period | **The generation window is the offer period** (Process row below; `groupRules.offerPeriods`). ⟶ **9/30 (Faraz): periods are six months - "go from January to June. We will do 6 months."** `lengthMonths` 6 (a new period's preset; was 3), the in-app notice from **14 days** before the freeze (`noticeDaysBeforeClose` 14, was 42) and the reminder e-mails **14 and 3 days** before it (`remindDaysBeforeClose` [14, 3], was [42, 14, 3] - Faraz: "October 12 is too soon"; Cowork set the three live in Setup on 9/30 at 20:32 CDT). Nov 2026 – Jan 2027 was generated and published 9/23 (`docs/PUBLISH-2026-09-23.md`); the next one is **Jan 2027 – Jun 2027** (1/4 – 6/30; freeze **Mon 11/23**, publish by **12/7**; reminders 11/9 and 11/20) - the Jan 2027 row Faraz created by SQL 9/24 (1/4 – 1/31) widened, with the **Feb 2027 – Apr 2027** row (2/1 – Sun 5/2, freeze 12/21) folded into it and deleted (decided 9/30; **applied 2026-10-01 04:33:12Z** by Faraz in the SQL editor - `docs/SCHEMA-REVIEW.md` 2026-09-30, with the `period.update` / `period.delete` audit rows; the Feb – Apr row carried no rules-only choice or mode to merge; offers are keyed by person and day). Fierce's "go by my rules" choice for January now covers January – June. Each period is generated from Setup → Periods → "Generate this period". **Sep 14 – Nov 1 stays exactly as the emails describe it** (locked import, §7). Generate's own range field keeps its 3-, 6-, 9- and 12-month presets, and (9/22 late, Prompt 12 AB) **its default range starts at the first open slot on or after today** — locks are never touched, whatever the range. ⟶ *B10 (9/23): the two range rules this row used to state — "this round: generate through the end of 2026 (2026-11-02 → 2027-01-03)" and "after that, presets from the last published day" — were the milestone plan, done on 9/23 and superseded by AB; dropped.* ⟶ **11/22 (Faraz, Prompt 36): the next schedule runs Jan 4 – Apr 4, 2027; the days from April 5 get their own period later.** The same row is cut back to **Jan 2027 – Apr 2027** (1/4 – Sun 4/4, so the run after it starts on a Monday; first set to Wed 3/31 the same day and moved to 4/4 before anything was run): its label and end only - the freeze (**Mon 11/23**), publish-by (**12/7**), the reminders (11/9 and 11/20), the status, the rules-only list and the offer modes stay. **Nothing entered is lost:** offers, No-primary days and vacations belong to a period only by their dates, so everything dated after 4/4 stays on file, outside any period, until the next period covers it - not frozen (its surgeon can change or clear it again), in no heads-up and no roll call, and read as on any day outside a period: an offer there still lifts its surgeon's weekday patterns and his dated lists for its date and role, with no bonus and no place in the offers-first fill (Process row). Fierce's "go by my rules" choice covers the period; it is stored on the period's row and does not carry to the next one. The next period is created in Setup → Periods → New period (it starts the day after the last one, Mon 4/5; `lengthMonths` stays 6 - the form's 3-month button gives 4/5 – 6/30, freeze 2/22, publish by 3/8); the app cannot change a period's dates after it is created. The live change is one guarded SQL statement with a `period.update` audit row (`docs/SCHEMA-REVIEW.md` 2026-11-22 - prepared 11/22; Faraz runs it in the SQL editor, before any seed apply). Readings taken: §8 item 31. | Khan 9/21, **9/22**, 9/23, 9/24, **11/22** |
 | Time off | **Vacations only — there are no "no-call days."** Surgeons **enter their own vacations; nothing is approved** — the app logs them (audit trail) and blocks those days from call. A vacation **cannot be entered over a day the surgeon is already published as primary or backup**: the entry is refused, the conflicting dates are listed, and the surgeon must find a switch (trade) first. A vacation day also blocks the day before it (the 07:00 shift end falls on the vacation day). ⟶ **9/22 (Faraz, Prompt 12 H): under the open-backup rule the day-before block stays PRIMARY-only — a standby backup the day before a vacation is acceptable** (seed `groupRules.dayBeforeRules.trailingEdgeRoles = ["primary"]`; the DB trigger likewise checks `start_date - 1` for primary only). ⟶ **9/30 (Faraz, Prompt 27: "a warning when people are taking vacations and a warning that stops vacations if more than 4 people are on vacation. Need at least 2 surgeons around") — the vacation guard.** Still no approval. **The rule:** a vacation is refused when, on a day it takes the person off, fewer than **2** active surgeons would stay around — with six active surgeons, at most four are off on any day. **The default is data:** `groupRules.vacations.minSurgeonsAround` (a whole number 0-99; absent or junk reads 2 — `helpers.js` `VACATION_GUARD_DEFAULTS`; the seed carries `{ minSurgeonsAround: 2 }`; Setup → Rules → Advanced → Edit group rules as JSON). **Counted** per calendar day over the active roster surgeons (not an inactive or an outside surgeon); a surgeon is **off** on a day inside one of the `time_off` rows of that surgeon, or inside an **East (Davenport) vacation** range not reviewed *home* — an *away* range counts, an **unreviewed** one counts too (as everywhere in the app: unreviewed counts as away), a *home* one does not. A person already off that day (by another vacation row, or by an East range) is not counted twice; an **edit** is checked on its new days only and a shortening never. **While a vacation is typed** (before Save) the Time off form shows who else is off and how many stay around (the others in roster order: "Also off: Burchett 3/18-3/20, Acton 3/15-3/21 - after yours, 3 of 6 are around 3/18-3/20"; the East days carry no East word except for the scheduler, item E3 - everyone else reads one merged list of days per person; an Edit of a vacation shows the same line). **Under the minimum** a surgeon — and the office coordinator entering for a surgeon — is refused before saving with the database's own words ("VACATION_TOO_FEW_AROUND: on 3/18, 3/19 only 1 of 6 surgeons would be around (minimum 2) - pick other dates or ask the scheduler"); **the scheduler gets a confirm instead** ("... enter it anyway?") and may proceed. The month painter counts its whole draft the same way. **Database:** the `time_off` trigger `time_off_vacation_guard` (`sql/migrations/2026-09-30-vacation-guard.sql`, report-first, **applied 2026-10-01**; `docs/SCHEMA-REVIEW.md` "2026-09-30 - vacation guard") refuses the same (`VG001`, the same text), lets the scheduler and a session with no signed-in user through, reads the East ranges from the `east_feed` cache and the *home* reviews, and fires after the on-call trigger (`ON_CALL_CONFLICT` still answers first); it backs the app's own check (a stale build or a direct REST call is refused by the database too). ⟶ **10/14 (Faraz 10/9, Prompt 31 Part A): the East person's away / unreviewed ranges, seen by everyone signed in.** An East range that is *away* or still *unreviewed* now shows to every signed-in role exactly like a vacation: the calendar's vacation bar and "Off: Khan" for everyone but the scheduler (his bar shows the review state instead - "Khan?" while unreviewed, decision 6 as of 10/21; the East diamond and the dot until then); a read-only line that says "set by the scheduler" (no Edit or Remove, the office coordinator included) where a Time off list shows other people's vacations - the office coordinator's, a viewer's / follower's, an APP's (a surgeon's own list shows no one else's vacations, as with a Silvis vacation, so another surgeon sees no such line; the scheduler's lines carry the East marker); the person's own My vacations; the word is "vacation" - never East / Davenport / DSG for anyone but the scheduler; *home* ranges, `?public=1`, the share page, print, the calendar feeds, the digest, the ER export, e-mails and pay are unchanged (§3 Khan). The counting above does not change - those ranges already counted. What changes with **revision x** (`sql/migrations/2026-10-14-east-vacations.sql`, report-first, **applied 2026-10-19** - Faraz's `apply-east-vacations.sh`; `docs/SCHEMA-REVIEW.md` "2026-10-14 - East vacations"): the trigger reads the East ranges through the database's one derived reading, `silvis_derived_vacations()` - the merged range, a *home* review exempting only a range it matches exactly, the app's own reading (a stale *home* row that merely covers a day no longer exempts it). **The East person's own range is never refused** - Davenport owns it: when it leaves fewer than the minimum around, or covers a published day he holds, the scheduler is warned with the dates (Setup → East feed, the Time off East card, the coverage strip, the day editor) - never a block, a dropped range or a moved lock. | Khan 9/21, **9/22**, **9/30**, Faraz **10/9, 10/14** |
@@ -100,11 +100,17 @@ decides the Trauma Director role.
   1. **Days away shrink it.** *"A month's target shrinks in proportion to the days he's away."* A month's number is
      N × (the days of the month he is not away) ÷ (the days of the month), to one decimal. "Away" is what already
      blocks him in both roles: a vacation of his, and a day of an East range that is *away* or still *unreviewed* -
-     never a *home* range, never the day before a vacation. One reading (`rules.js backupTargetFor`) for Generate and
-     for Totals.
+     never a *home* range, never the day before a vacation, never an East call day. One reading (`rules.js
+     backupTargetFor`) for Generate and for Totals. In a month the schedule covers only in part - the tail of a range,
+     its other days not scheduled yet - only the days in the schedule count (the days of the range plus the days that
+     already hold a backup), so the number shrinks with the part of the month being scheduled, as the others' shares
+     do. A number above the days of the month reads as the days, and a hard backup cap ("Backup days per month")
+     always wins over the number.
   2. **The proration stops at his equal share.** A month he is mostly away never gives him fewer backups than no
      target would: the month's number is never taken below the backup share he has without a target. A number that
-     was itself SET below that share stays as set - it asks for fewer (reading taken 11/22, §8 item 32).
+     was itself SET below that share stays as set - it asks for fewer (reading taken 11/22, §8 item 32). That share is
+     his own for the month, as the rules give it to him: 0 in a month he is away throughout, and above the plain
+     level in a month the rules allow him few primaries (the weighted load already makes those up in backups).
   3. **Primary shares are untouched.** *"His extra backups don't lower his primary share, and don't give anyone else
      extra primaries."* Every pool member's primary share, the primary level and the makeup are worked out as if
      nobody had a backup target; the others share the backup slots his number leaves, each weighed at his unchanged
@@ -114,12 +120,17 @@ decides the Trauma Director role.
      soft terms could, on any day: the any-role run limit (`long-run`), his whole-weekend style (`pattern-mismatch`),
      back-to-back weekends, backup the day after his own primary, and the rest between stretches (for a surgeon who
      has that rule). A second generic key, `eastFeed.backupFreeOnEastDays: true`, drops those five for a **backup on
-     his own East call day** - a published East call day (the scheduler's overrides applied) or a standing one, never
-     a forecast day. In the weekend unit a backup holding made only of such days carries no style term and is no
-     "style mismatch" in the preview. Only that day's own terms go: the day still counts as held when his other days
-     are judged, every hard rule stands, his other soft terms stay (his own dated rows, the offers terms), and a
-     primary is never exempt. The switch is Setup data too (Setup → Rules → East → "Backup on East call days carries
-     no run, rest or weekend-shape penalty") and is **off until Faraz turns it on**.
+     his own East call day** - any day Davenport has published him on call (a service-week day, a weeknight, a
+     weekend or holiday call day), a day the scheduler's override added, or a standing one; never a forecast day. In
+     the weekend unit a backup holding made only of such days carries no style term and is no "style mismatch" in
+     the preview. **It works both ways** (fix round 11/22, after the independent review): such a backup is also left
+     out of the run, rest and back-to-back counts of his *other* days, which read exactly as they would without it -
+     he is on call at East that day whatever Silvis does. (The first build dropped only the day's own terms; the run
+     and weekend terms then landed on his neighbouring days, his total penalty rose with the switch on, and run
+     limits still worked against those backups.) His weekend style still reads the day as held - a whole weekend
+     with an East day in it is his whole weekend. Every hard rule stands, his other soft terms stay (his own dated
+     rows, the offers terms), and a primary is never exempt. The switch is Setup data too (Setup → Rules → East →
+     "Backup on East call days carries no run, rest or weekend-shape penalty") and is **off until Faraz turns it on**.
   The target steers Generate only: it never overrides a hard rule and never leaves a slot open, and claims, trades
   and the day editor do not read it. The preview's shares table shows each month's number with its note ("set 20,
   away 16 of 31 days"). Readings to confirm: §8 item 32.
@@ -793,16 +804,24 @@ the pool, within each person's availability:
   above are exactly what they are with no backup target - *"His extra backups don't lower his primary share, and don't
   give anyone else extra primaries."* (2) **The month's number:** N prorated by his days away (N × the days he is not
   away ÷ the days of the month, to 0.1; away = the days that already block him as time off), never taken below the
-  backup share he has in (1) - and a number set below that share stays as set: `max(prorated, min(N, share))`.
+  backup share he has in (1) - and a number set below that share stays as set: `max(prorated, min(N, share))`. In a
+  month the schedule covers only in part, N counts for the days in the schedule (the range plus the days already
+  holding a backup) - both the prorated number and the N the floor reads; a number above the month's days reads as
+  the days; and a hard backup cap (`backupCap.perMonthDays`) wins over the number.
   (3) **The others share what is left:** the pool's backup slots minus his number go to the members without a backup
   target, each weighed at his unchanged primary share, up to his backup clip. When his number equals his share the
-  month is the no-target month, exactly. The number is not clipped at what his rules allow that month: a number he
-  cannot reach shows as "(short)" in the preview, and the days it does not cover are placed by the soft terms. It is
-  the SHARES that hold still: the placed primaries can drift a little with the number, because the later passes move
-  primaries on a schedule that already holds the backups (measured 11/22, 10 seeds, January - March at 20 a month: the
-  largest shift was about one primary over the quarter). A surgeon outside the pool has no share: his number is only
-  prorated. Totals shows the sum of the months' prorated numbers, and for a month the last Generate preview covers
-  the number that run used.
+  month is the no-target month, exactly. The number is not clipped at what his rules allow that month (his
+  availability): a number he cannot reach shows as "(short)" in the preview, and the days it does not cover are placed
+  by the soft terms; numbers that together exceed the pool's backup slots leave the others a target of 0. It is the
+  SHARES that hold still: the placed primaries can drift a little with the number. The cause (review, 11/22): the
+  smoothing pass runs after the backups are placed and cannot hand a primary to a member who is that day's backup,
+  and best-of-N then favours candidates in which he holds fewer primaries. On the January - March rows the drift is
+  within half a primary over the quarter at every number tried; in a made-up quarter with no day away it reached
+  about 0.3 a month at 12 - 14 and 0.8 a month at 20, all of it off his own count. Where the extra backups land is
+  not a rule either: weekend units are filled before single days when they are equally tight, so a high number
+  takes weekend backups first (§8 item 32). A surgeon outside the pool has no share: his number is only prorated,
+  and nothing comes off the pool's slots for it. Totals shows the sum of the months' numbers, and for a month the
+  last Generate preview covered whole, the number that run used.
 - **The soft 7 (Faraz 10/11, Prompt 32; §1 Caps).** The share clip sits on the soft limit, so Generate stays at or under
   7 primaries a month for everyone on the group default when it can. When a slot can only go to candidates already at or
   over their soft limit, it is filled anyway (the soft `over-preferred-cap`), and it goes to the eligible candidate with
@@ -1629,22 +1648,49 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     below the share he has with no target) - and, the reading added in the build: **a number SET below that share stays
     as set.** It asks for fewer than the equal share and is neither prorated further nor lifted to the share; without
     this, a low number would do nothing. To hold someone below his share by rule, the backup cap ("Backup days per
-    month") is the hard tool. **confirm** (b) **Away days** are exactly the days that block him as time off: his own
-    vacations and his East ranges that are away or unreviewed. A range reviewed *home* and the day before a vacation
-    are in-town days: backup the day before he leaves stays allowed (Faraz's default, 11/22). **confirm** (c) **Which
-    days are "his own East call days"** for the switch: a published East call day (overrides applied; the shifts he
-    holds in a week Davenport is backup count while that feature's key says so) and a standing East day. A forecast
-    day is a guess and is not one, so the switch does nothing beyond Davenport's published weeks. **confirm** (d)
-    **What the switch drops and what it keeps.** Dropped, for a backup on such a day: the any-role run term, the
-    rest-between-stretches term, back-to-back weekends, the weekend-style term (per day, and in the unit when every
-    day of his holding is such a day) and backup after his own primary. Kept: every hard rule; his own dated "avoid"
-    rows and the offers terms; the weekend-contribution term of a surgeon who prefers weekends (not Khan since 9/30);
-    the unit-level daily-pattern weight; and the terms of his OTHER days, which still count the East-day backup as
-    held. With the switch on and a high number the preview shows long Silvis runs across his East weeks - that is
-    what the decision asks for; the number and the switch are his to weigh there. **confirm** (e) **Placed primaries
-    may drift** with the number although the shares do not (§6): accepted 11/22. (f) **Not clipped:** a number above
-    what his rules allow in a month is kept and shown as "(short)"; the others' targets then sum to fewer than the
-    slots and the soft terms place the rest. **confirm** (g) **Not built:** `eligibility()`'s per-day primary-target
-    term for a surgeon who has both numbers (§6 key names) - nobody has a primary number. (h) **The seed** carries
-    neither the number nor the switch: both are entered in Setup, and the seed, the regression's restated shares and
-    the pins that read "Khan: no target" follow in a record change once the number is picked.
+    month") is the hard tool. "His equal share" is read as the share the rules give HIM that month without a target:
+    0 in a month he is away throughout, the plain level in an ordinary month, and more than the level in a month the
+    rules allow him few primaries - the weighted load already makes those up in backups. (A made-up December with 13
+    of its 31 days off and 3 primaries allowed: 11.4 backups without any number, so a 12 or a 14 reads 11.4 and an 8
+    or a 10 stays as set.) The other readings would be the plain level - a number could then give him fewer backups
+    than no number - or no floor at all. **confirm** (b) **Away days** are exactly the days that block him as time
+    off: his own vacations and his East ranges that are away or unreviewed. A range reviewed *home*, the day before a
+    vacation and every East call day are in-town days: backup the day before he leaves stays allowed (Faraz's
+    default, 11/22). **confirm** (c) **Which days are "his own East call days"** for the switch: every day Davenport
+    has published him on call - the weekdays of a service week as much as the weeknights and the 24-hour weekend days
+    Faraz named, a holiday call day, a day-call override - plus a day the scheduler's own East override added and a
+    standing East day (the shifts he holds in a week Davenport is backup count while that feature's key says so). The
+    app does not tell the kinds apart. A forecast day is a guess and is not one, so the switch does nothing in weeks
+    Davenport has not published yet. **confirm** (d) **What the switch drops and what it keeps.** Dropped, for a
+    backup on such a day: the any-role run term, the rest-between-stretches term, back-to-back weekends, the
+    weekend-style term (per day, and in the unit when every day of his holding is such a day) and backup after his
+    own primary. **And it works both ways** (fix round 11/22): that backup is left out of the run, rest and
+    back-to-back counts of his OTHER days too - they read as they would without it. The first build kept it in those
+    counts; the independent review measured the result (over a made-up quarter his shape penalties ROSE with the
+    switch on, 11.2 to 17.8 without a number, and candidates with East-day backups scored worse) - run limits
+    working against those backups by another door. Kept: every hard rule (the hard run counts what it counted); a
+    primary on an East day; his weekend style's reading of the day as held; his own dated "avoid" rows and the
+    offers terms; the unit-level daily-pattern weight; and three terms nobody's rules put on a backup today - a
+    weekend cap whose roles list backup (his covers primary only), the weekend-contribution term of a surgeon who
+    prefers weekends (not Khan since 9/30) and a weekend block penalty. With the switch on and a high number the
+    preview shows long Silvis runs across his East weeks - that is what the decision asks for; the number and the
+    switch are his to weigh there. **confirm** (e) **Placed primaries may drift** with the number although the shares
+    do not (§6, with the cause and the measurements): accepted 11/22. (f) **Clipped only by the hard cap:** a number
+    above what his rules allow in a month (his availability) is kept and shown as "(short)" - the others' targets
+    then sum to fewer than the slots and the soft terms place the rest - while a hard backup cap ("Backup days per
+    month") below the number wins, and a number above the days of the month reads as the days. **confirm** (g) **Not
+    built:** `eligibility()`'s per-day primary-target term for a surgeon who has both numbers (§6 key names) - nobody
+    has a primary number; and a surgeon outside the pool with a backup number takes nothing off the pool's slots
+    (the pool's targets then add up to more than what is left). (h) **The seed** carries neither the number nor the
+    switch: both are entered in Setup, and the seed, the regression's restated shares and the pins that read "Khan:
+    no target" follow in a record change once the number is picked. (i) **A month the schedule covers only in
+    part** - a range that ends a few days into a month whose other days are not scheduled yet: the number counts for
+    the days in the schedule only (the range plus the days already holding a backup), like the shares it is set
+    against. A whole-month number over a few tail days would hand him every one of them and leave the others a
+    target of 0. "Generate this period" over whole months is not touched by this. **confirm** (j) **Where the extra
+    backups fall is not a rule.** Weekend units are filled before single days when they are equally tight, so a
+    high number takes weekend backups first; how far depends on the calendar (the preview gives his Fri-Sun and
+    Mon-Thu counts at each number). If they should be spread, the existing hard tool is the backup cap's weekends
+    a month - which could also keep a backup off an East weekend day, so it is his call. **confirm** (k)
+    **Warnings.** A switch value that is not true / false, or a monthly target that is not a number, is ignored
+    with one rules warning - never silently.

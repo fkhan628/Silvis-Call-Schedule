@@ -173,7 +173,7 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
 - No surgeon-specific `if (name === ...)` in code: every rule is data in `call_schedule_data.data.surgeonRules` and
   editable in Setup. Fierce's derived weeks and Khan's East dependency are generic `eastFeed` features; Acton's rest
   preference is the generic soft `restBetweenStretches { minDaysOff, weight }` (10/18 - `short-rest` between call stretches,
-  both roles; Setup > Rules > Limits; it acts once Faraz enters it there); Khan's backup target is the generic `monthlyTarget { backup }` (prorated through the ONE reading `rules.backupTargetFor`) and his East-day switch the generic `eastFeed.backupFreeOnEastDays` (a backup on his own East call day carries no shape soft) - Prompt 37, 11/22; both are Setup data and act once Faraz enters them. Since 11/11 (Faraz, on Prompt 34's preview)
+  both roles; Setup > Rules > Limits; it acts once Faraz enters it there); Khan's backup target is the generic `monthlyTarget { backup }` (prorated through the ONE reading `rules.backupTargetFor`) and his East-day switch the generic `eastFeed.backupFreeOnEastDays` (a backup on his own East call day carries no shape soft and is left out of his other days' run, rest and back-to-back counts) - Prompt 37, 11/22; both are Setup data and act once Faraz enters them. Since 11/11 (Faraz, on Prompt 34's preview)
   `buildContext` reads two more generic things about a derived week (`rdDerivedUnitsAndVacations`; data:
   `groupRules.eastFeed.derivedWeeks { keepHolidayUnit, yieldToVacation }`, on unless exactly `false`): a holiday unit with a
   day in the week is the derived surgeon's in that role on all its days ("Give Fierce Memorial Day"), and the lock yields on
