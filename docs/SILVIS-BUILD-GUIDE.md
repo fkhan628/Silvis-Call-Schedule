@@ -2953,7 +2953,9 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   `impliedTargets.months[m].members[id].backupOverride = { asked, days, away, prorated, share, target, counted?, cap? }`
   exists only on a member with a backup number (share null outside the pool, where the prorated number is the target
   and nothing comes off the pool's slots); the Generate panel and `scripts/preview-generate.js` print it after Target
-  B through `helpers.backupTargetNote`. `genWeightedOf` answers null without a primary target, like
+  B through `helpers.backupTargetNote` ("set 20, away 16 of 31 days"; a part-covered month reads "4 of 30 days
+  scheduled", a number stopped by the cap "at the backup cap 7"). `genWeightedOf` answers null without a primary
+  target, like
   `helpers.ttWeightedShare`. `eligibility()` does not read a backup target, and reads a primary number only in the
   plain-number form (a known limit, rules doc §8 item 32 g). A value that is not a number is ignored with one
   `ctx.warnings` entry. Pins: `test/generator-regression.js` - the `genWeightedShares` unit pins (the no-target
@@ -2997,7 +2999,8 @@ client and engine only — no SQL, RLS, edge function, pay, trade or `?public=1`
   *Monthly target* field has two boxes - the primary number and *Backup target (days a month)* - stored as the plain
   number (primary only), `{ backup }` or `{ primary, backup }`, and null when both are blank; the East field gains the
   checkbox *Backup on East call days carries no run, rest or weekend-shape penalty* (`eastFeed.backupFreeOnEastDays`, §5;
-  its hover text names the days that count and says the backup is left out of his other days' counts too).
+  its hover text names the days that count and says the backup is left out of his other days' counts too); the Limits
+  summary line adds "at most his backup cap of N" when a surgeon's backup cap is below his backup number.
 - **Painting (step 5, `test/painting.test.js`, its own chain and workflow step, 4000 ms budget).** A synthetic fixture
   measures painters who offer every day against partial painters and two controls. Prompt 32's soft 7 holds every painter-month
   at 7 primaries, but a full painter still ends above his weighted share (backup up to about share + 2.8) because a partial

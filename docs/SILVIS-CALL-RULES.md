@@ -815,8 +815,9 @@ the pool, within each person's availability:
   by the soft terms; numbers that together exceed the pool's backup slots leave the others a target of 0. It is the
   SHARES that hold still: the placed primaries can drift a little with the number. The cause (review, 11/22): the
   smoothing pass runs after the backups are placed and cannot hand a primary to a member who is that day's backup,
-  and best-of-N then favours candidates in which he holds fewer primaries. On the January - March rows the drift is
-  within half a primary over the quarter at every number tried; in a made-up quarter with no day away it reached
+  and best-of-N then favours candidates in which he holds fewer primaries. On the period's own rows (ten seeds,
+  measured 11/22) his placed primaries average 13.6 with no number, 13.3 at 10, 13.2 at 15 and 12.5 at 20 - about
+  one primary fewer at 20, half a day or less below it; in a made-up quarter with no day away the drift reached
   about 0.3 a month at 12 - 14 and 0.8 a month at 20, all of it off his own count. Where the extra backups land is
   not a rule either: weekend units are filled before single days when they are equally tight, so a high number
   takes weekend backups first (§8 item 32). A surgeon outside the pool has no share: his number is only prorated,
@@ -1687,7 +1688,9 @@ seeds it ran until 10/20 - cut for the 10 s budget - read 27 to 4 and 182 to 16)
     part** - a range that ends a few days into a month whose other days are not scheduled yet: the number counts for
     the days in the schedule only (the range plus the days already holding a backup), like the shares it is set
     against. A whole-month number over a few tail days would hand him every one of them and leave the others a
-    target of 0. "Generate this period" over whole months is not touched by this. **confirm** (j) **Where the extra
+    target of 0. The Jan 2027 – Apr 2027 period is the first case: it ends Sun 4/4 (item 31 b), so his April number
+    counts for those four days only - 15 reads 2 there - and the rest of April gets its share with the next period.
+    **confirm** (j) **Where the extra
     backups fall is not a rule.** Weekend units are filled before single days when they are equally tight, so a
     high number takes weekend backups first; how far depends on the calendar (the preview gives his Fri-Sun and
     Mon-Thu counts at each number). If they should be spread, the existing hard tool is the backup cap's weekends
