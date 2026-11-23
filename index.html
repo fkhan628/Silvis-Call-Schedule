@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-/Py2w4jXh6w9KZdKg6xG7QDmCSPgDV/PaRDMDZoHJ3U=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-R7aIz01embR5eT+k6oARdgwKF0Aqq0hx3/kIW5ntPbs=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-7DV7Sm44nV5LsXYzDB7wXxkOuHQOPUc5Y0Mx1DScOps=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-JZ84SfxyASjIsSd77NtENW56cavo4odzYYDx02Fa7Gc=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -266,7 +266,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.11.18a";
+    var APP_VERSION = "2026.11.23a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -21907,6 +21907,13 @@ function TotalsCard({
   });
   const dg = preview && preview.diagnostics;
   const nMonths = range.months.length;
+  const backupMonthTarget = (id, m, asked) => {
+    const mem = dg && dg.impliedTargets && dg.impliedTargets.months && dg.impliedTargets.months[m] && dg.impliedTargets.months[m].members;
+    const bo = mem && mem[id] ? mem[id].backupOverride : null;
+    if (bo && typeof bo === "object" && bo.counted === undefined && bo.asked === asked && typeof bo.target === "number") return bo.target;
+    const bt = ctx && typeof backupTargetFor === "function" ? backupTargetFor(ctx, id, m) : null;
+    return bt && typeof bt.target === "number" ? bt.target : null;
+  };
   const targetFor = id => {
     const r = surgeonRules && surgeonRules[id];
     const mt = r ? r.monthlyTarget : undefined;
@@ -21925,6 +21932,19 @@ function TotalsCard({
       }
     };
     ["primary", "backup"].forEach(role => {
+      if (role === "backup" && explicit.backup !== null) {
+        let sumB = 0,
+          allB = nMonths > 0;
+        range.months.forEach(m => {
+          const v = backupMonthTarget(id, m, explicit.backup);
+          if (typeof v === "number") sumB += v;else allB = false;
+        });
+        if (allB) out.backup = {
+          value: Math.round(sumB * 10) / 10,
+          kind: "explicit"
+        };
+        return;
+      }
       if (explicit[role] !== null) {
         out[role] = {
           value: Math.round(explicit[role] * nMonths * 10) / 10,
@@ -22264,7 +22284,7 @@ function TotalsCard({
     title: "Primary days minus the primary target"
   }, "Deviation"), React.createElement("th", {
     style: th,
-    title: "Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)"
+    title: "Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*). An explicit backup target counts for the days in town: a month's number is fewer when the month has days away, and the period's target is the sum of its months. The Generate preview shows each month's number (never below the equal share, nor below the number itself when that is set lower, never above his backup cap); a month the last preview worked out with the same target reads that number here (a month that preview covered only in part reads the whole-month number)"
   }, "Target B"), React.createElement("th", {
     style: th,
     title: "Backup days minus the backup target"
@@ -24726,6 +24746,23 @@ function RulesEditor({
     if (Object.prototype.hasOwnProperty.call(capObj, "total")) set("monthlyCap.total", undefined);
     set("monthlyCap.primary", v);
   };
+  const mtRaw = draft.monthlyTarget;
+  const mtObj = {};
+  if (typeof mtRaw === "number" && isFinite(mtRaw)) mtObj.primary = mtRaw;else if (mtRaw && typeof mtRaw === "object" && !Array.isArray(mtRaw)) ["primary", "backup"].forEach(k => {
+    if (typeof mtRaw[k] === "number" && isFinite(mtRaw[k])) mtObj[k] = mtRaw[k];
+  });
+  const setMonthlyTarget = (role, text) => {
+    const cur = _objectSpread({}, mtObj),
+      n = Number(text);
+    if (text === "" || !isFinite(n)) delete cur[role];else cur[role] = n;
+    const next = cur.backup !== undefined ? cur.primary !== undefined ? {
+      primary: cur.primary,
+      backup: cur.backup
+    } : {
+      backup: cur.backup
+    } : cur.primary !== undefined ? cur.primary : null;
+    set("monthlyTarget", next);
+  };
   const wp = get("outsideDerivedWeeks.weekdayPattern", null);
   const holNames = holidayNames && holidayNames.length ? holidayNames : SU_HOLIDAY_NAMES;
   const s = (roster || []).find(x => x.id === sel) || {};
@@ -25322,7 +25359,7 @@ function RulesEditor({
           testid: "rules-holiday-unit-one-day"
         });
       case "monthlyTarget":
-        return React.createElement(RuField, {
+        return React.createElement("div", null, React.createElement(RuField, {
           T: T,
           label: "Monthly target",
           hint: "blank = equal share; a number = primary target"
@@ -25331,12 +25368,26 @@ function RulesEditor({
           type: "number",
           min: "0",
           max: "31",
-          value: get("monthlyTarget", null) === null ? "" : get("monthlyTarget", ""),
-          onChange: e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value)),
+          value: mtObj.primary === undefined ? "" : mtObj.primary,
+          onChange: e => setMonthlyTarget("primary", e.target.value),
           style: _objectSpread(_objectSpread({}, inp), {}, {
             width: 70
           })
-        }));
+        })), React.createElement(RuField, {
+          T: T,
+          label: "Backup target (days a month)",
+          hint: "blank = equal share; fewer when away"
+        }, React.createElement("input", {
+          "data-testid": "rules-monthly-target-backup",
+          type: "number",
+          min: "0",
+          max: "31",
+          value: mtObj.backup === undefined ? "" : mtObj.backup,
+          onChange: e => setMonthlyTarget("backup", e.target.value),
+          style: _objectSpread(_objectSpread({}, inp), {}, {
+            width: 70
+          })
+        })));
       case "monthlyCap":
         return React.createElement("div", null, React.createElement(RuField, {
           T: T,
@@ -25472,6 +25523,12 @@ function RulesEditor({
           label: "Use the East forecast while Davenport is unpublished",
           checked: !!get("eastFeed.forecast", false),
           onChange: v => set("eastFeed.forecast", v)
+        }), React.createElement(SuCheck, {
+          testid: "rules-east-backup-free",
+          label: "Backup on East call days carries no run, rest or weekend-shape penalty",
+          title: "On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply. It acts only while 'East call days block Silvis primary' is ticked and 'East call days block Silvis backup' is not.",
+          checked: get("eastFeed.backupFreeOnEastDays", false) === true,
+          onChange: v => set("eastFeed.backupFreeOnEastDays", v)
         })), React.createElement(RuField, {
           T: T,
           label: "Derive Silvis weeks from",
@@ -28309,7 +28366,7 @@ function GenDiagnostics({
       margin: "0 0 6px",
       lineHeight: 1.5
     }
-  }, "Pool: ", (IT.pool || []).map(nameOf).join(", "), ". Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's fill clip (Fill clip P / B: Clip P - the soft limit, else the hard cap - or the backup cap, met by what the rules allow, Allowed + Held): a member below the level takes his clip and the rest is shared by the others. Primary first; the backup share is WEIGHTED across the roles (Silvis days, primary x 1 + backup x 0.5 by default): every member is brought to one weighted level, so a member short of primaries carries two backups per missing primary, and a member at his backup clip below that level takes extra primaries up to his primary clip (P makeup). W share = Target P x 1 + Target B x 0.5. A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone."), months.map(m => {
+  }, "Pool: ", (IT.pool || []).map(nameOf).join(", "), ". Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's fill clip (Fill clip P / B: Clip P - the soft limit, else the hard cap - or the backup cap, met by what the rules allow, Allowed + Held): a member below the level takes his clip and the rest is shared by the others. Primary first; the backup share is WEIGHTED across the roles (Silvis days, primary x 1 + backup x 0.5 by default): every member is brought to one weighted level, so a member short of primaries carries two backups per missing primary, and a member at his backup clip below that level takes extra primaries up to his primary clip (P makeup). W share = Target P x 1 + Target B x 0.5. An explicit backup target (Setup) is prorated by the surgeon's days away in the month - not below the equal share, nor below the number itself when it is set lower; in a month this run covers only in part it counts the days scheduled, and it never exceeds his backup cap. The note after Target B names the number as set, the days scheduled and away, and what held it. A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone."), months.map(m => {
     const I = IT.months[m];
     if (!I || !I.members) return null;
     return React.createElement("div", {
@@ -28351,7 +28408,9 @@ function GenDiagnostics({
           color: shortP ? "#a83232" : undefined
         },
         title: shortP ? "the rules allow fewer open primary slots than the target" : undefined
-      }, M.allowedPrimary, shortP ? " (short)" : ""), React.createElement("td", null, M.lockedHeld.primary), React.createElement("td", null, num(M.clipPrimary)), React.createElement("td", null, num(M.backupTarget)), React.createElement("td", {
+      }, M.allowedPrimary, shortP ? " (short)" : ""), React.createElement("td", null, M.lockedHeld.primary), React.createElement("td", null, num(M.clipPrimary)), React.createElement("td", {
+        "data-col": "target-b"
+      }, num(M.backupTarget), backupTargetNote(M.backupOverride)), React.createElement("td", {
         style: {
           color: shortB ? "#a83232" : undefined
         },
