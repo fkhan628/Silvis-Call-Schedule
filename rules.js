@@ -841,6 +841,10 @@ function buildContext(input) {
       eastEnabled: !!ef.enabled,
       blocksPrimary: !!ef.eastBlocksPrimary,
       blocksBackup: !!ef.eastBlocksBackup,
+      // Prompt 37 (Faraz 11/22): eastFeed.backupFreeOnEastDays (exactly true) - his own East call days count as in town for
+      // BACKUP: a backup on such a day carries none of the schedule-shape softs (rdBackupFreeOn; eligibility(),
+      // weekendUnitPatterns). Off for everyone unless Setup says so.
+      backupFreeOnEast: ef.backupFreeOnEastDays === true,
       eastBusy: rdBusySet(ctx, id, input.eastBusyDays && input.eastBusyDays[id]),
       eastOverrides: rdOverrideMap(ctx, id, input.eastOverrides && input.eastOverrides[id]), // C: { day: true|false }
       eastForecast: (input.eastForecast && input.eastForecast[id]) || null,
@@ -943,6 +947,18 @@ function buildContext(input) {
       var v = rules[k];
       if (v !== undefined && v !== null && v !== true && v !== false) ctx.warnings.push("surgeonRules." + id + "." + k + " = " + JSON.stringify(v) + " is not true / false (Prompt 23): ignored");
     });
+    // Prompt 37: eastFeed.backupFreeOnEastDays is a boolean too (exactly true = on): any other value is ignored with one
+    // warning. And monthlyTarget is null, a number (the PRIMARY target) or { primary, backup } whose members are numbers
+    // or null - a value, or a member, that is none of these is ignored by every reader (generator.js genTargetOverride,
+    // backupTargetFor below), with one warning, so a number typed as text never reads silently as "no target".
+    var bfv = ef.backupFreeOnEastDays;
+    if (bfv !== undefined && bfv !== null && bfv !== true && bfv !== false) ctx.warnings.push("surgeonRules." + id + ".eastFeed.backupFreeOnEastDays = " + JSON.stringify(bfv) + " is not true / false (Prompt 37): ignored");
+    var mtv = rules.monthlyTarget;
+    if (mtv !== undefined && mtv !== null) {
+      var mtNum = function (v) { return v === undefined || v === null || (typeof v === "number" && isFinite(v)); };
+      var mtOk = typeof mtv === "number" ? isFinite(mtv) : (typeof mtv === "object" && !Array.isArray(mtv) && mtNum(mtv.primary) && mtNum(mtv.backup));
+      if (!mtOk) ctx.warnings.push("surgeonRules." + id + ".monthlyTarget = " + JSON.stringify(mtv) + " is not a number or { primary, backup } with numbers (Prompt 37): what is not a number is ignored");
+    }
     // Prompt 23 B3: weekendCap { perMonth, countsEast, roles, days, weight } -> P.weekendCap (null when absent or malformed).
     var wcIn = rules.weekendCap;
     if (wcIn !== undefined && wcIn !== null) {
@@ -1550,6 +1566,24 @@ function rdEastBusyOn(ctx, P, d) {
   if (rdInPublishedCoverage(ctx, info) || (P.eastOverrides && P.eastOverrides[d] === false)) return false;
   var prob = P.eastForecast ? P.eastForecast[d] : undefined;
   return typeof prob === "number" && prob >= ctx.forecastThreshold;
+}
+// Prompt 37 (Faraz 11/22): "His Davenport 24-hour weekend days ... count as in town: he can be Silvis backup on them. So
+// can his Davenport weeknights. Nothing (East penalties, the weekend cap, run limits) may keep his backups off those
+// days." Is day d one of the surgeon's own East CALL days on which, by his eastFeed.backupFreeOnEastDays switch, a
+// BACKUP carries no schedule-shape soft and is left out of the run, rest and back-to-back counts of his other days
+// (eligibility())? A call day here is a KNOWN one, of any kind the feed publishes - a service-week day, a weeknight, a
+// weekend or holiday call day, a day the scheduler's override added (the overrides applied - buildContext) - or a
+// standing East day. A forecast day is a guess and is not one; an East vacation day is time off, never a call day.
+// False without the switch or without his East feature. (With eastBlocksBackup on the day is hard-blocked for backup
+// anyway, so the switch has nothing to act on.)
+function rdBackupFreeOn(P, d) {
+  return !!P && P.backupFreeOnEast === true && P.eastEnabled && (P.eastBusy.has(d) || !!rdStandingName(P, d));
+}
+// backupFreeOnEastDay(ctx, surgeonId, day) -> the same answer for callers outside this file (the generator's
+// style-mismatch flag). Read-only; false for an unknown surgeon or a day that is not a string.
+function backupFreeOnEastDay(ctx, surgeonId, day) {
+  var P = ctx && ctx.per ? ctx.per[surgeonId] : null;
+  return typeof day === "string" && rdBackupFreeOn(P, day);
 }
 // Prompt 23 B3: does the East data alone count the weekend of Friday friStr for this surgeon's weekendCap (countsEast
 // on and East-busy on one of weekendCap.days)? Static per ctx - memoized per Friday.
@@ -2163,6 +2197,16 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     return false;
   }
   function holdsAny(d) { return holdsRole(d, "primary") || holdsRole(d, "backup"); }
+  // Prompt 37 (Faraz 11/22): the held days the schedule-SHAPE softs count - the any-role run, the rest between
+  // stretches, back-to-back weekends. For a surgeon with eastFeed.backupFreeOnEastDays a day he holds as BACKUP ONLY on
+  // one of his own East call days (rdBackupFreeOn) is not one of them: he is on call at East that day whatever Silvis
+  // does, so that backup neither lengthens the run of his other days nor shortens their rest nor makes their weekend a
+  // back-to-back one - his other days read exactly as they would without it. The evaluated slot itself always counts
+  // (an East-day backup's own terms are dropped below). Everything else - the HARD run, the caps, the month counts,
+  // the weekend-style test (a whole weekend with an East day in it is still his whole weekend) - reads holdsAny /
+  // holdsRole as before. Without the switch this is holdsAny.
+  var shapeFree = P.backupFreeOnEast === true;
+  function holdsShape(d) { return holdsAny(d) && !(shapeFree && d !== dateStr && !holdsRole(d, "primary") && rdBackupFreeOn(P, d)); }
 
   // Monthly cap (9/22, Prompt 12 K): counts PRIMARY days only - distinct days of the
   // evaluated month on which he holds Silvis primary (schedule, assume-slots and
@@ -2206,6 +2250,8 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // first held day that is not counted while the any-role walk goes on. An
   // isolated day (neither neighbour held) skips the walk - the common case.
   // Unit keys are tracked only for a surgeon who opted into the collapse.
+  // Prompt 37: the any-role run ends at a backup he holds on his own East call day when his switch is on
+  // (holdsShape) - the hard run reads on through it exactly as before, so the two are walked with a flag each.
   var wantHard = role === "primary" || countBackup;
   var wantAny = P.maxConsecAnyRole !== null && !!W.longRunPerDay;
   var nHard = 1, nAny = 1;
@@ -2213,11 +2259,12 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
     var collapse = !!P.unitCollapse, keysH = null, keysA = null, ku;
     if (collapse) { ku = ctx.holidayByDay[dateStr]; var k0 = ku ? "H:" + ku.name + ":" + ku.days[0] : dateStr; keysH = {}; keysA = {}; keysH[k0] = true; keysA[k0] = true; }
     for (var dir = -1; dir <= 1; dir += 2) {
-      var hardAlive = wantHard;
-      for (var d1 = dir < 0 ? prevDay : nextDay, guard = 0; guard < 60 && holdsAny(d1); d1 = rdAddDays(d1, dir), guard++) {
+      var hardAlive = wantHard, anyAlive = true;
+      for (var d1 = dir < 0 ? prevDay : nextDay, guard = 0; guard < 60 && (anyAlive || hardAlive) && holdsAny(d1); d1 = rdAddDays(d1, dir), guard++) {
         var k = null;
         if (collapse) { ku = ctx.holidayByDay[d1]; k = ku ? "H:" + ku.name + ":" + ku.days[0] : d1; }
-        if (!collapse || !keysA[k]) { if (collapse) keysA[k] = true; nAny++; }
+        if (anyAlive && !holdsShape(d1)) anyAlive = false;
+        if (anyAlive && (!collapse || !keysA[k])) { if (collapse) keysA[k] = true; nAny++; }
         if (hardAlive) {
           if (holdsRole(d1, "primary") || (countBackup && holdsRole(d1, "backup"))) { if (!collapse || !keysH[k]) { if (collapse) keysH[k] = true; nHard++; } }
           else hardAlive = false;
@@ -2301,13 +2348,23 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   if (hard.length) return blockedResult();
 
   // --- schedule-shape soft penalties ---
-  if (role === "backup" && W.backupAfterPrimary && holdsRole(prevDay, "primary")) soft.push({ reason: "backup-after-primary", weight: W.backupAfterPrimary });
+  // Prompt 37 (Faraz 11/22): on his own East call day a BACKUP of a surgeon with eastFeed.backupFreeOnEastDays carries
+  // none of the five shape softs below - backup-after-primary, long-run, short-rest, back-to-back-weekend,
+  // pattern-mismatch (rdBackupFreeOn). And the other way round: when his OTHER days are judged, such a backup is not
+  // counted in their any-role run (the walk above), their rest between stretches or their back-to-back test
+  // (holdsShape) - he is on call at East that day whatever Silvis does. The weekend-style test below still reads it
+  // as held (a whole weekend with an East day in it is his whole weekend). Every hard rule above stands, a primary
+  // is never exempt, and his other softs are untouched - his own rows, the offers terms, and three terms nobody's
+  // data puts on a backup today: the weekend cap (it reaches a backup only when weekendCap.roles lists backup),
+  // weekend-backup (primaryContribution "weekends") and the unit's weekendBlockPenalty.
+  var eastFree = role === "backup" && rdBackupFreeOn(P, dateStr);
+  if (!eastFree && role === "backup" && W.backupAfterPrimary && holdsRole(prevDay, "primary")) soft.push({ reason: "backup-after-primary", weight: W.backupAfterPrimary });
 
   // 9/22 (Prompt 12 A): the any-role run (primary OR backup held, the evaluated
   // slot and assume-slots included, real days unless he opted in) beyond the
   // surgeon's SOFT limit. Backup is standby, so this is a penalty that grows per
   // day, never a block; no maxConsecutiveAnyRole -> no check (no group default).
-  if (wantAny && nAny > P.maxConsecAnyRole) soft.push({ reason: "long-run:" + nAny, weight: W.longRunPerDay * (nAny - P.maxConsecAnyRole) });
+  if (!eastFree && wantAny && nAny > P.maxConsecAnyRole) soft.push({ reason: "long-run:" + nAny, weight: W.longRunPerDay * (nAny - P.maxConsecAnyRole) });
 
   // Faraz 10/18 (Acton's rest preference): restBetweenStretches - see the header. The stretch [rsLo, rsHi] through the
   // evaluated day is grown from it until nothing joins: the held day next to either end (days in a row), a held day
@@ -2316,25 +2373,26 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
   // them). Only the stretch's first day reads the rest before it and only its last day the rest after it; a side is short
   // when he holds a day 2 .. minDaysOff days beyond the end (1 .. minDaysOff - 1 days off) - nothing links that day to
   // the stretch, so it ends another one.
+  // (Prompt 37: a backup he holds on his own East call day, switch on, is no held day here - holdsShape.)
   var RB = P.restBetween;
-  if (RB && RB.weight && RB.minDaysOff > 1) {
+  if (!eastFree && RB && RB.weight && RB.minDaysOff > 1) {
     var rsLo = dateStr, rsHi = dateStr, rsRead = Object.create(null), x;
     for (var rg = 0; rg < 60; rg++) {
-      var nLo = holdsAny(rdAddDays(rsLo, -1)) ? rdAddDays(rsLo, -1) : null, nHi = holdsAny(rdAddDays(rsHi, 1)) ? rdAddDays(rsHi, 1) : null;
+      var nLo = holdsShape(rdAddDays(rsLo, -1)) ? rdAddDays(rsLo, -1) : null, nHi = holdsShape(rdAddDays(rsHi, 1)) ? rdAddDays(rsHi, 1) : null;
       for (x = rsLo; x <= rsHi; x = rdAddDays(x, 1)) {
-        if (rsRead[x] || !holdsAny(x)) continue;
+        if (rsRead[x] || !holdsShape(x)) continue;
         rsRead[x] = true;
         var rsL = rdRestLinks(ctx, x);
         // a held day between two held days of a unit whose days are not consecutive joins them (the same from both sides)
         for (var gu = 0, gUnits = ctx.holidayUnitsGapped || []; gu < gUnits.length; gu++) {
           var gD = gUnits[gu].days, gB = false, gA = false;
           if (!(gD[0] < x && x < gD[gD.length - 1]) || gD.indexOf(x) >= 0) continue;
-          for (var gj = 0; gj < gD.length; gj++) if (holdsAny(gD[gj])) { if (gD[gj] < x) gB = true; else gA = true; }
+          for (var gj = 0; gj < gD.length; gj++) if (holdsShape(gD[gj])) { if (gD[gj] < x) gB = true; else gA = true; }
           if (gB && gA) rsL = rsL.concat(gD);
         }
         for (var li = 0; li < rsL.length; li++) {
           var y = rsL[li];
-          if ((y < rsLo && (nLo === null || y < nLo)) || (y > rsHi && (nHi === null || y > nHi))) { if (holdsAny(y)) { if (y < rsLo) nLo = y; else nHi = y; } }
+          if ((y < rsLo && (nLo === null || y < nLo)) || (y > rsHi && (nHi === null || y > nHi))) { if (holdsShape(y)) { if (y < rsLo) nLo = y; else nHi = y; } }
         }
       }
       if (!nLo && !nHi) break;
@@ -2342,20 +2400,20 @@ function eligibility(ctx, dateStr, role, surgeonId, opts) {
       if (nHi) rsHi = nHi;
     }
     var rsOff = null, rsWeight = 0, k2;
-    if (rsLo === dateStr) for (k2 = 2; k2 <= RB.minDaysOff; k2++) if (holdsAny(rdAddDays(rsLo, -k2))) { rsOff = k2 - 1; rsWeight += RB.weight * (RB.minDaysOff - rsOff); break; }
-    if (rsHi === dateStr) for (k2 = 2; k2 <= RB.minDaysOff; k2++) if (holdsAny(rdAddDays(rsHi, k2))) { if (rsOff === null || k2 - 1 < rsOff) rsOff = k2 - 1; rsWeight += RB.weight * (RB.minDaysOff - (k2 - 1)); break; }
+    if (rsLo === dateStr) for (k2 = 2; k2 <= RB.minDaysOff; k2++) if (holdsShape(rdAddDays(rsLo, -k2))) { rsOff = k2 - 1; rsWeight += RB.weight * (RB.minDaysOff - rsOff); break; }
+    if (rsHi === dateStr) for (k2 = 2; k2 <= RB.minDaysOff; k2++) if (holdsShape(rdAddDays(rsHi, k2))) { if (rsOff === null || k2 - 1 < rsOff) rsOff = k2 - 1; rsWeight += RB.weight * (RB.minDaysOff - (k2 - 1)); break; }
     if (rsOff !== null) soft.push({ reason: "short-rest:" + rsOff, weight: rsWeight });
   }
 
   if (info.friday) {
     var b2b = false;
-    for (var s = -7; s <= 7 && !b2b; s += 14) for (var t = 0; t < 3; t++) if (holdsAny(rdAddDays(info.friday, s + t))) { b2b = true; break; }
-    if (b2b && W.backToBackWeekend) soft.push({ reason: "back-to-back-weekend", weight: W.backToBackWeekend });
+    for (var s = -7; s <= 7 && !b2b; s += 14) for (var t = 0; t < 3; t++) if (holdsShape(rdAddDays(info.friday, s + t))) { b2b = true; break; }
+    if (b2b && W.backToBackWeekend && !eastFree) soft.push({ reason: "back-to-back-weekend", weight: W.backToBackWeekend });
 
     // Prompt 23 B2: a standaloneFriday surgeon's PRIMARY shapes are {Fri}, {Sat, Sun} and {Fri, Sat, Sun} - those
     // are no mismatch whatever his weekendStyle (which keeps governing his backup weekends).
     var sfShape = role === "primary" && P.standaloneFriday;
-    if (!opts.skipPatternSoft && !opts.asBlockMember && (P.weekendStyle || sfShape) && W.patternMismatch) {
+    if (!eastFree && !opts.skipPatternSoft && !opts.asBlockMember && (P.weekendStyle || sfShape) && W.patternMismatch) {
       var fri = info.friday, sat = rdAddDays(fri, 1), sun = rdAddDays(fri, 2);
       var mismatch = false;
       if (sfShape) {
@@ -2532,6 +2590,14 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
   }
   // Prompt 23 B2: standaloneFriday is a PRIMARY shape key; noLoneWeekendDay alone may block a surgeon solo on Sat / Sun.
   function sfOf(id) { return role === "primary" && ctx.per[id].standaloneFriday; }
+  // Prompt 37 (Faraz 11/22): a BACKUP membership whose every day is an East call day of a surgeon with
+  // eastFeed.backupFreeOnEastDays carries no weekend-style term (rdBackupFreeOn; eligibility() drops the per-day shape
+  // softs for those days itself). A membership with a day that is not one keeps its term.
+  function eastFreeAll(id, daysHeld) {
+    if (role !== "backup" || !daysHeld.length) return false;
+    for (var i = 0; i < daysHeld.length; i++) if (!rdBackupFreeOn(ctx.per[id], daysHeld[i])) return false;
+    return true;
+  }
   function loneOnly(r) { return !r.ok && r.hard.length > 0 && r.hard.every(function (h) { return h.indexOf("lone-weekend-day:") === 0; }); }
   var sfLive = full && role === "primary" && ids.some(function (id) { return ctx.per[id].standaloneFriday; });
 
@@ -2553,7 +2619,7 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       pen += rdSoftSum(r);
       map[present[k]] = id;
     }
-    if (!sfOf(id) && (present.length > 1 ? style !== "block" : style === "block")) pen += W.patternMismatch; // B2: every block of the present days is a legal shape for a key holder
+    if (!sfOf(id) && (present.length > 1 ? style !== "block" : style === "block") && !eastFreeAll(id, present)) pen += W.patternMismatch; // B2: every block of the present days is a legal shape for a key holder; Prompt 37: no style term on East call days (backup)
     if (present.length > 1) pen += ctx.per[id].blockPenalty; // N: a multi-day block for a weekendBlockPenalty surgeon (0 for everyone else)
     if (role === "primary" && full) pen -= contrib(id);        // L: his full primary block is the contribution (bonus once per block)
     pen += backupPen(id);                                       // L: him as the weekend backup block (penalty once)
@@ -2570,11 +2636,11 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
       if (!rf.ok) return;
       var rs = eligibility(ctx, sun, role, x, { assume: [{ date: fri, role: role }], skipPatternSoft: true });
       if (!rs.ok) return;
-      var penX = rdSoftSum(rf) + rdSoftSum(rs) + (sx === "split" && !sfOf(x) ? 0 : W.patternMismatch) + ctx.per[x].blockPenalty + backupPen(x); // N: split membership carries the surgeon's weekendBlockPenalty; L: a backup split membership carries his contribution penalty; B2: Fri+Sun is no shape of a key holder
+      var penX = rdSoftSum(rf) + rdSoftSum(rs) + ((sx === "split" && !sfOf(x)) || eastFreeAll(x, [fri, sun]) ? 0 : W.patternMismatch) + ctx.per[x].blockPenalty + backupPen(x); // N: split membership carries the surgeon's weekendBlockPenalty; L: a backup split membership carries his contribution penalty; B2: Fri+Sun is no shape of a key holder
       ids.forEach(function (y) {
         if (y === x || !solo[y][sat].ok) return;
         var sy = styleOf(y);
-        var pen = penX + rdSoftSum(solo[y][sat]) + ((sy === "split" || sy === "saturday-only") && !sfOf(y) ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty + backupPen(y);
+        var pen = penX + rdSoftSum(solo[y][sat]) + (((sy === "split" || sy === "saturday-only") && !sfOf(y)) || eastFreeAll(y, [sat]) ? 0 : W.patternMismatch) + ctx.per[y].blockPenalty + backupPen(y);
         var map = {}; map[fri] = x; map[sun] = x; map[sat] = y;
         out.push({ kind: "split", members: members(map), penalty: pen, fallback: false, surgeons: [x, y] });
       });
@@ -2584,6 +2650,7 @@ function weekendUnitPatterns(ctx, fridayStr, role, daysPresent) {
   // Daily member penalty (also the 'friday' kind's): a standalone day is the normal pattern for "daily" / no style;
   // B2: for a standaloneFriday key holder the Friday is (his lone Sat / Sun is not).
   function memberPen(id, d) {
+    if (eastFreeAll(id, [d])) return 0; // Prompt 37: a backup on his own East call day carries no style term
     if (sfOf(id)) return d === fri ? 0 : W.patternMismatch;
     var s = styleOf(id);
     if (s === "block") return W.patternMismatch;
@@ -2821,6 +2888,47 @@ function rdOverSoftWalk(ctx, schedule, from, to) {
 function overSoftLimitDays(ctx, schedule, from, to) { return rdOverSoftWalk(ctx, schedule, from, to).days; }
 function overSoftLimitMonths(ctx, schedule, from, to) { return rdOverSoftWalk(ctx, schedule, from, to).months; }
 
+/* ------------------------------------------------ explicit backup target (Prompt 37) */
+// backupTargetFor(ctx, surgeonId, month 'YYYY-MM', inPlay) (Faraz 11/22). An explicit monthly BACKUP target - the backup
+// number of the surgeon's monthlyTarget object, a finite number - counts for the days he is in town: it shrinks in
+// proportion to the days of the calendar month he is away. "Away" is P.vacation, the days eligibility() refuses him as
+// time off: his time_off days and the days of his East ranges that are away or still unreviewed (a range reviewed home
+// is not away; the day before a vacation is not an away day; an East CALL day is not away). Returns null when he has no
+// such target, else { asked, days, away, target }: asked = the number as set, days = the days of the month, away = his
+// away days among the days counted, target = the number x (the days counted that he is not away) / days, rounded to
+// 0.1, never below 0.
+//   - inPlay (optional, an array of days): the days of the month that are in the schedule being worked on - the
+//     generator passes them for a month its range only partly covers and whose other days are not scheduled yet. Only
+//     those days are counted, so the number shrinks with the part of the month in play exactly as it shrinks with his
+//     days away, and the result carries counted = how many days were counted. Without it every day of the month counts
+//     (Totals, and every month the schedule covers whole) and there is no `counted` key.
+//   - a number above the days of the month reads as the days of the month (every day he is in town); asked stays as set.
+//   - his HARD backup cap wins: a target above backupCap.perMonthDays is that cap, and the result carries cap.
+// The ONE reading of the number: the generator's targets and the Totals card both call it. (For a pool member the
+// generator then keeps the proration from taking it below the backup share he has without a target; a number that
+// was itself set below that share stays as set - generator.js genWeightedShares.) Read-only; null (never a throw) for
+// an unknown surgeon or a month that is not 'YYYY-MM'.
+function backupTargetFor(ctx, surgeonId, month, inPlay) {
+  var P = ctx && ctx.per ? ctx.per[surgeonId] : null;
+  var mt = P && P.rules ? P.rules.monthlyTarget : null;
+  if (!mt || typeof mt !== "object" || typeof mt.backup !== "number" || !isFinite(mt.backup)) return null;
+  if (typeof month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  var mdays = rdMonthDays(month), away = 0, counted = 0, play = null, i;
+  if (Array.isArray(inPlay)) { play = Object.create(null); for (i = 0; i < inPlay.length; i++) play[inPlay[i]] = true; }
+  for (i = 0; i < mdays.length; i++) {
+    if (play && !play[mdays[i]]) continue;
+    counted++;
+    if (P.vacation.has(mdays[i])) away++;
+  }
+  var n = mt.backup > mdays.length ? mdays.length : mt.backup;
+  var target = Math.round(n * (counted - away) / mdays.length * 10) / 10;
+  var out = { asked: mt.backup, days: mdays.length, away: away, target: target > 0 ? target : 0 };
+  if (counted < mdays.length) out.counted = counted;
+  var bc = P.rules.backupCap, cap = bc && typeof bc.perMonthDays === "number" && isFinite(bc.perMonthDays) ? bc.perMonthDays : null;
+  if (cap !== null && out.target > cap) { out.target = cap > 0 ? cap : 0; out.cap = cap; }
+  return out;
+}
+
 /* ------------------------------------------------------ East conflict report */
 // eastConflicts(ctx, days) -> [{ day, role, id, reasons }]   (Prompt 12 C.4, 9/22)
 // For every day in `days` whose ctx.schedule row holds a surgeon in a role, the
@@ -2948,6 +3056,8 @@ if (typeof module !== "undefined") {
     monthlyCapFor: monthlyCapFor,
     overSoftLimitDays: overSoftLimitDays,     // Prompt 32 step 4: the ONE reading of the over-soft-limit primary days
     overSoftLimitMonths: overSoftLimitMonths, // Prompt 32 step 4: the months over the soft limit (Totals)
+    backupTargetFor: backupTargetFor,         // Prompt 37: the ONE reading of an explicit backup target's proration (the generator, Totals)
+    backupFreeOnEastDay: backupFreeOnEastDay, // Prompt 37: is a day an East call day on which his backup carries no shape soft (the generator's style flag)
     standingEastDays: standingEastDays,
     weekendCapCounts: weekendCapCounts,
     eastBusyOn: function (ctx, id, d) { var P = ctx && ctx.per ? ctx.per[id] : null; return !!P && rdEastBusyOn(ctx, P, d); },

@@ -3690,6 +3690,270 @@ step("derived weeks: derivedPending - the slots the next Generate seeds, for dis
   eq([R.eligibility(c, "2027-03-31", P, FIERCE).lockHolder, R.eligibility(c, "2027-03-31", P, ACTON, { allHard: true }).hard.indexOf("derived-lock-held:" + FIERCE) >= 0], [true, true], "eligibility is unchanged on a pending day");
 }
 
+step("Prompt 37 (Faraz 11/22): rules.backupTargetFor - an explicit backup target counts for the days in town");
+{
+  // "A month's target shrinks in proportion to the days he's away." Made-up numbers and dates (the seed carries no target;
+  // Faraz picks the number in Setup): June 2027 has 30 days, July 31. timeOffRows: [] replaces the seed's rows, so every
+  // away day below is the test's own.
+  const sr37 = (mt) => { const s = clone(seed.surgeonRules); s[KHAN].monthlyTarget = mt; return s; };
+  const c37 = (mt, extras) => makeCtx(Object.assign({ schedule: {}, timeOffRows: [], surgeonRules: sr37(mt) }, extras || {}));
+  const JUN = "2027-06", off = (a, b, id) => ({ person_id: id || KHAN, start_date: a, end_date: b });
+  // only an object with a finite number in `backup` is a backup target
+  eq([null, 6, { primary: 4 }, { backup: "12" }, { backup: null }, { backup: Infinity }, { backup: NaN }, [12]].map((mt) => R.backupTargetFor(c37(mt), KHAN, JUN)), [null, null, null, null, null, null, null, null], "no backup target: null, a plain number (that is a PRIMARY target), { primary } alone, a string, a null, a non-finite number, an array");
+  eq([{ backup: 12 }, { primary: null, backup: 12 }, { primary: 4, backup: 12 }].map((mt) => R.backupTargetFor(c37(mt), KHAN, JUN)), [1, 2, 3].map(() => ({ asked: 12, days: 30, away: 0, target: 12 })), "the three shapes that carry one - { backup }, { primary: null, backup }, { primary, backup }; nobody away: the number as set");
+  // time off: 6/1 - 6/10 is 10 of the 30 days -> 12 x 20 / 30 = 8; rows that overlap count a day once (6/1 - 6/12: 12 days)
+  eq(R.backupTargetFor(c37({ backup: 12 }, { timeOffRows: [off("2027-06-01", "2027-06-10")] }), KHAN, JUN), { asked: 12, days: 30, away: 10, target: 8 }, "10 of 30 days away: 12 x 20 / 30 = 8");
+  eq(R.backupTargetFor(c37({ backup: 12 }, { timeOffRows: [off("2027-06-01", "2027-06-10"), off("2027-06-08", "2027-06-12")] }), KHAN, JUN), { asked: 12, days: 30, away: 12, target: 7.2 }, "two overlapping rows: 12 distinct days away, 12 x 18 / 30 = 7.2");
+  // a row across the month's end counts its days inside each month: 6/26 - 7/5 is 5 days of June and 5 of July
+  const cross = c37({ backup: 12 }, { timeOffRows: [off("2027-06-26", "2027-07-05")] });
+  eq([R.backupTargetFor(cross, KHAN, JUN), R.backupTargetFor(cross, KHAN, "2027-07"), R.backupTargetFor(cross, KHAN, "2027-08")], [{ asked: 12, days: 30, away: 5, target: 10 }, { asked: 12, days: 31, away: 5, target: 10.1 }, { asked: 12, days: 31, away: 0, target: 12 }], "a row across two months: June 12 x 25 / 30 = 10, July 12 x 26 / 31 = 10.1, August untouched");
+  // the whole month away is 0, never null; one decimal; a 0 stays 0 and a negative number reads 0
+  eq(R.backupTargetFor(c37({ backup: 12 }, { timeOffRows: [off("2027-05-28", "2027-07-02")] }), KHAN, JUN), { asked: 12, days: 30, away: 30, target: 0 }, "away the whole month: target 0");
+  eq([R.backupTargetFor(c37({ backup: 7 }, { timeOffRows: [off("2027-06-01", "2027-06-10")] }), KHAN, JUN).target, R.backupTargetFor(c37({ backup: 0 }), KHAN, JUN).target, R.backupTargetFor(c37({ backup: -3 }), KHAN, JUN).target], [4.7, 0, 0], "7 x 20 / 30 = 4.67 reads 4.7; 0 stays 0; a negative number reads 0");
+  // another surgeon's time off is not his
+  eq(R.backupTargetFor(c37({ backup: 12 }, { timeOffRows: [off("2027-06-01", "2027-06-10", ACTON)] }), KHAN, JUN), { asked: 12, days: 30, away: 0, target: 12 }, "a colleague's vacation does not prorate his number");
+  // his East ranges: away and unreviewed days are away days, a range reviewed home is not; a day that is both a time_off
+  // day and a range day counts once. 6/14 - 6/17 away (4) + 6/21 - 6/24 unreviewed (4) + time off 6/17 - 6/18 (6/18 adds 1)
+  // = 9 days; 6/28 - 6/29 home adds none -> 12 x 21 / 30 = 8.4
+  const rg37 = [{ start: "2027-06-14", end: "2027-06-17" }, { start: "2027-06-21", end: "2027-06-24" }, { start: "2027-06-28", end: "2027-06-29" }];
+  const ev37 = c37({ backup: 12 }, { eastVacationRanges: { [KHAN]: rg37 }, eastVacationReviews: [{ person_id: KHAN, start: rg37[0].start, end: rg37[0].end, decision: "away" }, { person_id: KHAN, start: rg37[2].start, end: rg37[2].end, decision: "home" }], timeOffRows: [off("2027-06-17", "2027-06-18")] });
+  eq(ev37.per[KHAN].eastVacationRanges.map((r) => r.state), ["away", "unreviewed", "home"], "the three ranges read away / unreviewed / home");
+  eq(R.backupTargetFor(ev37, KHAN, JUN), { asked: 12, days: 30, away: 9, target: 8.4 }, "East ranges: away + unreviewed + his own time off = 9 distinct days (home adds none): 12 x 21 / 30 = 8.4");
+  // the away days are exactly the days eligibility() refuses him as time off - the two can never disagree
+  { const md = []; for (let d = 1; d <= 30; d++) md.push(JUN + "-" + (d < 10 ? "0" : "") + d);
+    eq(md.filter((d) => R.eligibility(ev37, d, B, KHAN, { allHard: true }).hard.some((h) => h.indexOf("time-off:") === 0)).length, 9, "the 9 away days are the days eligibility() answers time-off for his backup"); }
+  // never a throw: an unknown surgeon, a month that is not 'YYYY-MM', no context
+  const c12 = c37({ backup: 12 });
+  eq([R.backupTargetFor(c12, "nobody", JUN), R.backupTargetFor(c12, KHAN, "2027-6"), R.backupTargetFor(c12, KHAN, "2027-13"), R.backupTargetFor(c12, KHAN, "2027-06-01"), R.backupTargetFor(c12, KHAN, null), R.backupTargetFor(null, KHAN, JUN), R.backupTargetFor({}, KHAN, JUN)], [null, null, null, null, null, null, null], "an unknown surgeon, a malformed month, no context: null");
+  // his East CALL days are in-town days (Faraz: "count as in town"): a published busy day, a day an override added and
+  // his standing 12/24 - 12/25 are never away days, whatever East blocks - only vacations are
+  const busy37 = c37({ backup: 12 }, { eastBusyDays: { [KHAN]: ["2027-06-08", "2027-06-09", "2027-06-12"] }, eastOverrides: { [KHAN]: { "2027-06-15": true } } });
+  ok(busy37.per[KHAN].eastBusy.has("2027-06-08") && busy37.per[KHAN].eastBusy.has("2027-06-15"), "fixture: 6/8 and the override day 6/15 are East call days of his");
+  eq(R.backupTargetFor(busy37, KHAN, JUN), { asked: 12, days: 30, away: 0, target: 12 }, "four East call days in June (three published, one added by an override): none is an away day - the number as set");
+  eq(R.standingEastDays(c12, KHAN, "2027-12-01", "2027-12-31"), ["2027-12-24", "2027-12-25"], "fixture: his standing East days in December");
+  eq(R.backupTargetFor(c12, KHAN, "2027-12"), { asked: 12, days: 31, away: 0, target: 12 }, "his standing East days 12/24 - 12/25 are not away days either");
+  // a month the schedule covers only in part (the generator's inPlay: the days in the range or already holding a backup):
+  // only those days count. June 1 - 10 in play: 12 x 10 / 30 = 4; with time off 6/8 - 6/12 three of the ten are away
+  // days (6/8, 6/9, 6/10 - 6/11 and 6/12 are not in play): 12 x 7 / 30 = 2.8
+  const first10 = []; for (let d = 1; d <= 10; d++) first10.push(JUN + "-" + (d < 10 ? "0" : "") + d);
+  const all30 = []; for (let d = 1; d <= 30; d++) all30.push(JUN + "-" + (d < 10 ? "0" : "") + d);
+  eq(R.backupTargetFor(c12, KHAN, JUN, first10), { asked: 12, days: 30, away: 0, target: 4, counted: 10 }, "10 of June's 30 days in play: 12 x 10 / 30 = 4, counted 10");
+  eq(R.backupTargetFor(c37({ backup: 12 }, { timeOffRows: [off("2027-06-08", "2027-06-12")] }), KHAN, JUN, first10), { asked: 12, days: 30, away: 3, target: 2.8, counted: 10 }, "...three of the ten away (the two away days outside the ten do not count): 12 x 7 / 30 = 2.8");
+  eq(R.backupTargetFor(c12, KHAN, JUN, all30), { asked: 12, days: 30, away: 0, target: 12 }, "every day in play is the whole month: no `counted` key, the number as set");
+  eq(R.backupTargetFor(c12, KHAN, JUN, ["2027-06-01", "2027-06-01", "2027-07-01", "2027-05-31", "junk", null]), { asked: 12, days: 30, away: 0, target: 0.4, counted: 1 }, "a day listed twice counts once; days of other months and junk are not days of this month: 12 x 1 / 30 = 0.4");
+  eq(R.backupTargetFor(c12, KHAN, JUN, []), { asked: 12, days: 30, away: 0, target: 0, counted: 0 }, "no day in play: 0");
+  eq(["2027-06-01", { "2027-06-01": true }, 10, true].map((v) => R.backupTargetFor(c12, KHAN, JUN, v)), [1, 2, 3, 4].map(() => ({ asked: 12, days: 30, away: 0, target: 12 })), "an inPlay that is not an array is ignored (the whole month counts)");
+  // a number above the days of the month reads as the days of the month (a backup every day he is in town); asked stays as set
+  eq([R.backupTargetFor(c37({ backup: 40 }), KHAN, JUN), R.backupTargetFor(c37({ backup: 40 }, { timeOffRows: [off("2027-06-01", "2027-06-10")] }), KHAN, JUN), R.backupTargetFor(c37({ backup: 30 }), KHAN, JUN), R.backupTargetFor(c37({ backup: 1e300 }), KHAN, "2027-02")],
+    [{ asked: 40, days: 30, away: 0, target: 30 }, { asked: 40, days: 30, away: 10, target: 20 }, { asked: 30, days: 30, away: 0, target: 30 }, { asked: 1e300, days: 28, away: 0, target: 28 }], "40 in a 30-day month reads 30 (20 with ten days away); 30 is 30; an absurd number reads the month's days, never Infinity");
+  // his HARD backup cap wins: a target above backupCap.perMonthDays is the cap (and says so); below it nothing changes
+  const cap37 = (mt, extras) => { const s = sr37(mt); s[KHAN].backupCap = { perMonthDays: 7 }; return makeCtx(Object.assign({ schedule: {}, timeOffRows: [], surgeonRules: s }, extras || {})); };
+  eq(R.backupTargetFor(cap37({ backup: 12 }), KHAN, JUN), { asked: 12, days: 30, away: 0, target: 7, cap: 7 }, "backup cap 7 and a number 12: the target is the cap 7");
+  eq(R.backupTargetFor(cap37({ backup: 12 }, { timeOffRows: [off("2027-06-01", "2027-06-10")] }), KHAN, JUN), { asked: 12, days: 30, away: 10, target: 7, cap: 7 }, "...also when the prorated number (8) is above the cap");
+  eq(R.backupTargetFor(cap37({ backup: 12 }, { timeOffRows: [off("2027-06-01", "2027-06-20")] }), KHAN, JUN), { asked: 12, days: 30, away: 20, target: 4 }, "...a prorated number below the cap (12 x 10 / 30 = 4) is untouched: no cap key");
+  eq(R.backupTargetFor(cap37({ backup: 7 }), KHAN, JUN), { asked: 7, days: 30, away: 0, target: 7 }, "a number AT the cap is not 'stopped' by it: no cap key");
+  blocked(R.eligibility(cap37({ backup: 12 }, { schedule: { "2027-06-01": { backup: KHAN }, "2027-06-02": { backup: KHAN }, "2027-06-03": { backup: KHAN }, "2027-06-07": { backup: KHAN }, "2027-06-08": { backup: KHAN }, "2027-06-09": { backup: KHAN }, "2027-06-10": { backup: KHAN } } }), "2027-06-14", B, KHAN), "backup-cap:7", "...and the cap it follows is the hard one eligibility() enforces (an 8th backup day is refused)");
+  // a value that is no number is ignored by every reader - with ONE buildContext warning, so a number typed as text never
+  // reads silently as no target; the valid shapes raise none
+  eq(["12", { backup: "12" }, [12], true, { primary: "4", backup: 12 }].map((mt) => c37(mt).warnings.filter((w) => /monthlyTarget/.test(w)).length), [1, 1, 1, 1, 1], "a string, a string member, an array, true, a string beside a number: one monthlyTarget warning each");
+  ok(/surgeonRules\.s1\.monthlyTarget = \{"backup":"12"\} is not a number or \{ primary, backup \} with numbers \(Prompt 37\)/.test(c37({ backup: "12" }).warnings.join("\n")), "the warning names the key and the value: " + JSON.stringify(c37({ backup: "12" }).warnings));
+  eq([undefined, null, 6, { primary: 4 }, { backup: 12 }, { primary: null, backup: 12 }, { primary: 4, backup: 12 }, {}, { backup: null }, -3, { backup: -3 }].map((mt) => c37(mt).warnings.length), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "absent, null, a number, { primary }, { backup }, both, an empty object, a null member, a negative number: no warning");
+  eq(R.backupTargetFor(c37({ primary: "4", backup: 12 }), KHAN, JUN), { asked: 12, days: 30, away: 0, target: 12 }, "...and the member that IS a number is still read");
+  // read-only, and nobody on the seed has one
+  const vacBefore = JSON.stringify(Array.from(ev37.per[KHAN].vacation).sort());
+  R.backupTargetFor(ev37, KHAN, JUN);
+  eq(JSON.stringify(Array.from(ev37.per[KHAN].vacation).sort()), vacBefore, "it reads - his vacation set is as it was");
+  eq([KHAN, BURCHETT, ACTON, PHILIP, FIERCE, SARKAR].map((id) => R.backupTargetFor(clean, id, JUN)), [null, null, null, null, null, null], "the seed carries no explicit backup target for anyone");
+  // eligibility() does not read a backup target (the generator's shares do): a backup placement answers the same with and without one
+  eq(R.eligibility(c12, "2027-06-15", B, KHAN), R.eligibility(c37(null), "2027-06-15", B, KHAN), "eligibility() answers the same with and without a backup target");
+  ok(c12.warnings.length === 0 && ev37.warnings.length === 0, "an object target and the East ranges raise no buildContext warning: " + JSON.stringify([c12.warnings, ev37.warnings]));
+}
+
+step("Prompt 37 (Faraz 11/22): eastFeed.backupFreeOnEastDays - a backup on his own East call day carries no shape soft");
+{
+  // "His Davenport 24-hour weekend days ... count as in town: he can be Silvis backup on them. So can his Davenport
+  // weeknights. Nothing (East penalties, the weekend cap, run limits) may keep his backups off those days." The seed's
+  // Khan: weekendStyle block, any-role limit 4, East blocks primary only. Made-up June 2027 dates (6/1 is a Tuesday:
+  // Fri 6/4, 6/11, 6/18, 6/25); timeOffRows: [] so no seed vacation is in the way. The switch is OFF on the seed.
+  const srFree = (on, more) => { const s = clone(seed.surgeonRules); if (on !== undefined) s[KHAN].eastFeed = Object.assign({}, s[KHAN].eastFeed, { backupFreeOnEastDays: on }); if (more) Object.assign(s[KHAN], more); return s; };
+  const cF = (on, extras, more) => makeCtx(Object.assign({ schedule: {}, timeOffRows: [], surgeonRules: srFree(on, more) }, extras || {}));
+  const SHAPE = /^(backup-after-primary|long-run:|short-rest:|back-to-back-weekend|pattern-mismatch:)/;
+  const shape = (r) => r.soft.filter((s) => SHAPE.test(s.reason)), rest = (r) => r.soft.filter((s) => !SHAPE.test(s.reason));
+  ok(!("backupFreeOnEastDays" in seed.surgeonRules[KHAN].eastFeed), "the seed does not carry the switch (Setup data - off until Faraz turns it on)");
+  // (A) a lone weekend backup the weekend after a whole backup weekend, on his East Saturday 6/12
+  const schedA = { "2027-06-04": { backup: KHAN }, "2027-06-05": { backup: KHAN }, "2027-06-06": { backup: KHAN } }, busyA = { [KHAN]: ["2027-06-12"] };
+  const aOff = R.eligibility(cF(undefined, { schedule: schedA, eastBusyDays: busyA }), "2027-06-12", B, KHAN), aOn = R.eligibility(cF(true, { schedule: schedA, eastBusyDays: busyA }), "2027-06-12", B, KHAN);
+  okElig(aOff, "Khan backup on his East Saturday"); okElig(aOn, "...with the switch");
+  eq(shape(aOff), [{ reason: "back-to-back-weekend", weight: 3 }, { reason: "pattern-mismatch:block", weight: 3 }], "(A) switch off: back-to-back weekends and his whole-weekend style weigh on the East Saturday (today's reading)");
+  eq([shape(aOn), rest(aOn)], [[], rest(aOff)], "(A) switch on: neither weighs on his East call day; every other soft is as it was");
+  // (B) the fifth day in a row, the day after his own primary, on his East Thursday 6/24
+  const schedB = { "2027-06-20": { backup: KHAN }, "2027-06-21": { backup: KHAN }, "2027-06-22": { backup: KHAN }, "2027-06-23": { primary: KHAN } }, busyB = { [KHAN]: ["2027-06-24"] };
+  const bOff = R.eligibility(cF(false, { schedule: schedB, eastBusyDays: busyB }), "2027-06-24", B, KHAN), bOn = R.eligibility(cF(true, { schedule: schedB, eastBusyDays: busyB }), "2027-06-24", B, KHAN);
+  eq(shape(bOff), [{ reason: "backup-after-primary", weight: 1 }, { reason: "long-run:5", weight: 3 }], "(B) switch off (an explicit false): backup after his own primary and the 5th day of an any-role run (limit 4)");
+  eq([bOn.ok, shape(bOn), rest(bOn)], [true, [], rest(bOff)], "(B) switch on: neither weighs on his East call day");
+  // (B2) ...and the other way round: his OTHER days do not count that backup either. Holding the East Thursday 6/24 as
+  // backup, Fri 6/25 (no East call) reads a run of ONE with the switch on - the any-role run ends at the East-day backup -
+  // where it read 6 days in a row without the switch (6/20 - 6/25: two over his limit of 4, weight 3 a day = 6). What is
+  // left on the Friday is what it carries with no backup on the Thursday at all: the weekend before (Sun 6/20) and his
+  // whole-weekend style.
+  // pin moved deliberately 11/22 (Prompt 37 fix round, the two-sided reading): this read "the East-day backup still
+  // counts as held" - long-run:6 on the day after with the switch ON. An independent review showed what that did: the
+  // run and weekend terms the East-day backup no longer paid landed on his neighbouring days, so his total shape
+  // penalty ROSE with the switch and candidates with East-day backups scored worse - run limits still worked against
+  // those backups, which the decision rules out. Now such a backup is left out of his other days' run, rest and
+  // back-to-back counts.
+  const schedB2 = Object.assign({ "2027-06-24": { backup: KHAN } }, schedB);
+  const nOff = R.eligibility(cF(false, { schedule: schedB2, eastBusyDays: busyB }), "2027-06-25", B, KHAN), nOn = R.eligibility(cF(true, { schedule: schedB2, eastBusyDays: busyB }), "2027-06-25", B, KHAN);
+  eq(nOff.soft, [{ reason: "long-run:6", weight: 6 }, { reason: "back-to-back-weekend", weight: 3 }, { reason: "pattern-mismatch:block", weight: 3 }], "(B2) switch off, the day after: 6 days in a row (6/20 - 6/25), the weekend before, a lone weekend day");
+  eq(nOn.soft, [{ reason: "back-to-back-weekend", weight: 3 }, { reason: "pattern-mismatch:block", weight: 3 }], "(B2) switch on, the day after: the run ends at the East-day backup - no long-run");
+  eq(nOn.soft, R.eligibility(cF(true, { schedule: schedB, eastBusyDays: busyB }), "2027-06-25", B, KHAN).soft, "(B2) ...the day reads exactly as it does with NO backup on the East Thursday");
+  // the run is cut on both sides: Wed 6/23 (his primary, already held) with backups 6/20 - 6/22 before it and the East
+  // Thursday + Fri 6/25 after it reads 4 in a row (6/20 - 6/23) with the switch on, 6 without
+  { const schedB3 = Object.assign({ "2027-06-25": { backup: KHAN } }, schedB2);
+    const wOff = R.eligibility(cF(false, { schedule: schedB3, eastBusyDays: busyB }), "2027-06-23", P, KHAN, { ignoreLocks: true }), wOn = R.eligibility(cF(true, { schedule: schedB3, eastBusyDays: busyB }), "2027-06-23", P, KHAN, { ignoreLocks: true });
+    hasSoft(wOff, "long-run:6", "(B2) switch off: his primary on 6/23 sits in a 6-day run");
+    lacksSoft(wOn, "long-run", "(B2) switch on: the same primary reads 4 in a row (6/20 - 6/23) - at his limit, no term; the East-day backup and the day after it are not in its run"); }
+  // a day that is not an East call day is counted as ever: the same schedule with NO East call on 6/24 reads the 6-day run with the switch on
+  hasSoft(R.eligibility(cF(true, { schedule: schedB2, eastBusyDays: { [KHAN]: ["2027-07-01"] } }), "2027-06-25", B, KHAN), "long-run:6", "(B2) a backup on a day that is no East call day still counts in his run");
+  // ...and a PRIMARY he holds on an East call day always counts (a made-up variant where East blocks no primary)
+  { const s = srFree(true); s[KHAN].eastFeed = Object.assign({}, s[KHAN].eastFeed, { eastBlocksPrimary: false });
+    const sp = { "2027-06-20": { backup: KHAN }, "2027-06-21": { backup: KHAN }, "2027-06-22": { backup: KHAN }, "2027-06-23": { backup: KHAN }, "2027-06-24": { primary: KHAN } };
+    hasSoft(R.eligibility(makeCtx({ schedule: sp, timeOffRows: [], surgeonRules: s, eastBusyDays: busyB }), "2027-06-25", B, KHAN), "long-run:6", "(B2) a PRIMARY held on an East call day counts in his run - only a backup is left out"); }
+  // the HARD run never reads the switch. Where the group counts backup days in the hard limit (countBackupInConsecutive -
+  // off on the seed), primaries Mon 6/14 + Tue 6/15 and a backup on the East Wednesday 6/16 make Thu 6/17 a 4th day in a
+  // row against his hard 3 - refused with and without the switch; with the seed's own rule (primary days only) it is not
+  { const schedH = { "2027-06-14": { primary: KHAN }, "2027-06-15": { primary: KHAN }, "2027-06-16": { backup: KHAN } }, busyH = { [KHAN]: ["2027-06-16"] };
+    const grCount = Object.assign({}, seed.groupRules, { countBackupInConsecutive: true });
+    const hardOf = (on, gr) => R.eligibility(cF(on, Object.assign({ schedule: schedH, eastBusyDays: busyH }, gr ? { groupRules: gr } : {})), "2027-06-17", P, KHAN, { allHard: true }).hard.filter((h) => h.indexOf("max-consecutive") === 0);
+    eq([hardOf(true, grCount), hardOf(false, grCount)], [["max-consecutive:3"], ["max-consecutive:3"]], "(B2) backup days counted in the hard limit: the East-day backup still counts there, switch on or off");
+    eq([hardOf(true), hardOf(false)], [[], []], "(B2) the seed's hard limit counts primary days only: no max-consecutive either way"); }
+  // (B3) back-to-back weekends: a backup on his East Saturday 6/12 does not make the NEXT weekend a back-to-back one
+  { const schedW = { "2027-06-12": { backup: KHAN } }, busyW = { [KHAN]: ["2027-06-12"] };
+    const b2bOf = (on, sched) => R.eligibility(cF(on, { schedule: sched, eastBusyDays: busyW }), "2027-06-19", B, KHAN).soft;
+    eq(b2bOf(false, schedW), [{ reason: "back-to-back-weekend", weight: 3 }, { reason: "pattern-mismatch:block", weight: 3 }], "(B3) switch off: Sat 6/19 after a held weekend day pays back-to-back (and the lone-day style term)");
+    eq(b2bOf(true, schedW), [{ reason: "pattern-mismatch:block", weight: 3 }], "(B3) switch on: the East Saturday is no held weekend for his other weekends");
+    eq(b2bOf(true, Object.assign({ "2027-06-13": { backup: KHAN } }, schedW)), [{ reason: "back-to-back-weekend", weight: 3 }, { reason: "pattern-mismatch:block", weight: 3 }], "(B3) ...but a day of that weekend that is no East call day (Sun 6/13) still makes it one"); }
+  // the weekend-STYLE test keeps reading an East-day backup as held: his whole weekend with the East Saturday in it is his
+  // whole weekend, so the Friday pays no style term - and with the Saturday not held at all it would
+  { const busyW = { [KHAN]: ["2027-06-12"] }, whole = { "2027-06-12": { backup: KHAN }, "2027-06-13": { backup: KHAN } };
+    lacksSoft(R.eligibility(cF(true, { schedule: whole, eastBusyDays: busyW }), "2027-06-11", B, KHAN), "pattern-mismatch", "(B3) switch on: Fri + East Sat + Sun is his whole weekend - no style term on the Friday");
+    hasSoft(R.eligibility(cF(true, { schedule: { "2027-06-13": { backup: KHAN } }, eastBusyDays: busyW }), "2027-06-11", B, KHAN), "pattern-mismatch:block", "(B3) ...Fri + Sun without the Saturday is not"); }
+  // (C) the rest between stretches (a surgeon who has that rule): primary Mon 6/28, backup Wed 6/30 = one day off
+  const restRule = { restBetweenStretches: { minDaysOff: 2, weight: "medium" } }, schedC = { "2027-06-28": { primary: KHAN } }, busyC = { [KHAN]: ["2027-06-30"] };
+  const cOff = R.eligibility(cF(false, { schedule: schedC, eastBusyDays: busyC }, restRule), "2027-06-30", B, KHAN), cOn = R.eligibility(cF(true, { schedule: schedC, eastBusyDays: busyC }, restRule), "2027-06-30", B, KHAN);
+  eq([shape(cOff), shape(cOn)], [[{ reason: "short-rest:1", weight: 3 }], []], "(C) short-rest weighs without the switch and not with it");
+  // ...and the other way round here too: a backup he HOLDS on his East Monday 6/28 is no stretch for the rest rule, so
+  // Wed 6/30 (no East call) is not one day off after it - while the same backup on a Monday that is no East call day is
+  { const heldC = { "2027-06-28": { backup: KHAN } };
+    const restOf = (on, busy) => shape(R.eligibility(cF(on, { schedule: heldC, eastBusyDays: { [KHAN]: busy } }, restRule), "2027-06-30", B, KHAN));
+    eq([restOf(false, ["2027-06-28"]), restOf(true, ["2027-06-28"]), restOf(true, ["2027-07-01"])], [[{ reason: "short-rest:1", weight: 3 }], [], [{ reason: "short-rest:1", weight: 3 }]], "(C) a held East-day backup is no stretch for his other days' rest (switch on); a backup on a day that is no East call day still is");
+    // nor does it JOIN or bridge a stretch - his other days read as they would without it. Backups held on the East
+    // Tuesday 6/29 and on Wed 6/30: without the switch Mon 6/28 starts one three-day stretch (no short rest); with it
+    // the Tuesday is no held day for the rule, so the Monday is a stretch of its own one day before the Wednesday's -
+    // exactly what the rule reads when he holds no backup on that East Tuesday
+    const joinC = { "2027-06-29": { backup: KHAN }, "2027-06-30": { backup: KHAN } };
+    const joinOf = (on, sched) => R.eligibility(cF(on, { schedule: sched, eastBusyDays: { [KHAN]: ["2027-06-29"] } }, restRule), "2027-06-28", B, KHAN).soft.filter((s) => s.reason.indexOf("short-rest") === 0);
+    eq([joinOf(false, joinC), joinOf(true, joinC), joinOf(true, { "2027-06-30": { backup: KHAN } })], [[], [{ reason: "short-rest:1", weight: 3 }], [{ reason: "short-rest:1", weight: 3 }]], "(C) a held East-day backup does not join or bridge his stretches (switch on): Mon + Wed read one day apart, as with no backup on the East Tuesday"); }
+  // (D) the switch is about BACKUP on an East CALL day and nothing else
+  blocked(R.eligibility(cF(true, { schedule: schedB, eastBusyDays: busyB }), "2027-06-24", P, KHAN), "east-busy", "(D) primary on the East day stays hard-blocked");
+  const dCtx = (on) => cF(on, { schedule: schedB, eastBusyDays: { [KHAN]: ["2027-07-01"] } }); // the same run, but 6/24 is no East day
+  eq(R.eligibility(dCtx(true), "2027-06-24", B, KHAN).soft, R.eligibility(dCtx(false), "2027-06-24", B, KHAN).soft, "(D) the same placement on a day that is not his East call day: unchanged by the switch");
+  hasSoft(R.eligibility(dCtx(true), "2027-06-24", B, KHAN), "long-run:5", "(D) ...and it still carries the run term");
+  // ...and a PRIMARY on an East call day is never exempt, even where East does not block primary (a made-up variant of his
+  // East feature: eastBlocksPrimary false): Wed 6/23 as the 5th day of a run keeps its long-run term with the switch on
+  { const schedD = { "2027-06-19": { backup: KHAN }, "2027-06-20": { backup: KHAN }, "2027-06-21": { backup: KHAN }, "2027-06-22": { backup: KHAN } };
+    const dP = (on) => { const s = srFree(on); s[KHAN].eastFeed = Object.assign({}, s[KHAN].eastFeed, { eastBlocksPrimary: false }); return R.eligibility(makeCtx({ schedule: schedD, timeOffRows: [], surgeonRules: s, eastBusyDays: { [KHAN]: ["2027-06-23"] } }), "2027-06-23", P, KHAN); };
+    okElig(dP(true), "(D) primary on an East day where East blocks no primary");
+    hasSoft(dP(true), "long-run:5", "(D) a PRIMARY on his East call day keeps its run term - the switch is about backup");
+    eq(dP(true).soft, dP(false).soft, "(D) ...and reads exactly as without the switch"); }
+  // (E) which days are his East call days: a published busy day (the overrides applied) and a standing day; not a forecast day,
+  // not a day an override cleared, not a day of an East vacation; and never without the switch (exactly true) or his East feature
+  const eCtx = (on, extras) => cF(on, Object.assign({ eastBusyDays: { [KHAN]: ["2027-06-12", "2027-06-13"] }, eastOverrides: { [KHAN]: { "2027-06-13": false, "2027-06-19": true } }, eastForecast: { [KHAN]: { "2027-07-07": 0.9 } }, eastVacationRanges: { [KHAN]: [{ start: "2027-07-12", end: "2027-07-14" }] } }, extras || {}));
+  const eOn = eCtx(true);
+  eq(["2027-06-12", "2027-06-13", "2027-06-19", "2027-06-14", "2027-07-07", "2027-07-13", "2027-12-24", "2027-12-25"].map((d) => R.backupFreeOnEastDay(eOn, KHAN, d)), [true, false, true, false, false, false, true, true], "(E) busy 6/12 yes; 6/13 cleared by an override no; 6/19 added by an override yes; an ordinary day, a forecast day (0.9) and an East vacation day no; his standing 12/24 and 12/25 yes");
+  eq([undefined, false, "yes", 1].map((v) => R.backupFreeOnEastDay(eCtx(v), KHAN, "2027-06-12")), [false, false, false, false], "(E) absent, false, a string and 1 are not the switch (exactly true only)");
+  // without his East feature there is no East call day, even when a caller hands busy days for him (buildContext keeps
+  // them in the set either way - the feature flag is what the switch reads)
+  { const s = srFree(true); s[KHAN].eastFeed = Object.assign({}, s[KHAN].eastFeed, { enabled: false });
+    const off = makeCtx({ schedule: {}, timeOffRows: [], surgeonRules: s, eastBusyDays: { [KHAN]: ["2027-06-12"] } });
+    ok(off.per[KHAN].eastBusy.has("2027-06-12") && off.per[KHAN].backupFreeOnEast === true, "(E) fixture: the busy day is in his set and the switch is on - only the East feature is off");
+    eq([R.backupFreeOnEastDay(off, KHAN, "2027-06-12"), R.backupFreeOnEastDay(off, KHAN, "2027-12-24")], [false, false], "(E) no East feature: no East call day (a busy day handed in and his standing day included)"); }
+  eq([R.backupFreeOnEastDay(eOn, ACTON, "2027-06-12"), R.backupFreeOnEastDay(eOn, "nobody", "2027-06-12"), R.backupFreeOnEastDay(null, KHAN, "2027-06-12")], [false, false, false], "(E) another surgeon, an unknown one, no context: false");
+  eq([undefined, null, 20270612, {}].map((d) => R.backupFreeOnEastDay(eOn, KHAN, d)), [false, false, false, false], "(E) a day that is not a string: false, never a throw");
+  ok(eOn.warnings.length === 0, "(E) the switch raises no buildContext warning: " + JSON.stringify(eOn.warnings));
+  // a value that is not true / false is ignored - with one warning, like the other boolean keys
+  eq(["yes", 1, "true", 0].map((v) => eCtx(v).warnings.filter((w) => /backupFreeOnEastDays/.test(w))), ["\"yes\"", "1", "\"true\"", "0"].map((j) => ["surgeonRules.s1.eastFeed.backupFreeOnEastDays = " + j + " is not true / false (Prompt 37): ignored"]), "(E) a string, 1, \"true\" and 0 are ignored with one warning each");
+  eq([true, false, undefined, null].map((v) => eCtx(v).warnings.length), [0, 0, 0, 0], "(E) true, false, absent and null raise none");
+  // (E2) with the switch on, a backup on a clean East call day of the seed's Khan carries NO penalty of any kind - not only
+  // none of the five shape softs
+  eq(R.eligibility(cF(true, { eastBusyDays: { [KHAN]: ["2027-06-12", "2027-06-16"] } }), "2027-06-12", B, KHAN).soft.filter((s) => s.weight > 0), [], "(E2) his East Saturday, a clean schedule: no positive-weight soft at all");
+  eq(R.eligibility(cF(true, { eastBusyDays: { [KHAN]: ["2027-06-12", "2027-06-16"] } }), "2027-06-16", B, KHAN).soft.filter((s) => s.weight > 0), [], "(E2) his East Wednesday, a clean schedule: no positive-weight soft at all");
+  // ...and the terms the switch KEEPS, each on rules nobody carries today: a weekend cap that lists backup and does not
+  // count East weekends, the weekend-backup term of a weekends-contribution surgeon, and (below, the unit) a block penalty
+  { const capB = { weekendCap: { perMonth: 0, countsEast: false, roles: ["primary", "backup"], days: ["Sat", "Sun"], weight: "strong" } };
+    hasSoft(R.eligibility(cF(true, { eastBusyDays: { [KHAN]: ["2027-06-12"] } }, capB), "2027-06-12", B, KHAN), "weekend-cap:0", "(E2) kept: a weekend cap whose roles list backup still weighs on his East-day backup");
+    hasSoft(R.eligibility(cF(true, { eastBusyDays: { [KHAN]: ["2027-06-12"] } }, { primaryContribution: "weekends" }), "2027-06-12", B, KHAN), "weekend-backup", "(E2) kept: the weekend-backup term of a weekends-contribution surgeon");
+    ok(seed.surgeonRules[KHAN].weekendCap.roles.join() === "primary" && seed.surgeonRules[KHAN].primaryContribution === "weekdays" && !seed.surgeonRules[KHAN].weekendBlockPenalty, "(E2) ...none of which his seed rules carry: his weekend cap covers primary only, his contribution is weekdays, no block penalty"); }
+  // (F) the weekend unit's own style terms (weekendUnitPatterns), BACKUP enumeration of the 6/11 weekend, a clean schedule
+  const FRI = "2027-06-11", SAT = "2027-06-12", SUN = "2027-06-13";
+  const pats = (on, busy, present) => { const m = {}; R.weekendUnitPatterns(cF(on, { eastBusyDays: { [KHAN]: busy } }), FRI, B, present).forEach((p) => { m[p.kind + "|" + JSON.stringify(p.members)] = { penalty: p.penalty, members: p.members, kind: p.kind }; }); return m; };
+  const khanDays = (mem) => ["fri", "sat", "sun"].filter((k) => mem[k] === KHAN);
+  const cmp = (busy, expectDrop, label) => {
+    const off = pats(false, busy), on = pats(true, busy), keys = Object.keys(off);
+    eq(Object.keys(on).sort(), keys.slice().sort(), label + ": the same patterns are enumerated with and without the switch");
+    let dropped = 0;
+    keys.forEach((k) => { const d = expectDrop(off[k]); if (d) dropped++; if (on[k].penalty !== off[k].penalty - d) fail(label + ": pattern " + k + " penalty " + off[k].penalty + " -> " + on[k].penalty + ", expected a drop of " + d); N++; });
+    ok(dropped > 0, label + ": at least one pattern loses a style term (the comparison is not vacuous)");
+    return dropped;
+  };
+  // his East Saturday only: every pattern where he holds the Saturday without the whole block loses ONE style term (3) -
+  // the split's Saturday side, a daily Saturday; his Fri + Sun split side and his whole block are untouched
+  cmp([SAT], (p) => { const kd = khanDays(p.members); return kd.indexOf("sat") >= 0 && kd.length < 3 ? 3 : 0; }, "(F) East Saturday");
+  // his East Friday + Sunday (a weekend call around a free Saturday): his Fri + Sun split side loses its one term; a daily
+  // Friday or Sunday loses its own; holding the Saturday changes nothing
+  cmp([FRI, SUN], (p) => { const kd = khanDays(p.members); if (kd.length === 3 || !kd.length) return 0; return p.kind === "split" ? (kd.indexOf("fri") >= 0 ? 3 : 0) : 3 * kd.filter((k) => k !== "sat").length; }, "(F) East Friday + Sunday");
+  // a membership with a day that is NOT an East call day keeps its term: East Friday only, his Fri + Sun split side still pays 3
+  { const off = pats(false, [FRI]), on = pats(true, [FRI]);
+    const kx = Object.keys(off).filter((k) => off[k].kind === "split" && off[k].members.fri === KHAN);
+    ok(kx.length > 0 && kx.every((k) => on[k].penalty === off[k].penalty), "(F) East Friday only: his Fri + Sun split side keeps its style term (Sunday is no East call day)"); }
+  // a ONE-day unit (only the Saturday present): his whole-weekend style charges a lone day 3 - not on his East Saturday
+  { const off = pats(false, [SAT], [SAT]), on = pats(true, [SAT], [SAT]);
+    const kb = Object.keys(off).filter((k) => off[k].kind === "block" && off[k].members.sat === KHAN);
+    eq(kb.map((k) => off[k].penalty - on[k].penalty), [3], "(F) a one-day unit on his East Saturday: the block-style term is dropped");
+    ok(Object.keys(off).filter((k) => off[k].members.sat !== KHAN).every((k) => on[k].penalty === off[k].penalty), "(F) ...and nobody else's pattern moves"); }
+  // PRIMARY enumerations never read the switch
+  { const pp = (on) => JSON.stringify(R.weekendUnitPatterns(cF(on, { eastBusyDays: { [KHAN]: [SAT] } }), FRI, P));
+    eq(pp(true), pp(false), "(F) the primary enumeration is identical with and without the switch"); }
+  // ...shown on a surgeon the comparison can bite on: on the seed's Khan East blocks his primary and his Friday key covers
+  // his primary shapes, so no primary pattern holds him on the East Saturday at all. A made-up block-style variant - East
+  // blocks no primary, no standaloneFriday / noLoneWeekendDay key - does hold primary patterns on his lone East Saturday,
+  // each with its style term, and they read the same with and without the switch
+  { const variant = (on) => { const s = srFree(on); s[KHAN].eastFeed = Object.assign({}, s[KHAN].eastFeed, { eastBlocksPrimary: false }); delete s[KHAN].standaloneFriday; delete s[KHAN].noLoneWeekendDay; return makeCtx({ schedule: {}, timeOffRows: [], surgeonRules: s, eastBusyDays: { [KHAN]: [SAT] } }); };
+    const pv = (on) => R.weekendUnitPatterns(variant(on), FRI, P);
+    const loneSat = pv(true).filter((p) => p.members.sat === KHAN && p.members.fri !== KHAN && p.members.sun !== KHAN);
+    ok(loneSat.length > 0, "(F) the variant holds primary patterns with him on the lone East Saturday (the comparison is not vacuous): " + pv(true).length + " patterns");
+    eq(JSON.stringify(pv(true)), JSON.stringify(pv(false)), "(F) ...and every primary pattern, penalties included, is identical with and without the switch");
+    eq(R.backupFreeOnEastDay(variant(true), KHAN, SAT), true, "(F) ...although the Saturday IS one of his East call days for backup"); }
+  // (G) the generator's style-mismatch flag (genStyleMismatch - the preview's "style mismatch" and the unit's fallback mark)
+  // reads the same answer: a BACKUP holding of his made only of East call days is no mismatch; one with a day that is not an
+  // East call day still is; without the switch it is; and a primary holding never is exempt. Burchett (split style) holds
+  // the other days, so Khan is the only block-style member.
+  { const unit = { present: [FRI, SAT, SUN] };
+    const row = (fri, sat, sun, role) => ({ [FRI]: { [role]: fri }, [SAT]: { [role]: sat }, [SUN]: { [role]: sun } });
+    const flag = (on, sched, role, members, busy) => G.genStyleMismatch({ ctx: cF(on, { schedule: sched, eastBusyDays: { [KHAN]: busy || [SAT] } }), R: R }, unit, role, members);
+    eq(clean.per[BURCHETT].weekendStyle === "block", false, "(G) fixture: Burchett is not block style");
+    eq(flag(true, row(BURCHETT, KHAN, BURCHETT, B), B, { fri: BURCHETT, sat: KHAN, sun: BURCHETT }), [], "(G) switch on: his backup on the East Saturday alone is no style mismatch");
+    eq(flag(false, row(BURCHETT, KHAN, BURCHETT, B), B, { fri: BURCHETT, sat: KHAN, sun: BURCHETT }), [KHAN], "(G) switch off: the same holding is one (today's reading)");
+    eq(flag(true, row(KHAN, KHAN, BURCHETT, B), B, { fri: KHAN, sat: KHAN, sun: BURCHETT }), [KHAN], "(G) switch on: Fri + East Sat - the Friday is no East call day, so the holding is still a mismatch");
+    eq(flag(true, row(KHAN, BURCHETT, KHAN, B), B, { fri: KHAN, sat: BURCHETT, sun: KHAN }, [FRI, SUN]), [], "(G) switch on: Fri + Sun, both East call days - no mismatch");
+    eq(flag(true, row(KHAN, KHAN, KHAN, B), B, { fri: KHAN, sat: KHAN, sun: KHAN }), [], "(G) his whole weekend is never a mismatch");
+    // a PRIMARY holding is never exempt: the block-style variant of (F) on the lone East Saturday, switch on and off
+    const variantCtx = (on, sched) => { const s = srFree(on); s[KHAN].eastFeed = Object.assign({}, s[KHAN].eastFeed, { eastBlocksPrimary: false }); delete s[KHAN].standaloneFriday; delete s[KHAN].noLoneWeekendDay; return makeCtx({ schedule: sched, timeOffRows: [], surgeonRules: s, eastBusyDays: { [KHAN]: [SAT] } }); };
+    eq([true, false].map((on) => G.genStyleMismatch({ ctx: variantCtx(on, row(BURCHETT, KHAN, BURCHETT, P)), R: R }, unit, P, { fri: BURCHETT, sat: KHAN, sun: BURCHETT })), [[KHAN], [KHAN]], "(G) a PRIMARY on his lone East Saturday is a style mismatch with and without the switch");
+    // a caller that hands only { ctx } (no rules module) gets the same answer - it used to throw for the backup role
+    eq(G.genStyleMismatch({ ctx: cF(true, { schedule: row(BURCHETT, KHAN, BURCHETT, B), eastBusyDays: { [KHAN]: [SAT] } }) }, unit, B, { fri: BURCHETT, sat: KHAN, sun: BURCHETT }), [], "(G) genStyleMismatch({ ctx }) without the rules module: the same answer, no throw"); }
+}
+
 const total = Date.now() - t0;
 const BUDGET_MS = process.env.SILVIS_RULES_BUDGET_MS ? Math.floor(+process.env.SILVIS_RULES_BUDGET_MS) : 5000;
 const budgetNote = "budget " + BUDGET_MS + " ms" + (process.env.SILVIS_RULES_BUDGET_MS ? " via SILVIS_RULES_BUDGET_MS" : "");

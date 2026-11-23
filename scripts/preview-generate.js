@@ -2,8 +2,12 @@
 /*
  * Silvis Call Schedule - Prompt 8 preview runner (Node, read-only).
  *
- * Builds the SAME rules context the app builds (live anon-readable rows: blob,
- * schedule_days, time_off, availability, east_feed, east_forecast, east_overrides),
+ * Builds the rules context from the live anon-readable rows (blob, schedule_days,
+ * time_off, availability, east_feed, east_forecast, east_overrides) the way the app
+ * does - with two limits, both named in the report: the East vacation REVIEWS and the
+ * OFFERS / PERIODS need a sign-in, so every East vacation range reads as unreviewed
+ * (a vacation - stricter than the app when a range was reviewed home) and the run is
+ * rules-only for everyone (see "East vacations" below) - then
  * runs generator.generate() for a range and writes a Markdown report + a JSON
  * dump of the candidate schedule. It never writes to the database - publishing
  * happens in the app (Setup -> Generate -> Accept & Publish) after Faraz's review.
@@ -45,6 +49,13 @@
  * east-feed.js eastListsPlan) and lay them over the rows IN MEMORY: what Generate will read once a refresh has cached
  * them (an untrusted read stops the script). none = ignore any cached copy (the picture before Prompt 34). The report
  * names which one ran; nothing is written either way.
+ * East vacations (Prompt 37, Faraz 11/22 - until then this script passed none, and a preview placed the East person on
+ * days the app's Generate refuses): for each East person (the app's eastVacationPerson, restated: an enabled East feature
+ * that blocks a role, a roster code, not an outside surgeon) the ranges of east-feed.js eastVacations(rows, code) from the
+ * cached east_feed rows go to buildContext as eastVacationRanges, exactly as the app passes them. The review rows
+ * (east_vacation_reviews) need a sign-in and are NOT read: every range reads as unreviewed, which the rules treat as a
+ * vacation - right for an away or unreviewed range, stricter than the app for one reviewed home. The call_offers and
+ * call_periods rows need a sign-in too and are not read: nobody's painted days are placed first and no period governs.
  */
 const fs = require("fs");
 const os = require("os");
@@ -219,9 +230,14 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   const forecastCode = fc0.code ? String(fc0.code).toUpperCase() : null;
   const fakIdEast = fc0.fakId || null;
   const eastBusyDays = {}, eastForecast = {}, eastDerived = [], eastDerivedWarnings = [];
+  const eastVacationRanges = {}; // Prompt 37: { rosterId: [{ start, end }] } - the East person's vacation ranges from the cached east_feed rows, by CODE (the app's ctxInputs)
   for (const s of roster) {
     const ef = (surgeonRules[s.id] || {}).eastFeed || {};
     if (!ef.enabled) continue;
+    if ((ef.eastBlocksPrimary || ef.eastBlocksBackup) && s.code && s.type !== "external") { // the app's eastVacationPerson(s, ef), restated
+      const ranges = EF.eastVacations(feedRows, s.code);
+      if (ranges.length) eastVacationRanges[s.id] = ranges;
+    }
     if (ef.eastBlocksPrimary || ef.eastBlocksBackup) {
       let eastId = forecastCode && String(s.code || "").toUpperCase() === forecastCode ? fakIdEast : null;
       if (!eastId) { // resolve by code from the Davenport roster (read-only)
@@ -242,7 +258,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
       for (const w of dd.warnings) eastDerivedWarnings.push(nameOf(s.id) + ": " + EF.eastDerivedWarningText(w));
     }
   }
-  const input = { roster, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastBusyDays, eastForecast, eastOverrides, eastFeedCoverage, eastDerived, rangeStart: START, rangeEnd: END };
+  const input = { roster, surgeonRules, groupRules, holidays, timeOffRows, availabilityRows, schedule, eastBusyDays, eastForecast, eastOverrides, eastFeedCoverage, eastDerived, eastVacationRanges, rangeStart: START, rangeEnd: END };
   if (TODAY) input.today = TODAY; // Prompt 23: else rules.js reads the Central date
   const ctx = R.buildContext(input);
   const t1 = Date.now();
@@ -255,7 +271,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
   const L = [];
   L.push(`# Generate preview ${START} -> ${END}`);
   L.push("");
-  L.push(`*Generated ${new Date().toISOString()} by scripts/preview-generate.js from the LIVE rows (read-only; nothing published). seed ${SEED}, bestOf ${BEST_OF}, candidates tried ${dg.candidatesTried != null ? dg.candidatesTried : "?"}, generate() ${t2 - t1} ms, data fetch ${t1 - t0} ms. East feed coverage ${eastFeedCoverage ? eastFeedCoverage.from + ".." + eastFeedCoverage.to : "none"}; forecast rows ${forecastRows.length}; derived weeks ${eastDerived.map(d => d.weekMonday + ":" + d.silvisRole + "(" + EF.eastSourceLabel(d.source) + ")").join(", ") || "none"}; East week lists ${eastListsNote}; rules today ${ctx.today || "-"}${TODAY ? " (--today)" : " (the Central date)"}.*`);
+  L.push(`*Generated ${new Date().toISOString()} by scripts/preview-generate.js from the LIVE rows (read-only; nothing published). seed ${SEED}, bestOf ${BEST_OF}, candidates tried ${dg.candidatesTried != null ? dg.candidatesTried : "?"}, generate() ${t2 - t1} ms, data fetch ${t1 - t0} ms. East feed coverage ${eastFeedCoverage ? eastFeedCoverage.from + ".." + eastFeedCoverage.to : "none"}; forecast rows ${forecastRows.length}; derived weeks ${eastDerived.map(d => d.weekMonday + ":" + d.silvisRole + "(" + EF.eastSourceLabel(d.source) + ")").join(", ") || "none"}; East week lists ${eastListsNote}; East vacation ranges ${Object.keys(eastVacationRanges).map(id => nameOf(id) + " " + eastVacationRanges[id].filter(r => r.end >= START && r.start <= END).length + " in the range (" + eastVacationRanges[id].length + " cached)").join(", ") || "none"} - each read as unreviewed, a vacation (the review rows need a sign-in); offers and periods not read (sign-in only): rules only; rules today ${ctx.today || "-"}${TODAY ? " (--today)" : " (the Central date)"}.*`);
   if (overrideApplied.length) { L.push(""); L.push(`**Rules override (in memory only - nothing saved): ${md(ARGS.rulesOverride)}** - ${md(overrideApplied.join(", "))}.`); }
   if (eastDerivedWarnings.length) { L.push(""); L.push(`**Derived-week warnings:** ${md(eastDerivedWarnings.join("; "))}.`); }
   L.push("");
@@ -316,7 +332,7 @@ function md(s) { return String(s == null ? "" : s).replace(/\|/g, "\\|"); }
           ? `### ${m}: primary ${I.poolSlots.primary} pool slots (${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows + ${I.heldByPool ? I.heldByPool.primary : "-"} held) = level ${lvl(I.primaryShare)} each of ${I.poolSize}; backup ${I.poolSlots.backup} pool slots (${I.backupOpen} open + ${I.heldByPool ? I.heldByPool.backup : "-"} held) = level ${lvl(I.backupShare)}${typeof I.weightedShare === "number" ? ` at the primary level; weighted level ${I.weightedShare}${I.makeupRounds ? ` (${I.makeupRounds} makeup round(s))` : ""}` : ""}${pl}${partial}`
           : `### ${m}: pre-9/23 preview (flat share): primary ${I.primaryOpen} open - ${I.reservedForWindows} reserved for windows, share ${I.primaryShare} each of ${I.poolSize}; backup ${I.backupOpen} open, share ${I.backupShare}${pl}${partial}`); L.push("");
         L.push("| Surgeon | Target P | Allowed P | Held P | Clip P | Target B | Allowed B | Held B | Fill clip P / B | W share |"); L.push("|---|---|---|---|---|---|---|---|---|---|");
-        for (const s of roster) { const M = I.members[s.id]; if (!M) continue; const v = (x) => (x == null ? "-" : x); const flagP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget ? " (short)" : ""; const flagB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget ? " (short)" : ""; L.push(`| ${s.name} | ${v(M.primaryTarget)} | ${M.allowedPrimary}${flagP} | ${M.lockedHeld.primary} | ${v(M.clipPrimary)} | ${v(M.backupTarget)} | ${M.allowedBackup}${flagB} | ${M.lockedHeld.backup} | ${M.fillClip ? M.fillClip.primary + " / " + M.fillClip.backup : "-"} | ${v(M.weightedShare)}${M.makeupPrimary > 0 ? " (+" + M.makeupPrimary + " P makeup)" : ""} |`); }
+        for (const s of roster) { const M = I.members[s.id]; if (!M) continue; const v = (x) => (x == null ? "-" : x); const flagP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget ? " (short)" : ""; const flagB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget ? " (short)" : ""; L.push(`| ${s.name} | ${v(M.primaryTarget)} | ${M.allowedPrimary}${flagP} | ${M.lockedHeld.primary} | ${v(M.clipPrimary)} | ${v(M.backupTarget)}${typeof H.backupTargetNote === "function" ? H.backupTargetNote(M.backupOverride) : ""} | ${M.allowedBackup}${flagB} | ${M.lockedHeld.backup} | ${M.fillClip ? M.fillClip.primary + " / " + M.fillClip.backup : "-"} | ${v(M.weightedShare)}${M.makeupPrimary > 0 ? " (+" + M.makeupPrimary + " P makeup)" : ""} |`); }
         L.push("");
       }
     }

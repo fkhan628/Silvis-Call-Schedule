@@ -569,6 +569,7 @@ function shortRests(view, id, from, to, minDaysOff) {
   return out;
 }
 const REST_SEEN = { runs: 0, rests: 0, entries: 0 };
+const BT_SEEN = { months: 0, binding: 0 }; // Prompt 37: the months checkRun restated with an explicit backup target, and those where the number that counts differs from the share
 function checkRest(out, range, id) {
   const minD = REST[id]; if (minD === null) return [];
   const view = makeView(out), rests = shortRests(view, id, addDays(range.start, -30), addDays(range.end, 30), minD);
@@ -609,12 +610,15 @@ function checkFixedViolations(D, label) {
 
 /* ------------------------------------------------------- the checks */
 // deep: also compare diagnostics.tallies[id].range run lengths with runLengths() (every R4 run + the bestOf-200 run).
-function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extraOffers) { // extraRows (W): dated rows a fixture run appended to the seed's;
+function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extraOffers, extraTarget, extraEastFree) { // extraTarget (Prompt 37): { id: { backup: N } } - an explicit backup target a fixture run set on a pool member (the seed carries none); extraEastFree (Prompt 37): { id: Set<day> } - the East call days of a member whose fixture run turned eastFeed.backupFreeOnEastDays on (a backup holding made only of such days is no style mismatch); extraRows (W): dated rows a fixture run appended to the seed's;
   // extraVac (Prompt 15): { id: Set<day> } - a derived East vacation (unreviewed / away range) restated as a vacation
   // extraHome (Prompt 15 x WF, found rebasing the water-filled share onto East vacations 9/23): { id: Set<day> } - a HOME range
   // the fixture handed him (east-clear: OR-day rule lifted + a PRIMARY bonus). Only the quality-1 pin below reads it.
   CUR.range = range.name; CUR.seed = seedNo; CUR.day = "-";
   const vacHas = (id, d) => VAC[id].has(d) || !!(extraVac && extraVac[id] && extraVac[id].has(d));
+  // Prompt 37 (Faraz 11/22), restated: with eastFeed.backupFreeOnEastDays a BACKUP holding of a weekend unit whose every
+  // day is one of the member's East call days carries no style term, so it needs no fallback flag (item 11, both halves)
+  const eastFreeHolding = (v, present, role, id) => { if (role !== B || !extraEastFree || !extraEastFree[id]) return false; const held = present.filter((x) => holder(v, x, role) === id); return held.length > 0 && held.every((x) => extraEastFree[id].has(x)); };
   // extraOffers (Prompt 14 P2 x WF, found rebasing offers onto the water-filled share 9/23): call_offers rows a fixture run
   // handed the generator. An offer is a dated available row for its date and role(s): it lifts the weekday pattern (W)
   // and the whitelist-month / available-weeks lists on its own date - the per-date lift restated below. Since 10/18 that is
@@ -788,7 +792,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
         const fri = fridayOf(d);
         const present = [0, 1, 2].map((k) => addDays(fri, k)).filter((x) => days.includes(x) && !isHoliday(x));
         const holdsAll = present.every((x) => holder(view, x, role) === id);
-        if (!holdsAll && !sfShapeOk(view, present, role, id)) { // Prompt 23 B2: a standaloneFriday surgeon's {Fri} / {Sat, Sun} primary shapes are no lone day
+        if (!holdsAll && !sfShapeOk(view, present, role, id) && !eastFreeHolding(view, present, role, id)) { // Prompt 23 B2: a standaloneFriday surgeon's {Fri} / {Sat, Sun} primary shapes are no lone day; Prompt 37: nor is a backup holding made only of his East call days (the switch on)
           const wu = D.weekendUnits.find((w) => w.friday === fri);
           ok(wu && wu.roles[role] && wu.roles[role].fallback === true, CODE[id] + " holds a lone weekend day (" + d + " " + role + ") in a unit not flagged fallback");
         }
@@ -916,7 +920,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     }
     const makeup = {}; Object.keys(holds).forEach((id) => { const x = fm.find((y) => y.id === id); makeup[id] = snap9(holds[id] - (st.pLevel === null ? x.clipP : Math.min(st.pLevel, x.clipP))); });
     const bShare = st.W === null || st.lref === null ? null : Math.max(0, snap9((st.W - SW.primary * st.lref) / SW.backup));
-    return { p: st.p, b: st.b, pLevel: st.pLevel, bShare, W: st.W, rounds, makeup };
+    return { p: st.p, b: st.b, pLevel: st.pLevel, bShare, W: st.W, rounds, makeup, lref: st.lref };
   };
   eq(D.impliedTargets.convexity, CONVEXITY, "impliedTargets.convexity = the seed's weights.deviationConvexity (" + CONVEXITY + ")");
   eq(D.impliedTargets.weights, SW, "impliedTargets.weights = the seed's shiftAccounting.weights (Prompt 32 step 2: the weighted view's weights)");
@@ -957,7 +961,39 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     eq([I.poolSlots, I.heldByPool], [poolSlots, heldByPool], "impliedTargets " + m + " poolSlots / heldByPool = (open - reserved | open) + the pool's whole-month held days per role");
     // (2) the fill clips: the cap clip / backup cap met by what the rules allow (allowed + held)
     const FILL = {}; POOL.forEach((id) => { const M = I.members[id] || { allowedPrimary: 0, allowedBackup: 0 }; FILL[id] = { primary: minN(CLIP_P[id], M.allowedPrimary + HELD[id].primary), backup: minN(clipB(id), M.allowedBackup + HELD[id].backup) }; });
-    const SH = sharesR(POOL.map((id) => ({ id, clipP: FILL[id].primary, clipB: FILL[id].backup })), poolSlots);
+    const SH0 = sharesR(POOL.map((id) => ({ id, clipP: FILL[id].primary, clipB: FILL[id].backup })), poolSlots);
+    // Prompt 37 (Faraz 11/22), restated independently of generator.js: an explicit backup target (extraTarget) is
+    // prorated by the member's away days of the calendar month (his vacations as this file restates them, derived East
+    // ones included); the proration never takes it below the backup share he has in the no-target solution SH0, nor -
+    // a number SET below that share - below the number itself: max(prorated, min(asked, share)). When that differs
+    // from his share, the rest of the pool's backup slots go to the members without one, each weighed at his UNCHANGED
+    // primary share. The primary side (shares, level, makeup, rounds) is always SH0's.
+    // Fix round (11/22), restated here too: (a) the number counts for the month's days IN PLAY - the days of the month in
+    // the range plus the days that already hold a backup on the base schedule; in a month whose other days are not
+    // scheduled yet (the tail of a range) that is fewer than its days, and both the prorated number and the "number as
+    // set" the floor reads shrink with it; (b) a number above the month's days reads as the days; (c) a number above
+    // his HARD backup cap is the cap.
+    const BT = {};
+    POOL.forEach((id) => {
+      const t = extraTarget && extraTarget[id];
+      if (!t) return;
+      const md = monthDays(m), play = md.filter((d) => (d >= range.start && d <= range.end) || baseHolder(d, B) !== null);
+      const away = play.filter((d) => vacHas(id, d)).length, n = Math.min(t.backup, md.length), cap = clipB(id);
+      let prorated = round1(n * (play.length - away) / md.length);
+      const capped = cap !== null && prorated > cap;
+      if (capped) prorated = cap;
+      const askedIn = n * play.length / md.length;
+      BT[id] = { asked: t.backup, days: md.length, away, prorated, share: SH0.b[id], eff: Math.max(prorated, Math.min(askedIn, SH0.b[id])), counted: play.length < md.length ? play.length : undefined, cap: capped ? cap : undefined };
+    });
+    const btIds = Object.keys(BT), btBinding = btIds.some((id) => BT[id].eff !== BT[id].share);
+    let SH = SH0;
+    if (btBinding) {
+      const fbR = weightedFillR(POOL.filter((id) => !BT[id]).map((id) => ({ id, p: SH0.p[id], clip: FILL[id].backup })), poolSlots.backup - btIds.reduce((s, id) => s + BT[id].eff, 0));
+      const bR = Object.assign({}, fbR.share); btIds.forEach((id) => { bR[id] = BT[id].eff; });
+      SH = Object.assign({}, SH0, { b: bR, W: fbR.level, bShare: fbR.level === null || SH0.lref === null ? null : Math.max(0, snap9((fbR.level - SW.primary * SH0.lref) / SW.backup)) });
+    }
+    if (btIds.length) BT_SEEN.months++;
+    if (btBinding) BT_SEEN.binding++;
     LEVEL[m] = { primary: SH.pLevel, backup: SH.bShare, weighted: SH.W, p: SH.p, b: SH.b, fill: FILL };
     eq([I.primaryShare, I.backupShare, I.weightedShare], [round1n(SH.pLevel), round1n(SH.bShare), round1n(SH.W)], "impliedTargets " + m + " primaryShare / backupShare / weightedShare = the restated levels over the pool's slots (" + poolSlots.primary + " P / " + poolSlots.backup + " B)");
     eq([I.makeupRounds, I.weights], [SH.rounds, SW], "impliedTargets " + m + " makeupRounds / weights (restated: " + SH.rounds + " round(s), makeup " + JSON.stringify(SH.makeup) + ")");
@@ -975,16 +1011,28 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       // the member is short, and a primary target above the primary level by the reverse makeup - both restated exactly above.
       // The floor it guarded is checked directly: a member whose held days exceed his restated share is never targeted at them.
       ok((heldP <= SH.p[id] + 0.05 || M.primaryTarget < heldP) && (heldB <= SH.b[id] + 0.05 || M.backupTarget < heldB), CODE[id] + " a target lifted to the held days in " + m + " (a locked floor is back): " + JSON.stringify(M));
-      ok(M.primaryTarget <= FILL[id].primary + 0.05 && M.backupTarget <= FILL[id].backup + 0.05, CODE[id] + " a target above its fill clip in " + m + ": " + JSON.stringify(M));
+      // Prompt 37: an explicit backup number is NOT clipped at what the rules ALLOW him that month (allowed + held, the rest
+      // of the fill clip - the preview flags it "(short)"); it IS held at his hard backup cap (the cap check below reads a
+      // numbered member like everyone else); every share still is within its fill clip
+      ok(M.primaryTarget <= FILL[id].primary + 0.05 && (!!BT[id] || M.backupTarget <= FILL[id].backup + 0.05), CODE[id] + " a target above its fill clip in " + m + ": " + JSON.stringify(M));
+      // Prompt 37: the note is carried by a member with an explicit backup target and by nobody else; a primary target never
+      // reads it. counted only in a month the schedule covers in part, cap only when his hard cap is what the number stopped at
+      const noteR = BT[id] ? { asked: BT[id].asked, days: BT[id].days, away: BT[id].away, prorated: BT[id].prorated, share: round1(BT[id].share), target: round1(BT[id].eff) } : undefined;
+      if (noteR && BT[id].counted !== undefined) noteR.counted = BT[id].counted;
+      if (noteR && BT[id].cap !== undefined) noteR.cap = BT[id].cap;
+      eq(M.backupOverride, noteR, CODE[id] + " backupOverride in " + m + " (restated: " + JSON.stringify(BT[id] || null) + ")");
+      eq(M.primaryTarget, round1(SH0.p[id]), CODE[id] + " primary target in " + m + " is not the no-target solution's (a backup target moved a primary share)");
       ok(M.primaryTarget <= (M.clipPrimary === null ? Infinity : M.clipPrimary) + 0.05, CODE[id] + " primary target " + M.primaryTarget + " above his clip " + M.clipPrimary + " in " + m);
       if (clipB(id) !== null) ok(M.backupTarget <= clipB(id) + 0.05, CODE[id] + " backup target " + M.backupTarget + " above his backup cap in " + m);
       ok(typeof M.allowedPrimary === "number" && typeof M.allowedBackup === "number" && M.allowedPrimary >= 0 && M.allowedPrimary <= primaryOpen && M.allowedBackup >= 0 && M.allowedBackup <= backupOpen, CODE[id] + " allowedPrimary / allowedBackup out of range in " + m + ": " + JSON.stringify(M));
       eq(D.tallies[id].months[m].target, { primary: M.primaryTarget, backup: M.backupTarget }, CODE[id] + " tallies target = { primary, backup } in " + m);
     });
     // the sums of the restated shares are the pool's slots where a level exists (the fill hands out every slot), else the fill
-    // clips (every member on his clip, the rest of the slots carry no target pressure)
+    // clips (every member on his clip, the rest of the slots carry no target pressure). Prompt 37: explicit backup numbers
+    // that together exceed the pool's backup slots leave the others 0 - the sum is then the numbers themselves.
     const sumClips = (role) => POOL.reduce((s, id) => s + FILL[id][role], 0);
-    ok(Math.abs(POOL.reduce((s, id) => s + SH.p[id], 0) - (SH.pLevel === null ? sumClips(P) : poolSlots.primary)) < 1e-6 && Math.abs(POOL.reduce((s, id) => s + SH.b[id], 0) - (SH.W === null ? sumClips(B) : poolSlots.backup)) < 1e-6, "restated shares in " + m + " do not sum to the pool's slots " + JSON.stringify(poolSlots) + " (or the fill clips where no level exists): " + JSON.stringify([SH.p, SH.b]));
+    const sumEff = btBinding ? btIds.reduce((s, id) => s + BT[id].eff, 0) : 0;
+    ok(Math.abs(POOL.reduce((s, id) => s + SH.p[id], 0) - (SH.pLevel === null ? sumClips(P) : poolSlots.primary)) < 1e-6 && Math.abs(POOL.reduce((s, id) => s + SH.b[id], 0) - (SH.W === null ? POOL.reduce((s, id) => s + (btBinding && BT[id] ? BT[id].eff : FILL[id][B]), 0) : Math.max(poolSlots.backup, sumEff))) < 1e-6, "restated shares in " + m + " do not sum to the pool's slots " + JSON.stringify(poolSlots) + " (or the fill clips where no level exists): " + JSON.stringify([SH.p, SH.b]));
     if (SH.pLevel === null) ok(sumClips(P) < poolSlots.primary, "restated: no primary level in " + m + " although the fill clips hold the pool's slots");
     // pin moved deliberately 10/11: Prompt 32 step 2 clipPrimary is the soft limit (else the hard cap) minus East days, no "- 1":
     // MAB 7 (was 6), AFP / BDA / FAK the group's 7 (was null), NF 14 - East days (was 13 - East days)
@@ -1000,6 +1048,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     const MS = I.members[SARKAR];
     eq([I.windowTarget[SARKAR], I.windowWeeks[SARKAR]], [SARKAR_TARGET * nW, nW], "Sarkar impliedTargets.windowTarget / windowWeeks in " + m);
     eq([MS.primaryTarget, MS.backupTarget], [nW ? SARKAR_TARGET * nW : null, null], "Sarkar primaryTarget = window target, backupTarget null in " + m + " (got " + JSON.stringify(MS) + ")");
+    ok(!("backupOverride" in MS), "Sarkar carries no backupOverride note in " + m + " (Prompt 37: the note is only on a member with an explicit backup number)");
     eq(MS.allowedPrimary, mdaysIn.filter((d) => SARKAR_WINDOW.has(d) && baseOpen(d, P) && !vacHas(SARKAR, d) && !rowBlocks(SARKAR, d, P)).length, "Sarkar allowedPrimary = open in-range primary slots inside her windows (minus vacations and fixture unavailable rows) in " + m);
     eq(D.tallies[SARKAR].months[m].target, { primary: nW ? SARKAR_TARGET * nW : null, backup: null }, "Sarkar tallies target in " + m);
     // Prompt 32 step 2: the windows surgeon keeps today's handling - out of the fills, no fill clip, no makeup; her weighted
@@ -1024,7 +1073,11 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       IDS.forEach((id) => { const M = I.members[id]; if (!M) return; if (typeof M.primaryTarget === "number") { plP += Math.max(0, M.primaryTarget - M.lockedHeld.primary); haP += Math.max(0, M.lockedHeld.primary - M.primaryTarget); } if (typeof M.backupTarget === "number") { plB += Math.max(0, M.backupTarget - M.lockedHeld.backup); haB += Math.max(0, M.lockedHeld.backup - M.backupTarget); } });
       eq(I.placeableAtTarget, { primary: round1(plP), backup: round1(plB) }, "impliedTargets " + m + " placeableAtTarget = sum of max(0, target - lockedHeld) per role (got " + JSON.stringify(I.placeableAtTarget) + ")");
       eq(I.heldAboveShare, { primary: round1(haP), backup: round1(haB) }, "impliedTargets " + m + " heldAboveShare = sum of max(0, lockedHeld - target) per role (got " + JSON.stringify(I.heldAboveShare) + ")");
-      ok(I.placeableAtTarget.primary >= primaryOpen - reserved - 0.05 && I.placeableAtTarget.backup >= backupOpen - 0.05, "impliedTargets " + m + " placeableAtTarget below the pool's open slots (a share is not being redistributed): " + JSON.stringify(I.placeableAtTarget) + " vs open " + (primaryOpen - reserved) + " / " + backupOpen);
+      // Prompt 37: with an explicit backup number the others' shares are what a whole number leaves (thirds, say) and each
+      // target is rounded to 0.1 on its own, so the rounded sum may sit up to 0.05 per pool member under the slots; every
+      // run without such a number keeps the 0.05 it always had
+      const tolB = btIds.length ? 0.05 * POOL.length : 0.05;
+      ok(I.placeableAtTarget.primary >= primaryOpen - reserved - 0.05 && I.placeableAtTarget.backup >= backupOpen - tolB, "impliedTargets " + m + " placeableAtTarget below the pool's open slots (a share is not being redistributed): " + JSON.stringify(I.placeableAtTarget) + " vs open " + (primaryOpen - reserved) + " / " + backupOpen);
       eq(I.rangeDays, mdaysIn.length, "impliedTargets " + m + " rangeDays = the month's in-range days");
     }
     // K (fix stage): diagnostics.tallies carry the East primary-week days a countsEastDays cap adds
@@ -1102,7 +1155,10 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
     // other 5 pool members' clips fill the 28 slots at level 7), 5 below the primary level, so the weighted fill targets him at
     // wP / wB = 2 backups per missing primary above the backup share: 3.3 + 2 x 5 = 13.3. His 8 locked backups now sit BELOW
     // it and the generator gives him more (a member short of primaries makes it up in backups - Faraz 10/11, DESIGN "Generator" 4)
-    eq([nov.primaryShare, nov.backupShare, NF.fillClip.primary, NF.allowedPrimary, NF.backupTarget], [7, 3.3, 2, 2, 13.3], "Fierce November (Prompt 32 step 2): level 7 P / 3.3 B, his primary fill clip 2 (allowed 2), backup target 13.3");
+    // (these literals are the November with NO explicit backup number; a fixture run that sets one - Prompt 37's extraTarget -
+    // moves the backup level and his weighted backup target, and the restated line below still checks them)
+    if (!extraTarget) eq([nov.primaryShare, nov.backupShare, NF.fillClip.primary, NF.allowedPrimary, NF.backupTarget], [7, 3.3, 2, 2, 13.3], "Fierce November (Prompt 32 step 2): level 7 P / 3.3 B, his primary fill clip 2 (allowed 2), backup target 13.3");
+    else eq([nov.primaryShare, NF.fillClip.primary, NF.allowedPrimary], [7, 2, 2], "Fierce November with an explicit backup number elsewhere: the PRIMARY side is the no-number November's (level 7, his fill clip 2)");
     eq(NF.backupTarget, round1(Math.min(NF.fillClip.backup, LEVEL["2026-11"].backup + (SW.primary / SW.backup) * (LEVEL["2026-11"].primary - LEVEL["2026-11"].p[FIERCE]))), "Fierce November backup target = the backup share + 2 per missing primary (" + LEVEL["2026-11"].backup + " + 2 x (" + LEVEL["2026-11"].primary + " - " + LEVEL["2026-11"].p[FIERCE] + "))");
     ok(NF.lockedHeld.backup < NF.backupTarget, "Fierce November (Prompt 32 step 2): his 8 locked backups sit below his weighted backup target " + NF.backupTarget);
     ok(nov.heldAboveShare.backup >= NF.lockedHeld.backup - NF.backupTarget - 0.05, "November heldAboveShare.backup " + nov.heldAboveShare.backup + " must carry Fierce's excess " + round1(NF.lockedHeld.backup - NF.backupTarget));
@@ -1282,7 +1338,7 @@ function checkRun(out, range, seedNo, deep, extraRows, extraVac, extraHome, extr
       const rd = w.roles[role];
       if (!rd || rd.fallback) return;
       const members = [rd.members.fri, rd.members.sat, rd.members.sun].filter((v, i, a) => v && a.indexOf(v) === i);
-      members.forEach((id) => { if (BLOCK_STYLE.includes(id)) ok(w.present.every((d) => holder(view, d, role) === id) || sfShapeOk(view, w.present, role, id), CODE[id] + " (block style) does not hold every present day of an unflagged " + rd.kind + " unit (Prompt 23: a standaloneFriday primary shape excepted)"); });
+      members.forEach((id) => { if (BLOCK_STYLE.includes(id)) ok(w.present.every((d) => holder(view, d, role) === id) || sfShapeOk(view, w.present, role, id) || eastFreeHolding(view, w.present, role, id), CODE[id] + " (block style) does not hold every present day of an unflagged " + rd.kind + " unit (Prompt 23: a standaloneFriday primary shape excepted; Prompt 37: a backup holding of East call days only, the switch on)"); });
     });
   });
 
@@ -2543,6 +2599,134 @@ const TB_RUNS = { n: 0 };
   CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 }
 
+// ---- Prompt 37 (Faraz 11/22): an explicit monthly BACKUP target - in-town days only, primary shares untouched ----
+// "Khan gets a monthly backup target, the others share what's left. ... A month's target shrinks in proportion to the days
+// he's away. ... His extra backups don't lower his primary share, and don't give anyone else extra primaries." Plus the
+// reading taken on 11/22: the proration never takes his number below the share he has without a target (a number set
+// below that share stays as set).
+// Synthetic, independent of the seed: March 2027 (31 days), every slot open, a pool of a, b, c, d with no cap; a is away
+// 3/1 - 3/10 (time off: 10 of the 31 days). Restated by hand:
+//   no target      31 P and 31 B over the four -> 7.75 each (targets 7.8 / 7.8); a's 21 in-town days are far above it.
+//   backup 20      20 x 21 / 31 = 13.55 -> 13.5 counts (above his 7.75): b, c, d share 31 - 13.5 = 17.5 -> 5.83 each (5.8),
+//                  W* 7.75 + 0.5 x 5.83 = 10.67 (10.7); every primary target stays 7.8; no makeup.
+//   backup 9       9 x 21 / 31 = 6.1: the proration would take a number set ABOVE his share below it - it stops at the
+//                  share: his number reads 7.8 and the run is the no-target run - the same targets, the same schedule,
+//                  seed by seed.
+//   backup 5       set BELOW his share: it asks for fewer and stays as set - 5 (not 5 x 21 / 31 = 3.4, not 7.8); b, c, d
+//                  share 26 -> 8.67 each (8.7), W* 7.75 + 0.5 x 8.67 = 12.08 (12.1); every primary target stays 7.8.
+//   a non-pool z   (poolMember false, away the same days) with backup 5: 5 x 21 / 31 = 3.4, no share to stand on; the
+//                  pool's targets do not move.
+// Fix round (11/22), by hand as well:
+//   a hard cap     a with backupCap.perMonthDays 4 and NO number: his backup fill clip is 4, below the level, so the
+//                  reverse makeup holds him at more primaries - round 1: W* 7.75 + 0.5 x 9 = 12.25, he wants 10.25 P; the
+//                  others 6.92 P; no clamp left: 8 W* = 31 + 15.5 + ... -> W* 46.5 / 4 = 11.625, his backup 2.75 - round
+//                  2: he wants 11.625 - 2 = 9.625 P, the others 7.125 P, his backup (11.625 - 9.625) / 0.5 = 4 = his cap,
+//                  theirs 9; round 3 moves nothing. Targets a 9.6 P / 4 B, b c d 7.1 P / 9 B, W* 11.6, 2 makeup rounds.
+//                  WITH backup 20 on top: 20 x 21 / 31 = 13.5 is above his HARD cap, so the number reads 4 - his share
+//                  anyway - and the month is the cap-only month, target for target and day for day (the note says cap 4).
+//   a part month   only 3/1 - 3/10 generated on an empty schedule, a away 3/1 - 3/4: 10 P and 10 B over the four, 2.5
+//                  each. backup 20 counts for the days IN PLAY he is in town: 20 x 6 / 31 = 3.9 (the whole-month 17.4
+//                  would be more than the 10 slots and leave the others 0); b, c, d share 6.1 -> 2.03 each (2), W* 2.5 +
+//                  1.02 = 3.5. backup 5 is 5 x 10 / 31 = 1.61 for the ten days - below his share 2.5, so it stays as set
+//                  (1.6; prorated by his away days it would read 5 x 6 / 31 = 1); the others (10 - 1.61) / 3 = 2.8.
+//   held days      ...and with backups already held on 3/21 - 3/31 (b, 11 days) those days are in play too: 21 days, 17
+//                  of them in town -> 20 x 17 / 31 = 11; the pool's 21 slots give 5.25 each without a number, so 11
+//                  counts and b, c, d share 10 -> 3.3 each.
+// And on every run: a holds nothing on a day he is away (the hard time-off rule, not the target).
+const BT_RUNS = { n: 0 };
+{
+  CUR.range = "Prompt 37 backup-target fixture"; CUR.seed = "-"; CUR.day = "-";
+  const MONTH = "2027-03", FROM = MONTH + "-01", TO = MONTH + "-31", AWAY = monthDays(MONTH).slice(0, 10), FOUR = ["a", "b", "c", "d"];
+  const btCtx = (o) => {
+    const ids = FOUR.concat(o.z ? ["z"] : []);
+    const roster = ids.map((id) => ({ id, name: id.toUpperCase(), code: id.toUpperCase() + id.toUpperCase() + id.toUpperCase(), active: true, roles: ["surgeon"] }));
+    const surgeonRules = {};
+    ids.forEach((id) => { surgeonRules[id] = { poolMember: id !== "z", maxConsecutiveDays: 31, monthlyCap: "none" }; });
+    if (o.target !== undefined) surgeonRules.a.monthlyTarget = o.target;
+    if (o.cap !== undefined) surgeonRules.a.backupCap = { perMonthDays: o.cap };
+    if (o.z) surgeonRules.z.monthlyTarget = o.z;
+    const weights = { low: 1, medium: 3, strong: 10, preferred: -1, patternDaily: 0, patternMismatch: 0, backToBackWeekend: 0, backupAfterPrimary: 0, weekendContribution: 0, longRunPerDay: 0, smoothingTolerance: 2 };
+    const groupRules = { weekendUnit: { days: ["Fri", "Sat", "Sun"] }, defaultMaxConsecutiveDays: 31, backupDistinctFromPrimary: true, weights };
+    const awayDays = o.away || AWAY;
+    const timeOffRows = ["a"].concat(o.z ? ["z"] : []).map((id) => ({ person_id: id, start_date: awayDays[0], end_date: awayDays[awayDays.length - 1] }));
+    return R.buildContext({ roster, surgeonRules, groupRules, holidays: { units: {} }, timeOffRows, availabilityRows: [], schedule: o.schedule || {}, rangeStart: o.from || FROM, rangeEnd: o.to || TO });
+  };
+  const btRun = (o, seed) => {
+    const ctxB = btCtx(o);
+    ok(ctxB.warnings.length === 0, "backup-target fixture: buildContext warnings " + JSON.stringify(ctxB.warnings));
+    CUR.seed = seed;
+    const out = GEN.generate(ctxB, o.from || FROM, o.to || TO, { seed, bestOf: 3 });
+    BT_RUNS.n++;
+    eq([out.diagnostics.uncovered, out.diagnostics.hardViolations], [[], []], "backup-target fixture: every slot of the range is filled and no hard rule is broken");
+    (o.away || AWAY).forEach((d) => ok(out.schedule[d].primary !== "a" && out.schedule[d].backup !== "a", "backup-target fixture: a holds " + d + " although he is away that day (" + JSON.stringify(out.schedule[d]) + ")"));
+    return { out, I: out.diagnostics.impliedTargets.months[MONTH] };
+  };
+  const targetsOf = (I) => FOUR.map((id) => [I.members[id].primaryTarget, I.members[id].backupTarget]);
+  const backupsOf = (out, id) => monthDays(MONTH).filter((d) => out.schedule[d].backup === id).length;
+  // the ONE reading of the proration (rules.backupTargetFor): asked / days / away / target
+  {
+    const c20 = btCtx({ target: { primary: null, backup: 20 } });
+    eq([R.backupTargetFor(c20, "a", MONTH), R.backupTargetFor(c20, "a", "2027-04"), R.backupTargetFor(c20, "b", MONTH)], [{ asked: 20, days: 31, away: 10, target: 13.5 }, { asked: 20, days: 30, away: 0, target: 20 }, null], "rules.backupTargetFor: 20 x 21 / 31 = 13.5 in the month he is away 10 days, the number as set in a month he is not, null without a backup target");
+  }
+  [1, 2, 3].forEach((seed) => {
+    const r0 = btRun({}, seed), r20 = btRun({ target: { primary: null, backup: 20 } }, seed), r9 = btRun({ target: { backup: 9 } }, seed);
+    const tag = "backup-target fixture, seed " + seed + ": ";
+    // no target
+    eq([targetsOf(r0.I), r0.I.primaryShare, r0.I.backupShare, r0.I.weightedShare, r0.I.makeupRounds], [[[7.8, 7.8], [7.8, 7.8], [7.8, 7.8], [7.8, 7.8]], 7.8, 7.8, 11.6, 0], tag + "no target - 31 P / 31 B over the four, 7.75 each, W* 11.625");
+    ok(FOUR.every((id) => !("backupOverride" in r0.I.members[id])), tag + "no target - no member carries a backupOverride note");
+    eq([r0.I.members.a.allowedPrimary, r0.I.members.a.allowedBackup, r0.I.members.a.fillClip], [21, 21, { primary: 21, backup: 21 }], tag + "a is allowed his 21 in-town days per role (the fill clips), far above the share");
+    // backup 20: the prorated 13.5 counts; the others share what is left; no primary target moves
+    eq(r20.I.members.a.backupOverride, { asked: 20, days: 31, away: 10, prorated: 13.5, share: 7.8, target: 13.5 }, tag + "backup 20 - the note: asked 20, away 10 of 31 days, prorated 13.5, his share without a target 7.8, the number that counts 13.5");
+    eq([targetsOf(r20.I), r20.I.primaryShare, r20.I.backupShare, r20.I.weightedShare, r20.I.makeupRounds], [[[7.8, 13.5], [7.8, 5.8], [7.8, 5.8], [7.8, 5.8]], 7.8, 5.8, 10.7, 0], tag + "backup 20 - a 13.5, the others (31 - 13.5) / 3 = 5.8 each, W* 10.67, every primary target still 7.8");
+    ok(FOUR.every((id) => id === "a" || !("backupOverride" in r20.I.members[id])), tag + "backup 20 - only a carries the note");
+    eq([r20.out.diagnostics.tallies.a.months[MONTH].target, r20.I.members.a.weightedShare], [{ primary: 7.8, backup: 13.5 }, round1(1 * 7.8 + 0.5 * 13.5)], tag + "backup 20 - the tallies' target is { 7.8, 13.5 } and a's weighted share reads both");
+    ok(backupsOf(r20.out, "a") > backupsOf(r0.out, "a"), tag + "backup 20 - a holds more backups (" + backupsOf(r20.out, "a") + ") than without a target (" + backupsOf(r0.out, "a") + ")");
+    // backup 9: 6.1 after the proration is below his share - the number that counts is the share and nothing moves
+    eq(r9.I.members.a.backupOverride, { asked: 9, days: 31, away: 10, prorated: 6.1, share: 7.8, target: 7.8 }, tag + "backup 9 - the note: set above his share, prorated 6.1 would be below it, so the share 7.8 counts");
+    eq([targetsOf(r9.I), r9.I.primaryShare, r9.I.backupShare, r9.I.weightedShare, r9.out.diagnostics.targets], [targetsOf(r0.I), r0.I.primaryShare, r0.I.backupShare, r0.I.weightedShare, r0.out.diagnostics.targets], tag + "backup 9 - every target and level is the no-target run's");
+    ok(JSON.stringify(r9.out.schedule) === JSON.stringify(r0.out.schedule), tag + "backup 9 - the schedule is the no-target run's, day for day");
+    // backup 5: set below his share - it stays as set (no proration below the number itself), and still no primary target moves
+    const r5 = btRun({ target: { backup: 5 } }, seed);
+    eq(r5.I.members.a.backupOverride, { asked: 5, days: 31, away: 10, prorated: 3.4, share: 7.8, target: 5 }, tag + "backup 5 - the note: set below his share 7.8, so the 5 stays as set (not the prorated 3.4)");
+    eq([targetsOf(r5.I), r5.I.primaryShare, r5.I.backupShare, r5.I.weightedShare, r5.I.makeupRounds], [[[7.8, 5], [7.8, 8.7], [7.8, 8.7], [7.8, 8.7]], 7.8, 8.7, 12.1, 0], tag + "backup 5 - a 5, the others (31 - 5) / 3 = 8.7 each, W* 12.08, every primary target still 7.8");
+  });
+  // a non-pool surgeon's backup number: prorated, no share to stand on, and the pool's targets do not move
+  {
+    const rz = btRun({ z: { backup: 5 } }, 1), Mz = rz.I.members.z;
+    eq([Mz.primaryTarget, Mz.backupTarget, Mz.backupOverride], [null, 3.4, { asked: 5, days: 31, away: 10, prorated: 3.4, share: null, target: 3.4 }], "backup-target fixture: a non-pool surgeon's backup 5 reads 5 x 21 / 31 = 3.4 (no share, so no floor)");
+    eq(targetsOf(rz.I), [[7.8, 7.8], [7.8, 7.8], [7.8, 7.8], [7.8, 7.8]], "backup-target fixture: a non-pool surgeon's number takes nothing off the pool's shares");
+    // a backup number alone is no weighted share (there is no primary target to hold his load against); Totals reads the same
+    eq([Mz.weightedShare, rz.out.diagnostics.tallies.z.months[MONTH].weightedShare, rz.out.diagnostics.tallies.z.range.weightedShare], [null, null, null], "backup-target fixture: a non-pool surgeon with only a backup number carries no weighted share");
+  }
+  // the HARD backup cap wins over a number: cap 4 alone, then cap 4 with backup 20 on top - the same month
+  {
+    const rc = btRun({ cap: 4 }, 1), rcn = btRun({ cap: 4, target: { backup: 20 } }, 1);
+    eq([targetsOf(rc.I), rc.I.primaryShare, rc.I.backupShare, rc.I.weightedShare, rc.I.makeupRounds, rc.I.members.a.fillClip, rc.I.members.a.makeupPrimary], [[[9.6, 4], [7.1, 9], [7.1, 9], [7.1, 9]], 7.1, 9, 11.6, 2, { primary: 21, backup: 4 }, 2.5], "backup-target fixture: backup cap 4, no number - a 9.6 P (held 2.5 above the 7.1 level) / 4 B, the others 7.1 P / 9 B, W* 11.625 after 2 makeup rounds");
+    eq(R.backupTargetFor(btCtx({ cap: 4, target: { backup: 20 } }), "a", MONTH), { asked: 20, days: 31, away: 10, target: 4, cap: 4 }, "rules.backupTargetFor: 20 x 21 / 31 = 13.5 is above the hard cap 4 - the number reads 4 and says so");
+    eq(rcn.I.members.a.backupOverride, { asked: 20, days: 31, away: 10, prorated: 4, share: 4, target: 4, cap: 4 }, "backup-target fixture: backup cap 4 + backup 20 - the note: the number stopped at the cap 4, which is his share");
+    eq([targetsOf(rcn.I), rcn.I.primaryShare, rcn.I.backupShare, rcn.I.weightedShare, rcn.I.makeupRounds, rcn.out.diagnostics.targets], [targetsOf(rc.I), rc.I.primaryShare, rc.I.backupShare, rc.I.weightedShare, rc.I.makeupRounds, rc.out.diagnostics.targets], "backup-target fixture: backup cap 4 + backup 20 - every target and level is the cap-only month's (the others are targeted at what he can really leave)");
+    ok(JSON.stringify(rcn.out.schedule) === JSON.stringify(rc.out.schedule) && backupsOf(rcn.out, "a") <= 4, "backup-target fixture: backup cap 4 + backup 20 - the schedule is the cap-only run's and a holds at most 4 backups (" + backupsOf(rcn.out, "a") + ")");
+  }
+  // a month the schedule covers only in part: the number counts for the days in play
+  {
+    const PART = { from: FROM, to: MONTH + "-10", away: monthDays(MONTH).slice(0, 4) };
+    const p0 = btRun(PART, 1), p20 = btRun(Object.assign({ target: { backup: 20 } }, PART), 1), p5 = btRun(Object.assign({ target: { backup: 5 } }, PART), 1);
+    eq([targetsOf(p0.I), p0.I.poolSlots, p0.I.rangeDays, p0.I.weightedShare], [[[2.5, 2.5], [2.5, 2.5], [2.5, 2.5], [2.5, 2.5]], { primary: 10, backup: 10 }, 10, 3.8], "backup-target fixture, 3/1 - 3/10 only: no number - 10 P / 10 B over the four, 2.5 each");
+    eq(p20.I.members.a.backupOverride, { asked: 20, days: 31, away: 4, prorated: 3.9, share: 2.5, target: 3.9, counted: 10 }, "backup-target fixture, 3/1 - 3/10 only: backup 20 counts for his 6 in-town days of the 10 in play - 20 x 6 / 31 = 3.9 (counted 10), never the whole-month 17.4");
+    eq([targetsOf(p20.I), p20.I.primaryShare, p20.I.backupShare, p20.I.weightedShare], [[[2.5, 3.9], [2.5, 2], [2.5, 2], [2.5, 2]], 2.5, 2, 3.5], "backup-target fixture, 3/1 - 3/10 only: backup 20 - a 3.9, the others (10 - 3.87) / 3 = 2 each (not 0), W* 3.52, every primary target still 2.5");
+    ok(Math.abs(FOUR.reduce((s, id) => s + p20.I.members[id].backupTarget, 0) - 10) <= 0.21, "backup-target fixture, 3/1 - 3/10 only: the backup targets add up to the 10 slots (rounding aside): " + JSON.stringify(targetsOf(p20.I)));
+    eq(p5.I.members.a.backupOverride, { asked: 5, days: 31, away: 4, prorated: 1, share: 2.5, target: 1.6, counted: 10 }, "backup-target fixture, 3/1 - 3/10 only: backup 5 is 1.61 for the ten days - below his share 2.5, so it stays as set (1.6), not prorated to 1");
+    eq(targetsOf(p5.I), [[2.5, 1.6], [2.5, 2.8], [2.5, 2.8], [2.5, 2.8]], "backup-target fixture, 3/1 - 3/10 only: backup 5 - a 1.6, the others (10 - 1.61) / 3 = 2.8 each");
+    // days that already hold a backup are in play too: 3/21 - 3/31 held by b -> 21 days in play, 17 of them in town
+    const held = {}; monthDays(MONTH).slice(20).forEach((d) => { held[d] = { primary: null, backup: "b", primaryLocked: false, backupLocked: true }; });
+    const ph = btRun(Object.assign({ target: { backup: 20 }, schedule: held }, PART), 1);
+    eq([ph.I.poolSlots, ph.I.heldByPool], [{ primary: 10, backup: 21 }, { primary: 0, backup: 11 }], "backup-target fixture, 3/1 - 3/10 with 3/21 - 3/31 held: the pool's backup slots are the 10 open + the 11 held");
+    eq(ph.I.members.a.backupOverride, { asked: 20, days: 31, away: 4, prorated: 11, share: 5.3, target: 11, counted: 21 }, "backup-target fixture, 3/1 - 3/10 with 3/21 - 3/31 held: the held days are in play - 20 x 17 / 31 = 11 (counted 21), above his share 5.25");
+    eq(FOUR.map((id) => ph.I.members[id].backupTarget), [11, 3.3, 3.3, 3.3], "backup-target fixture, 3/1 - 3/10 with 3/21 - 3/31 held: the others share the 10 his 11 leave");
+  }
+  CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
+}
+
 // ---- Prompt 32 review fix (10/12): diagnostics.overSoftLimit covers the WHOLE calendar months the range touches ----
 // The review finding, reproduced: three plain pool members on the group's soft 7 (defaultMonthlyCap { preferred: 7 }, no hard
 // cap), February 2027 (28 days, no holiday). a1 holds locked primaries 2/15-2/21 and a2 2/22-2/28 (seven each); the range is
@@ -2751,19 +2935,91 @@ const OSL_WHOLE = { n: 0 };
       // nobody capped and equal clips -> no makeup, the plain per-role equal shares, no round
       const se = GEN.genWeightedShares(["a", "b", "c", "d"].map((id) => ({ id, clipP: 30, clipB: 30, ovP: null, ovB: null })), { primary: 22, backup: 21 }, W12);
       eq([se.primary.level, se.backup.level, se.weightedLevel, se.rounds, se.makeup, round1(se.backup.share.a)], [5.5, 5.25, 8.125, 0, {}, 5.3], "genWeightedShares: no clip binds -> 22 / 4 P, 21 / 4 B (5.25 -> 5.3), W* = 5.5 + 2.625, no makeup");
-      // overrides keep today's handling: a primary override leaves the primary fill (its number off the slots) and the weighted fill
-      // places his backup at the primary level; a backup override leaves the backup fill; neither takes a makeup
-      const so = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: 3 }, { id: "x", clipP: 30, clipB: 1, ovP: null, ovB: null }], { primary: 20, backup: 20 }, W12);
-      ok(!("a" in so.primary.share) && !("c" in so.backup.share) && !("a" in so.makeup) && !("c" in so.makeup), "genWeightedShares: overridden members stay out of their role's fill and out of the makeup: " + JSON.stringify(so));
+      // Overrides. A PRIMARY override keeps the 10/11 handling: it leaves the primary fill (its number off the slots) and the
+      // weighted fill places his backup at the primary level. A BACKUP override (Prompt 37, Faraz 11/22) moves backup shares
+      // only: the primary side - shares, level, makeup - is solved as if nobody had one; the member's number comes off the
+      // backup slots and the members without one share the rest, each weighed at his unchanged primary share. A number that
+      // was prorated (ovB below ovBAsked) is never taken below the backup share he has without a target - nor, when it was
+      // set below that share, below the number itself: target = max(ovB, min(ovBAsked, share)).
+      // pin moved deliberately 11/22 (Prompt 37): this block read "overrides keep today's handling ... a backup override leaves
+      // the backup fill; neither takes a makeup". Then c's backup 3 also shaped the W* that x's makeup read: x was held at 8.5
+      // primaries, b / c 4.75, a = b = 8.17 backups. Now the primaries are the no-target solution's whatever c's number is, and
+      // only the backups move (a = b = 8); the pins below restate the no-target solution by hand and each reading against it.
+      const near = (a, b) => typeof a === "number" && Math.abs(a - b) < 1e-6;
+      const soFm = (cB, cAsked) => [{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, Object.assign({ id: "c", clipP: 30, clipB: 30, ovP: null, ovB: cB }, cAsked === undefined ? {} : { ovBAsked: cAsked }), { id: "x", clipP: 30, clipB: 1, ovP: null, ovB: null }];
+      const S20 = { primary: 20, backup: 20 };
+      // No backup target, by hand: a's 2 come off the primaries -> 18 over b, c, x. Round 0: 6 each; backups x 1 (his clip),
+      // a / b / c 19 / 3, W* 9.17 -> x wants 8.67 primaries (held). Round 1: b / c 4.67; x's load 8.67 is over the others' -> his
+      // backup 0, a / b / c 6.67, W* 8 -> x wants 7.5. Round 2: b / c 5.25; x back on his clip 1, a / b / c 6.33, W* 8.42 -> x wants
+      // 7.92. Round 3, the last: b / c 5.04; x between 0 and his clip - 8 W* = 20 + 6 x 5.0417 + 2 x 7.9167 -> W* 8.26,
+      // a / b / c 6.4375, x 0.6875.
+      const so0 = GEN.genWeightedShares(soFm(null), S20, W12);
+      ok(so0.rounds === 3 && near(so0.primary.share.x, 7.916666667) && near(so0.primary.share.b, 5.041666667) && near(so0.primary.share.c, 5.041666667) && near(so0.backup.share.a, 6.4375) && near(so0.backup.share.b, 6.4375) && near(so0.backup.share.c, 6.4375) && near(so0.backup.share.x, 0.6875) && near(so0.weightedLevel, 8.260416667) && near(so0.makeup.x, 2.875) && !("overrideB" in so0),
+        "genWeightedShares (a primary override, no backup target): the hand solution is x 7.92 P held (makeup 2.875), b / c 5.04 P, a / b / c 6.4375 B, x 0.6875 B, W* 8.26 after 3 rounds, and no overrideB key: " + JSON.stringify(so0));
+      const primaryOf = (s) => [s.primary, s.makeup, s.rounds];
+      // (1) c's backup number 3, taken as given (below his share 6.4375: it asks for fewer, as before Prompt 37). The primary
+      // side is the no-target solution's; the others share the 17 backups left, weighed at those primaries: a (at the primary
+      // level 5.04) and b 8 each, x on his clip 1 (W* 5.04 + 4 = 9.04; his load 7.92 + 0.5 is below it).
+      const so = GEN.genWeightedShares(soFm(3), S20, W12);
+      ok(!("a" in so.primary.share) && !("c" in so.backup.share) && !("a" in so.makeup), "genWeightedShares: an overridden member stays out of his role's fill, a primary-overridden one out of the makeup: " + JSON.stringify(so));
+      eq(primaryOf(so), primaryOf(so0), "genWeightedShares (backup number 3): primary shares, level, makeup and rounds are the no-target solution's");
+      ok(near(so.backup.share.a, 8) && near(so.backup.share.b, 8) && so.backup.share.x === 1 && near(so.weightedLevel, 9.041666667) && near(so.backup.level, 8), "genWeightedShares (backup number 3): the others share the 17 left - a / b 8 each, x on his clip 1, W* 9.04, backup level 8: " + JSON.stringify([so.backup, so.weightedLevel]));
+      eq(so.overrideB, { c: { asked: 3, share: so0.backup.share.c, target: 3 } }, "genWeightedShares (backup number 3): a number set below his share stays as set (his share without it, 6.4375, is recorded beside it)");
       ok(Math.abs(sumOf(so.primary.share) - 18) < 1e-6 && Math.abs(sumOf(so.backup.share) - 17) < 1e-6, "genWeightedShares: an override's number comes off its role's slots (18 P / 17 B left): " + JSON.stringify([sumOf(so.primary.share), sumOf(so.backup.share)]));
       // DESIGN "Generator" 6, the handling chosen for a PRIMARY-overridden member's backup (review fix 10/11): he stays IN the
       // weighted backup fill and is weighed at the primary LEVEL (the unclipped members' primary share), never at his own override
       // number - so his backup share is the backup share at the primary level, exactly what an unclipped member (b) carries, and
-      // the plain equal backup share whenever the primaries are equal (today's plain backup fill). Here x is held at 8.5 after
-      // three rounds, b / c share 9.5 -> level 4.75, W* 8.83 -> a = b = (8.83 - 4.75) / 0.5 = 8.17 (weighed at his override 2 he
-      // would carry 11.4 and b 4.7; in the equal case below 16.3 against 2.3 / 2.3)
-      eq([so.backup.share.a, round1(so.backup.share.a), round1(so.backup.level)], [so.backup.share.b, 8.2, 8.2], "genWeightedShares: the primary-overridden member's backup share is the backup share at the primary level (b's, 8.17), not one weighed at his override 2: " + JSON.stringify(so.backup));
+      // the plain equal backup share whenever the primaries are equal (the equal case below). Here: a = b = 8 (weighed at his
+      // override 2 he would carry far more than b).
+      eq([so.backup.share.a, round1(so.backup.share.a), round1(so.backup.level)], [so.backup.share.b, 8, 8], "genWeightedShares: the primary-overridden member's backup share is the backup share at the primary level (b's, 8), not one weighed at his override 2: " + JSON.stringify(so.backup));
       ok(Math.abs(so.backup.share.a - so.backup.level) < 1e-6, "genWeightedShares: the primary-overridden member's backup share " + so.backup.share.a + " != the backup share at the primary level " + so.backup.level);
+      // (2) the proration never takes a number below his share: 3 is what is left of a 9 that was set (ovBAsked 9, at or above
+      // his share 6.4375) -> his share counts and the month is the no-target solution itself, exactly
+      const soP = GEN.genWeightedShares(soFm(3, 9), S20, W12);
+      eq([primaryOf(soP), soP.weightedLevel, soP.backup.level, soP.backup.share], [primaryOf(so0), so0.weightedLevel, so0.backup.level, { a: so0.backup.share.a, b: so0.backup.share.b, x: so0.backup.share.x }], "genWeightedShares (a 9 prorated to 3): the month is the no-target solution - primaries, levels and the others' backup shares, exactly");
+      eq(soP.overrideB, { c: { asked: 9, share: so0.backup.share.c, target: so0.backup.share.c } }, "genWeightedShares (a 9 prorated to 3): the number that counts is his share 6.4375, never the 3");
+      // (3) ...nor below the number itself when it was SET below the share: a 4 prorated to 2 stays 4 (the others share 16:
+      // a / b 7.5 each, x on his clip 1)
+      const soL = GEN.genWeightedShares(soFm(2, 4), S20, W12);
+      eq([primaryOf(soL), soL.overrideB], [primaryOf(so0), { c: { asked: 4, share: so0.backup.share.c, target: 4 } }], "genWeightedShares (a 4 prorated to 2): a number set below his share stays as set - 4, not 2 and not the share");
+      ok(near(soL.backup.share.a, 7.5) && near(soL.backup.share.b, 7.5) && soL.backup.share.x === 1, "genWeightedShares (a 4 prorated to 2): the others share the 16 left: " + JSON.stringify(soL.backup));
+      // (4) a backup number ABOVE his share: c's 12. Faraz 11/22: "His extra backups don't lower his primary share, and don't
+      // give anyone else extra primaries" - the primary side is still the no-target solution's (x keeps his 7.92 held
+      // primaries, b and c their 5.04). The others share the 8 backups his 12 leave, weighed at those primaries: a (at the
+      // primary level) and b 4 each, W* 5.04 + 2 = 7.04; x's load 7.92 is above it -> 0.
+      const so12 = GEN.genWeightedShares(soFm(12), S20, W12);
+      eq(primaryOf(so12), primaryOf(so0), "genWeightedShares (backup number 12, above his share): primary shares, level, makeup and rounds are the no-target solution's - the extra backups move no primary");
+      ok(near(so12.backup.share.a, 4) && near(so12.backup.share.b, 4) && so12.backup.share.x === 0 && !("c" in so12.backup.share) && near(so12.weightedLevel, 7.041666667) && near(so12.backup.level, 4), "genWeightedShares (backup number 12): the others share the 8 left - a / b 4 each, x 0, W* 7.04, backup level 4: " + JSON.stringify([so12.backup, so12.weightedLevel]));
+      eq(so12.overrideB, { c: { asked: 12, share: so0.backup.share.c, target: 12 } }, "genWeightedShares (backup number 12): the 12 counts (his share without it, 6.4375, is recorded beside it)");
+      ok(Math.abs(sumOf(so12.backup.share) + 12 - 20) < 1e-6, "genWeightedShares (backup number 12): the others' backup shares plus his 12 are the 20 slots");
+      // ...and a number prorated but still above the share counts as prorated: a 12 prorated to 9 reads 9
+      eq(GEN.genWeightedShares(soFm(9, 12), S20, W12).overrideB, { c: { asked: 12, share: so0.backup.share.c, target: 9 } }, "genWeightedShares (a 12 prorated to 9, still above his share): 9 counts");
+      // (5) exactly his share: the no-target solution again, exactly
+      const soEq = GEN.genWeightedShares(soFm(so0.backup.share.c), S20, W12);
+      eq([primaryOf(soEq), soEq.backup.share, soEq.weightedLevel, soEq.overrideB.c.target], [primaryOf(so0), { a: so0.backup.share.a, b: so0.backup.share.b, x: so0.backup.share.x }, so0.weightedLevel, so0.backup.share.c], "genWeightedShares (backup number = his share): nothing moves");
+      // (6) two members with a backup number, one above and one below his share, nobody capped: 22 P / 21 B over four -> 5.5 P and
+      // 5.25 B each without targets. a's 9 and b's 2 both count as given; c and d share 21 - 11 = 10 -> 5 each, W* 5.5 + 2.5
+      const so2 = GEN.genWeightedShares(["a", "b", "c", "d"].map((id) => ({ id, clipP: 30, clipB: 30, ovP: null, ovB: id === "a" ? 9 : id === "b" ? 2 : null })), { primary: 22, backup: 21 }, W12);
+      eq([so2.primary.level, so2.primary.share, so2.makeup, so2.rounds], [5.5, { a: 5.5, b: 5.5, c: 5.5, d: 5.5 }, {}, 0], "genWeightedShares (two backup numbers): the primaries are the plain equal 5.5 each, no makeup");
+      eq([so2.overrideB, so2.backup.share, so2.backup.level, so2.weightedLevel], [{ a: { asked: 9, share: 5.25, target: 9 }, b: { asked: 2, share: 5.25, target: 2 } }, { c: 5, d: 5 }, 5, 8], "genWeightedShares (two backup numbers): a's 9 and b's 2 count, c / d share the 10 left");
+      // (7) BOTH numbers on one member: the primary override 2 leaves 18 P to b / c (9 each); his backup share without a
+      // backup number is the plain equal 7 (weighed at the primary level 9), so his 9 counts and b / c share 12 -> 6 each, W* 12
+      const soBoth = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: 9 }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: null }], { primary: 20, backup: 21 }, W12);
+      eq([soBoth.primary.share, soBoth.overrideB, soBoth.backup.share, soBoth.backup.level, soBoth.weightedLevel], [{ b: 9, c: 9 }, { a: { asked: 9, share: 7, target: 9 } }, { b: 6, c: 6 }, 6, 12], "genWeightedShares (a primary AND a backup number on one member): b / c 9 P, his 9 B counts, b / c 6 B each");
+      // (8) a number ABOVE his own backup fill clip is kept (the hard backup cap is applied before the number arrives -
+      // rules.backupTargetFor; what is left of the fill clip is "what the rules allow him", and a number he cannot reach is
+      // shown as "(short)", not cut): x (fill clip 1) with a 3. His share without it is the 0.6875 of the no-target solution,
+      // so the 3 counts; the primary side is still that solution's (x keeps his makeup); a, b, c share 17 -> 5.67 each at
+      // the same primaries, W* 5.04 + 2.83 = 7.875
+      const soX = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "x", clipP: 30, clipB: 1, ovP: null, ovB: 3 }], S20, W12);
+      eq([primaryOf(soX), soX.overrideB], [primaryOf(so0), { x: { asked: 3, share: so0.backup.share.x, target: 3 } }], "genWeightedShares (a number above his backup fill clip): the 3 counts although his fill clip is 1, and the primary side - his makeup included - is the no-target solution's");
+      ok(near(soX.backup.share.a, 17 / 3) && near(soX.backup.share.b, 17 / 3) && near(soX.backup.share.c, 17 / 3) && !("x" in soX.backup.share) && near(soX.weightedLevel, 7.875), "genWeightedShares (a number above his backup fill clip): a / b / c share the 17 left, 5.67 each, W* 7.875: " + JSON.stringify([soX.backup, soX.weightedLevel]));
+      // (9) numbers that exceed the pool's backup slots: c's 25 against 20 slots. It counts as given; nothing is left, so
+      // the others read 0 (never a negative share); the level reported is the lowest primary load (a backup share of 0 at
+      // the primary level) and the primary side is untouched
+      const soBig = GEN.genWeightedShares(soFm(25), S20, W12);
+      eq([primaryOf(soBig), soBig.overrideB, soBig.backup.share, soBig.backup.level], [primaryOf(so0), { c: { asked: 25, share: so0.backup.share.c, target: 25 } }, { a: 0, b: 0, x: 0 }, 0], "genWeightedShares (a number above the pool's slots): it counts as given, the others read 0, the primary side is the no-target solution's");
+      ok(near(soBig.weightedLevel, so0.primary.level), "genWeightedShares (a number above the pool's slots): the level reported is the primary level (nobody below it carries a backup): " + soBig.weightedLevel);
       // equal primaries (no clip binds): his backup share is exactly the plain equal share - genWaterFill over the same clips, 21 / 3
       const soe = GEN.genWeightedShares([{ id: "a", clipP: 30, clipB: 30, ovP: 2, ovB: null }, { id: "b", clipP: 30, clipB: 30, ovP: null, ovB: null }, { id: "c", clipP: 30, clipB: 30, ovP: null, ovB: null }], { primary: 20, backup: 21 }, W12);
       const soePlain = GEN.genWaterFill(["a", "b", "c"].map((id) => ({ id, clip: 30 })), 21);
@@ -2893,6 +3149,172 @@ const OSL_WHOLE = { n: 0 };
   checkRun(outH, RANGES[1], 1, false, rowsH.concat(homeAsRows), null, { [KHAN]: new Set(homeDays) }); // extraHome: see the quality-1 pin
   ok(W_STATS.liftedByRow > liftedBeforeH, "P15 home: at least one placement was accepted because the home day lifts the OR-day rule");
   eq(W_STATS.forbiddenNoRow, 0, "P15: still no placement anywhere on a hardNeverWeekdays day without a row or a home day");
+
+  // ---- Prompt 37 (Faraz 11/22) on the seed: an explicit backup target for Khan, Jan-Mar, with away ranges ----
+  // The seed carries no target (Faraz picks the number in Setup), so these runs set one on a copy of the seed's rules and
+  // give him three made-up away ranges of Mon-Thu days (weekdays only, like the P15 pin above: his weekend blocks stay as
+  // they are) - 4 days of January, 8 of February, none of March. checkRun restates everything with its extraTarget leg (the
+  // proration by his away days, the share he never falls below, the others re-sharing at their unchanged primary shares)
+  // on top of every other rule of this file. Then directly:
+  //   backup 2   - set below his share in every month: it stays as set - 2 each month, whatever his away days (the
+  //                proration would read 1.7 / 1.4 / 2) - and no primary target moves;
+  //   backup 14  - January 14 x 27 / 31 = 12.2, February 14 x 20 / 28 = 10, March 14, each above his share: those
+  //                numbers count, every pool member's PRIMARY target is the no-target run's, and he holds more backups.
+  {
+    const R3 = RANGES[2], P37_AWAY = [{ start: "2027-01-25", end: "2027-01-28" }, { start: "2027-02-08", end: "2027-02-11" }, { start: "2027-02-22", end: "2027-02-25" }];
+    const p37Days = P37_AWAY.reduce((a, r) => a.concat(daysList(r.start, r.end)), []), p37Vac = { [KHAN]: new Set(p37Days) };
+    ok(p37Days.length === 12 && p37Days.every((d) => !isWeekend(d) && !lockedIn(d, P) && !lockedIn(d, B) && !isHoliday(d)), "P37 fixture: the away ranges are 12 ordinary Mon-Thu days (no lock, no holiday)");
+    const p37Rows = P37_AWAY.map((r) => ({ person_id: KHAN, start: r.start, end: r.end, decision: "away" }));
+    const p37Ctx = (target, label) => evCtx({ [KHAN]: P37_AWAY }, p37Rows, label, target === null ? null : (inp) => { inp.surgeonRules[KHAN] = Object.assign({}, inp.surgeonRules[KHAN], { monthlyTarget: target }); });
+    const monthsR3 = ["2027-01", "2027-02", "2027-03"], khanB = (out) => daysList(R3.start, R3.end).filter((d) => out.schedule[d].backup === KHAN).length;
+    const seenBefore = { months: BT_SEEN.months, binding: BT_SEEN.binding };
+    [1, 2].forEach((sd) => {
+      CUR.range = "P37 backup-target fixture Jan-Mar"; CUR.seed = sd; CUR.day = "-";
+      const o0 = GEN.generate(p37Ctx(null, "P37 no target"), R3.start, R3.end, { seed: sd, bestOf: BEST_OF[2] });
+      const oLo = GEN.generate(p37Ctx({ backup: 2 }, "P37 backup 2"), R3.start, R3.end, { seed: sd, bestOf: BEST_OF[2] });
+      const oHi = GEN.generate(p37Ctx({ primary: null, backup: 14 }, "P37 backup 14"), R3.start, R3.end, { seed: sd, bestOf: BEST_OF[2] });
+      [o0, oLo, oHi].forEach((o) => p37Days.forEach((d) => ok(o.schedule[d].primary !== KHAN && o.schedule[d].backup !== KHAN, "P37: Khan holds " + d + " although he is away that day")));
+      checkRun(o0, R3, sd, false, null, p37Vac);
+      checkRun(oLo, R3, sd, false, null, p37Vac, undefined, undefined, { [KHAN]: { backup: 2 } });
+      checkRun(oHi, R3, sd, false, null, p37Vac, undefined, undefined, { [KHAN]: { backup: 14 } });
+      CUR.range = "P37 backup-target fixture Jan-Mar"; CUR.seed = sd;
+      const T0 = o0.diagnostics.impliedTargets.months, TLo = oLo.diagnostics.impliedTargets.months, THi = oHi.diagnostics.impliedTargets.months;
+      // backup 2: set below his share - the number stays as set in every month, and no primary target moves
+      eq(monthsR3.map((m) => { const n = TLo[m].members[KHAN].backupOverride; return [n.asked, n.days, n.away, n.prorated, n.target]; }), [[2, 31, 4, 1.7, 2], [2, 28, 8, 1.4, 2], [2, 31, 0, 2, 2]], "P37 backup 2: set below his share, it stays 2 in each month (prorated it would read 1.7 / 1.4 / 2)");
+      monthsR3.forEach((m) => {
+        ok(TLo[m].members[KHAN].backupOverride.share === T0[m].members[KHAN].backupTarget && T0[m].members[KHAN].backupTarget > 2, "P37 backup 2 in " + m + ": his share without the target (" + T0[m].members[KHAN].backupTarget + ") is above the 2");
+        eq(POOL.map((id) => TLo[m].members[id].primaryTarget), POOL.map((id) => T0[m].members[id].primaryTarget), "P37 backup 2 in " + m + ": every pool member's PRIMARY target is the no-target run's");
+        POOL.filter((id) => id !== KHAN).forEach((id) => ok(TLo[m].members[id].backupTarget >= T0[m].members[id].backupTarget, "P37 backup 2 in " + m + ": " + CODE[id] + "'s backup target fell (" + T0[m].members[id].backupTarget + " -> " + TLo[m].members[id].backupTarget + ") although Khan's number is below his share"));
+      });
+      // backup 14: the prorated numbers count, no primary target moves
+      eq(monthsR3.map((m) => { const n = THi[m].members[KHAN].backupOverride; return [n.asked, n.days, n.away, n.prorated, n.target]; }), [[14, 31, 4, 12.2, 12.2], [14, 28, 8, 10, 10], [14, 31, 0, 14, 14]], "P37 backup 14: January 14 x 27 / 31 = 12.2, February 14 x 20 / 28 = 10, March 14 - each above his share, so each counts");
+      monthsR3.forEach((m) => {
+        ok(THi[m].members[KHAN].backupOverride.share === T0[m].members[KHAN].backupTarget && THi[m].members[KHAN].backupTarget > T0[m].members[KHAN].backupTarget, "P37 backup 14 in " + m + ": his share without the target is the no-target run's backup target (" + T0[m].members[KHAN].backupTarget + ") and the number that counts is above it");
+        eq(POOL.map((id) => THi[m].members[id].primaryTarget), POOL.map((id) => T0[m].members[id].primaryTarget), "P37 backup 14 in " + m + ": every pool member's PRIMARY target is the no-target run's (Faraz: the extra backups move no primary share)");
+        eq([THi[m].primaryShare, THi[m].makeupRounds, POOL.map((id) => THi[m].members[id].makeupPrimary)], [T0[m].primaryShare, T0[m].makeupRounds, POOL.map((id) => T0[m].members[id].makeupPrimary)], "P37 backup 14 in " + m + ": the primary level and the makeup are the no-target run's");
+        POOL.filter((id) => id !== KHAN).forEach((id) => ok(THi[m].members[id].backupTarget <= T0[m].members[id].backupTarget, "P37 backup 14 in " + m + ": " + CODE[id] + "'s backup target rose (" + T0[m].members[id].backupTarget + " -> " + THi[m].members[id].backupTarget + ") although Khan's number is above his share"));
+      });
+      ok(khanB(oHi) > khanB(o0), "P37 backup 14, seed " + sd + ": Khan holds more backups in Jan-Mar (" + khanB(oHi) + ") than without the target (" + khanB(o0) + ")");
+    });
+    ok(BT_SEEN.months - seenBefore.months === 12 && BT_SEEN.binding - seenBefore.binding === 12, "P37: checkRun restated the target in 12 months (2 seeds x 2 targets x 3 months), in every one of them with a number that differs from his share: " + JSON.stringify([BT_SEEN, seenBefore]));
+    BT_RUNS.n += 6;
+    // ---- fix round (11/22): the cases the review found untested, one cheap run each ----
+    // (i) two members with a number: Khan 12 (prorated by his away days, above his share) and Acton 2 (set below his share:
+    //     as set) - checkRun restates both against the no-target solution
+    {
+      CUR.range = "P37 two numbers Jan-Mar"; CUR.seed = 1; CUR.day = "-";
+      const two = { [KHAN]: { backup: 12 }, [ACTON]: { backup: 2 } };
+      const oTwo = GEN.generate(evCtx({ [KHAN]: P37_AWAY }, p37Rows, "P37 two numbers", (inp) => { Object.keys(two).forEach((id) => { inp.surgeonRules[id] = Object.assign({}, inp.surgeonRules[id], { monthlyTarget: two[id] }); }); }), R3.start, R3.end, { seed: 1, bestOf: BEST_OF[2] });
+      checkRun(oTwo, R3, 1, false, null, p37Vac, undefined, undefined, two);
+      CUR.range = "P37 two numbers Jan-Mar"; CUR.seed = 1;
+      eq(monthsR3.map((m) => { const M = oTwo.diagnostics.impliedTargets.months[m].members; return [M[KHAN].backupOverride.prorated, M[KHAN].backupTarget, M[ACTON].backupTarget]; }), [[10.5, 10.5, 2], [8.6, 8.6, 2], [12, 12, 2]], "P37 two numbers: Khan's 12 reads 12 x 27 / 31 = 10.5, 12 x 20 / 28 = 8.6 and 12; Acton's 2 stays 2 in every month");
+      monthsR3.forEach((m) => { const M = oTwo.diagnostics.impliedTargets.months[m].members; ok(M[KHAN].backupTarget > M[KHAN].backupOverride.share && M[ACTON].backupOverride.share > 2, "P37 two numbers in " + m + ": Khan's number is above his share and Acton's below his: " + JSON.stringify([M[KHAN].backupOverride, M[ACTON].backupOverride])); });
+      BT_RUNS.n++;
+    }
+    // (ii) BOTH numbers on Khan through generate(): { primary: 5, backup: 12 } against the primary number alone. checkRun's
+    //     restated shares have no primary-override leg, so this is pinned as a difference: the backup number moves no
+    //     primary target, level or makeup; his own targets are 5 and the prorated 12; and the "share without a target" in
+    //     his note is his backup target of the run without the backup number
+    {
+      CUR.range = "P37 both numbers Jan-Mar"; CUR.seed = 1; CUR.day = "-";
+      const run5 = (mt, label) => GEN.generate(evCtx({ [KHAN]: P37_AWAY }, p37Rows, label, (inp) => { inp.surgeonRules[KHAN] = Object.assign({}, inp.surgeonRules[KHAN], { monthlyTarget: mt }); }), R3.start, R3.end, { seed: 1, bestOf: BEST_OF[2] });
+      const oP = run5(5, "P37 primary 5"), oPB = run5({ primary: 5, backup: 12 }, "P37 primary 5 + backup 12");
+      monthsR3.forEach((m) => {
+        const A = oP.diagnostics.impliedTargets.months[m], Z = oPB.diagnostics.impliedTargets.months[m], n = Z.members[KHAN].backupOverride;
+        eq([POOL.map((id) => Z.members[id].primaryTarget), Z.primaryShare, Z.makeupRounds, POOL.map((id) => Z.members[id].makeupPrimary)], [POOL.map((id) => A.members[id].primaryTarget), A.primaryShare, A.makeupRounds, POOL.map((id) => A.members[id].makeupPrimary)], "P37 both numbers in " + m + ": every primary target, the primary level and the makeup are the primary-number-only run's");
+        eq([Z.members[KHAN].primaryTarget, "backupOverride" in A.members[KHAN], n.asked, n.share, n.target], [5, false, 12, A.members[KHAN].backupTarget, Z.members[KHAN].backupTarget], "P37 both numbers in " + m + ": his primary target is the 5, and the share in his note is his backup target without the backup number");
+        POOL.filter((id) => id !== KHAN).forEach((id) => ok(Z.members[id].backupTarget <= A.members[id].backupTarget, "P37 both numbers in " + m + ": " + CODE[id] + "'s backup target rose although Khan's number is above his share"));
+      });
+      eq(monthsR3.map((m) => { const n = oPB.diagnostics.impliedTargets.months[m].members[KHAN].backupOverride; return [n.days, n.away, n.prorated, n.target]; }), [[31, 4, 10.5, 10.5], [28, 8, 8.6, 8.6], [31, 0, 12, 12]], "P37 both numbers: the backup number is prorated as ever - 10.5 / 8.6 / 12");
+      BT_RUNS.n += 2;
+    }
+    // (iii) fill-open-only with a number (the October backfill range): every held slot stays, checkRun restates the number
+    //     over two months the run covers in part (October: the range plus the days already holding a backup; November: one day)
+    {
+      CUR.range = "P37 fill-open-only"; CUR.seed = 1; CUR.day = "-";
+      const oF = GEN.generate(evCtx({}, [], "P37 fill-open-only", (inp) => { inp.surgeonRules[KHAN] = Object.assign({}, inp.surgeonRules[KHAN], { monthlyTarget: { backup: 12 } }); }), BF.start, BF.end, { seed: 1, bestOf: 2, fillOpenOnly: true });
+      checkRun(oF, BF, 1, false, null, null, undefined, undefined, { [KHAN]: { backup: 12 } });
+      CUR.range = "P37 fill-open-only"; CUR.seed = 1;
+      eq(oF.diagnostics.mode, "fill-open-only", "P37 fill-open-only: the mode");
+      const nO = oF.diagnostics.impliedTargets.months["2026-10"].members[KHAN].backupOverride;
+      // October's days in play: the 17 days of the range plus the earlier October days that already hold a backup (a day whose
+      // backup is still open and outside the range is not being scheduled - it counts for nobody)
+      const octPlay = monthDays("2026-10").filter((d) => (d >= BF.start && d <= BF.end) || !!(INPUT[d] && INPUT[d].backup)).length;
+      ok(nO && nO.asked === 12 && octPlay > 17 && octPlay < 31 && nO.counted === octPlay, "P37 fill-open-only: his October number counts the " + octPlay + " days in play (the range and the days already holding a backup): " + JSON.stringify(nO));
+      BT_RUNS.n++;
+    }
+  }
+  // ---- Prompt 37 on the seed: eastFeed.backupFreeOnEastDays, Nov-Dec (his East call days of this file: KHAN_BUSY) ----
+  // "Nothing (East penalties, the weekend cap, run limits) may keep his backups off those days." With the switch on a
+  // generated backup of his on an East call day carries none of the five shape softs in the generator's own soft list,
+  // every per-run rule of this file still holds (checkRun, with the style exemption restated), and an explicit false is
+  // the seed's own run (the key absent or false changes nothing, byte for byte).
+  {
+    const R2 = RANGES[1], SHAPE37 = /^(backup-after-primary|long-run:|short-rest:|back-to-back-weekend|pattern-mismatch:)/, busySet = new Set(KHAN_BUSY);
+    const withSwitch = (v) => (inp) => { inp.surgeonRules[KHAN] = Object.assign({}, inp.surgeonRules[KHAN], { eastFeed: Object.assign({}, inp.surgeonRules[KHAN].eastFeed, { backupFreeOnEastDays: v }) }); };
+    const shapeOnEast = (o) => o.diagnostics.softPenalties.filter((s) => s.id === KHAN && s.role === B && busySet.has(s.day) && SHAPE37.test(s.reason));
+    const eastBackups = (o) => KHAN_BUSY.filter((d) => d >= R2.start && d <= R2.end && o.schedule[d].backup === KHAN && !lockedIn(d, B));
+    const seen37 = { off: 0, on: 0, shapeOff: 0 };
+    // Fix round (11/22) - the two-sided reading restated on the runs themselves, from the schedule and never from
+    // eligibility(): with the switch on (1) a generated backup of his on an East call day carries NO positive-weight soft
+    // of any kind, and (2) the long-run term of each of his OTHER generated days is the any-role run counted WITHOUT his
+    // East-day backups (the days he holds as backup only on an East call day): listed exactly when that run is over his
+    // limit, with that length. differs = the days whose run is shorter than the real one (an East-day backup sits in it).
+    const LIMIT37 = SR[KHAN].maxConsecutiveAnyRole;
+    const twoSided = (o, range, label) => {
+      const view = Object.assign({}, INPUT, o.schedule), freeDay = (d) => busySet.has(d) && !!view[d] && view[d].backup === KHAN && view[d].primary !== KHAN;
+      const runOf = (d, pred) => { const keys = new Set([runKey(KHAN, d)]); for (let x = addDays(d, -1), g = 0; g < 60 && pred(x); x = addDays(x, -1), g++) keys.add(runKey(KHAN, x)); for (let x = addDays(d, 1), g = 0; g < 60 && pred(x); x = addDays(x, 1), g++) keys.add(runKey(KHAN, x)); return keys.size; };
+      const res = { checked: 0, differs: 0, eastBackups: 0 };
+      daysList(range.start, range.end).forEach((d) => ROLES.forEach((role) => {
+        const e = o.schedule[d];
+        if (!e || e[role] !== KHAN || e[role + "Locked"]) return;
+        const mine = o.diagnostics.softPenalties.filter((s) => s.id === KHAN && s.day === d && s.role === role);
+        if (role === B && busySet.has(d)) { res.eastBackups++; eq(mine.filter((s) => s.weight > 0), [], label + ": a positive-weight soft on his backup on the East call day " + d); return; }
+        const shape = runOf(d, (x) => holdsAny(view, x, KHAN) && !freeDay(x)), real = runOf(d, (x) => holdsAny(view, x, KHAN));
+        eq(mine.filter((s) => /^long-run:/.test(s.reason)).map((s) => s.reason), shape > LIMIT37 ? ["long-run:" + shape] : [], label + ": his long-run term on " + d + " " + role + " is not the run counted without his East-day backups (" + shape + " day(s); " + real + " with them)");
+        res.checked++; if (real !== shape) res.differs++;
+      }));
+      return res;
+    };
+    const seen2 = { checked: 0, differs: 0, eastBackups: 0 };
+    [1, 2, 3].forEach((sd) => {
+      CUR.range = "P37 East-day switch fixture Nov-Dec"; CUR.seed = sd; CUR.day = "-";
+      const oBase = GEN.generate(evCtx({}, [], "P37 switch absent"), R2.start, R2.end, { seed: sd, bestOf: BEST_OF[1] });
+      const oFalse = GEN.generate(evCtx({}, [], "P37 switch false", withSwitch(false)), R2.start, R2.end, { seed: sd, bestOf: BEST_OF[1] });
+      const oOn = GEN.generate(evCtx({}, [], "P37 switch on", withSwitch(true)), R2.start, R2.end, { seed: sd, bestOf: BEST_OF[1] });
+      ok(JSON.stringify(oFalse) === JSON.stringify(oBase), "P37 switch: an explicit false is the seed's own run (schedule and diagnostics), seed " + sd);
+      eq(shapeOnEast(oOn), [], "P37 switch on, seed " + sd + ": no shape soft on a backup of his on an East call day");
+      checkRun(oOn, R2, sd, false, null, null, undefined, undefined, undefined, { [KHAN]: busySet });
+      CUR.range = "P37 East-day switch fixture Nov-Dec"; CUR.seed = sd;
+      ok(!oOn.diagnostics.hardViolations.length, "P37 switch on, seed " + sd + ": no hard violation");
+      { const t2 = twoSided(oOn, R2, "P37 switch on, seed " + sd); seen2.checked += t2.checked; seen2.differs += t2.differs; seen2.eastBackups += t2.eastBackups; }
+      seen37.off += eastBackups(oBase).length; seen37.on += eastBackups(oOn).length; seen37.shapeOff += shapeOnEast(oBase).length;
+    });
+    ok(seen37.on > 0, "P37 switch: over three seeds the generator placed at least one backup of his on an East call day with the switch on (the pin is not vacuous): " + JSON.stringify(seen37));
+    console.log("Prompt 37 East-day switch (Nov-Dec, seeds 1-3, bestOf " + BEST_OF[1] + "): his generated backups on East call days " + seen37.off + " without / " + seen37.on + " with the switch; shape softs on them without the switch: " + seen37.shapeOff);
+    BT_RUNS.n += 9;
+    // the number and the switch TOGETHER, on the milestone range R4 (2026-11-02 -> 2027-01-03): his East call days in a
+    // month with a number (they are in-town days - never away), a number above his fill clip, and January's three tail
+    // days (the number counts for those days only, so the others are not left a target of 0)
+    {
+      const R4 = RANGES[3], both = (inp) => { withSwitch(true)(inp); inp.surgeonRules[KHAN] = Object.assign({}, inp.surgeonRules[KHAN], { monthlyTarget: { backup: 12 } }); };
+      CUR.range = "P37 number + switch R4"; CUR.seed = 2; CUR.day = "-";
+      const o4 = GEN.generate(evCtx({}, [], "P37 number + switch", both), R4.start, R4.end, { seed: 2, bestOf: BEST_OF[3] });
+      checkRun(o4, R4, 2, false, null, null, undefined, undefined, { [KHAN]: { backup: 12 } }, { [KHAN]: busySet });
+      CUR.range = "P37 number + switch R4"; CUR.seed = 2;
+      ok(!o4.diagnostics.hardViolations.length, "P37 number + switch: no hard violation");
+      const J = o4.diagnostics.impliedTargets.months["2027-01"], nJ = J.members[KHAN].backupOverride;
+      eq([J.rangeDays, J.poolSlots.backup, nJ.asked, nJ.days, nJ.counted], [3, 3, 12, 31, 3], "P37 number + switch: January is touched by 3 days - 3 backup slots, and his 12 counts for those 3 days only");
+      ok(nJ.target <= 1.2 + 1e-9 && POOL.filter((id) => id !== KHAN).every((id) => J.members[id].backupTarget > 0), "P37 number + switch: his January number is at most 12 x 3 / 31 = 1.2 and nobody else is left a target of 0: " + JSON.stringify(POOL.map((id) => J.members[id].backupTarget)));
+      const nN = o4.diagnostics.impliedTargets.months["2026-11"].members[KHAN], khanNovEast = KHAN_BUSY.filter((d) => d.slice(0, 7) === "2026-11").length;
+      ok(khanNovEast >= 6 && nN.backupOverride.away === 0 && nN.backupTarget > nN.fillClip.backup, "P37 number + switch: his " + khanNovEast + " November East call days are not away days (away " + nN.backupOverride.away + ") and the number (" + nN.backupTarget + ") stands above his backup fill clip (" + nN.fillClip.backup + ")");
+      const t4 = twoSided(o4, R4, "P37 number + switch"); seen2.checked += t4.checked; seen2.differs += t4.differs; seen2.eastBackups += t4.eastBackups;
+      ok(t4.eastBackups > 0, "P37 number + switch: he holds generated backups on East call days in this run (" + t4.eastBackups + ")");
+      BT_RUNS.n++;
+    }
+    ok(seen2.checked > 0 && seen2.differs > 0, "P37 two-sided: over the switch-on runs some of his generated days sit in a run with an East-day backup of his (the restated long-run check is not vacuous): " + JSON.stringify(seen2));
+    console.log("Prompt 37 two-sided reading restated on the switch-on runs: " + seen2.checked + " of his generated days checked, " + seen2.differs + " of them in a run with an East-day backup; " + seen2.eastBackups + " East-day backups without a positive-weight soft");
+  }
   CUR.range = "R2 Nov-Dec"; CUR.seed = "-"; CUR.day = "-";
 }
 
@@ -3348,7 +3770,7 @@ const CPU_LINE = "os.cpus(): " + CPUS.length + " x " + ((CPUS[0] && String(CPUS[
 console.log("\ntimings: " + RANGES.map((r, i) => { const t = timing[r.name]; return r.name + " bestOf " + BEST_OF[i] + ": " + t.ms + " ms / " + t.runs + " runs (" + (t.ms / t.candidates).toFixed(1) + " ms per candidate)"; }).join("; ") + "; " + BF.name + " bestOf 2: " + timing[BF.name].ms + " ms / " + timing[BF.name].runs + " runs (" + (timing[BF.name].ms / timing[BF.name].candidates).toFixed(1) + " ms per candidate); Nov-Dec bestOf 200: " + bigMs + " ms (" + (bigMs / big.diagnostics.candidatesTried).toFixed(1) + " ms per candidate)");
 ok(OVER_SEEN.n > 0, "Prompt 32 step 2: no checked run listed an over-soft-limit day - the overSoftLimit restatement is vacuous");
 console.log("Prompt 32 overSoftLimit (every checked run): " + OVER_SEEN.n + " day(s) listed, " + OVER_SEEN.outside + " of them outside the range; " + OVER_SEEN.trimmed + " over day(s) of the touched months left out (the run gave the holder no primary that month)");
-console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 32 fixture runs + " + DW_RUNS.n + " derived-week runs (Faraz 11/11: holiday unit, vacation) + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ") - " + CPU_LINE);
+console.log("ok " + N + " assertions, " + SEEDS + " seeds x " + RANGES.length + " ranges at bestOf " + BEST_OF.join("/") + " (R4 on the even seeds: " + timing[RANGES[3].name].runs + " runs) + " + SEEDS + " fill-open-only backfill runs at bestOf 2 + 1 x bestOf 200 + 32 fixture runs + " + DW_RUNS.n + " derived-week runs (Faraz 11/11: holiday unit, vacation) + 80 NB synthetic tally runs + " + TB_RUNS.n + " over-soft-limit tie-break runs (Prompt 32 step 4) + " + OSL_WHOLE.n + " over-soft-limit whole-month runs + 3 shift-weight runs (Prompt 32 review fix) + " + BT_RUNS.n + " backup-target runs (Prompt 37) + 3 knob-guard runs (" + total + " ms total; budget " + BUDGET_MS + " ms" + (process.env.SILVIS_GEN_BUDGET_MS ? " via SILVIS_GEN_BUDGET_MS" : "") + ") - " + CPU_LINE);
 if (KNOWN_GAPS.length) console.log("known gaps still open (" + KNOWN_GAPS.length + "; owned outside this harness; SILVIS_STRICT=1 fails on them):\n  " + KNOWN_GAPS.join("\n  "));
 CUR.range = "-"; CUR.seed = "-"; CUR.day = "-";
 if (BEST_OF_OVERRIDE) console.log("coverage overridden via SILVIS_GEN_BEST_OF=" + BEST_OF_OVERRIDE + ": the " + BUDGET_MS + " ms budget is not enforced for this run");

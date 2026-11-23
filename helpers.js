@@ -2770,13 +2770,55 @@ function ttWeightedLoad(primary, backup, weights) {
   return ttRound1(Number(primary || 0) * weights.primary + Number(backup || 0) * weights.backup);
 }
 // The WEIGHTED SHARE beside it: targetP x weights.primary + targetB x weights.backup, one decimal. A missing
-// role target reads 0 (as the fairness view's green mark summed P + B before); null without any target or
-// without weights.
+// BACKUP target reads 0 (a primary-only target keeps its share and the fairness view's green mark, as before);
+// null without weights and - Prompt 37 (Faraz 11/22) - without a PRIMARY target: a missing primary used to read
+// 0 too, so a surgeon with only an explicit backup target read as far over a share built from his backups
+// alone (the backup weight x that target). A backup target alone is no share to hold his whole load against.
 function ttWeightedShare(targetP, targetB, weights) {
   if (!weights || typeof weights.primary !== "number" || typeof weights.backup !== "number") return null;
   var p = typeof targetP === "number" && !isNaN(targetP) ? targetP : null, b = typeof targetB === "number" && !isNaN(targetB) ? targetB : null;
-  if (p === null && b === null) return null;
-  return ttRound1((p || 0) * weights.primary + (b || 0) * weights.backup);
+  if (p === null) return null;
+  return ttRound1(p * weights.primary + (b || 0) * weights.backup);
+}
+// Prompt 37 (Faraz 11/22): the short note printed after a member's Target B in the Generate preview's shares table
+// (and in scripts/preview-generate.js) when he has an explicit backup target. `bo` is the generator's note,
+// diagnostics.impliedTargets.months[m].members[id].backupOverride = { asked: the number as set, days: the days of the
+// month, away: his away days in it, prorated: asked x (days - away) / days, share: his backup share without a
+// target (null outside the pool), target: the number that counts } - the key exists only on a member with a backup
+// number, so a missing key (an older preview, any other member) or junk reads as no note: "".
+//   nobody away, the number counts as set          -> " (set 15)"
+//   away, the prorated number counts               -> " (set 20, away 16 of 31 days)"
+//   the proration stopped at his equal share       -> " (set 10, away 16 of 31 days: held at the equal share)"
+//   a number set below his share stays as set      -> " (set 5, away 10 of 31 days: kept as set)"
+// (the last two: target above prorated - "held at the equal share" when the number as set is at or above his share,
+// "kept as set" when it is below it or he has no share). The numbers print as stored; pure, never throws.
+// Prompt 37 fix round (11/22): the note may carry two more keys, and a note without them reads byte for byte as above.
+//   counted (a number below days) - a month the run covers only in part: the number counted for the `counted` days in
+//     play, `away` is his away days among them, and the day phrase names the days scheduled:
+//       " (set 20, 10 of 31 days scheduled, away 4 of them)"      " (set 12, 3 of 31 days scheduled)"
+//     The number as set that the share is compared with is then the number for the part in play, min(asked, days) x
+//     counted / days (generator.js hands genWeightedShares the same figure; a number above the month's days reads as
+//     the month's days - whole month: min(asked, days)):
+//       " (set 5, 10 of 31 days scheduled, away 4 of them: kept as set)"   (5 x 10 / 31 = 1.6, below a share of 2.5)
+//   cap (a number) - his hard backup cap is what the number stopped at; it comes before held / kept:
+//       " (set 20, away 10 of 31 days: at the backup cap 4)"      " (set 12: at the backup cap 7)"
+// Anything else in the two keys (a counted at or above days, text, null) reads as the key being absent.
+function backupTargetNote(bo) {
+  var isNum = function (v) { return typeof v === "number" && isFinite(v); };
+  if (!bo || typeof bo !== "object" || !isNum(bo.asked) || !isNum(bo.days) || !isNum(bo.away) || !isNum(bo.prorated) || !isNum(bo.target)) return "";
+  var part = isNum(bo.counted) && bo.counted < bo.days, capped = isNum(bo.cap), above = bo.target > bo.prorated;
+  // what the number stopped at: his hard cap first; else, with the target above the prorated number, his share or the number as set
+  var suffix = "";
+  if (capped) suffix = ": at the backup cap " + bo.cap;
+  else if (above) {
+    var asSet = Math.min(bo.asked, bo.days) * (part ? bo.counted / bo.days : 1);
+    suffix = ": " + (isNum(bo.share) && asSet >= bo.share ? "held at the equal share" : "kept as set");
+  }
+  // the days: a part-covered month names the days scheduled and the away days among them; a whole month the away days (none
+  // when nobody is away - except, as it always did, in a held / kept note)
+  var days = part ? ", " + bo.counted + " of " + bo.days + " days scheduled" + (bo.away > 0 ? ", away " + bo.away + " of them" : "")
+    : (bo.away === 0 && !(above && !capped) ? "" : ", away " + bo.away + " of " + bo.days + " days");
+  return " (set " + bo.asked + days + suffix + ")";
 }
 // ttOutsideSurgeons(roster, schedule, from, to, opts) -> [{ id, name, code, active, primary, backup, total }]
 // The Totals view's "Outside surgeons" section (Prompt 12 M, 9/22): every roster
@@ -5329,7 +5371,8 @@ function offerRulesWords(rules, groupRules, opts) {
    of ONE surgeonRules entry (and, for the seed lists, what the import does) - engine defaults included: the
    hardNeverWeekdays roles default to primary while backup is open, weekdays.autoOffer and aledo.hardAvoidDayBefore
    default on, eastFeed.eastBackupCountsAsBusy defaults on, an absent or null monthlyCap is the group default (Prompt 32), an absent
-   maxConsecutiveDays the group default. Data only: names, holiday names and the group rules come in through `info`
+   maxConsecutiveDays the group default, eastFeed.backupFreeOnEastDays is on only when it is exactly true and a backup number in
+   monthlyTarget is prorated by the days away and never passes a hard backup cap (Prompt 37). Data only: names, holiday names and the group rules come in through `info`
    ({ names: { id: name }, holidayNames: [..], groupRules }); there is no surgeon-specific branch. A key the helper does
    not know (top level, or inside an object it reads) is listed on the "Other" line as not read by the engine - nothing
    is hidden; prose keys (note, notes, rule, source, *Note) are documentation and are skipped. Prompt 23's keys
@@ -5425,7 +5468,7 @@ const SU_SUM_KNOWN = {
     "preferences", "backupCap", "outsideDerivedWeeks", "availableWindows", "daysPerWindowWeek", "preferAlternateDays", "weekendBlockPenalty", "handoffPartnerRequired",
     "splitPartner", "standaloneFriday", "noLoneWeekendDay", "weekendCap", "restBetweenStretches"],
   weekdays: ["allowed", "autoOffer"],
-  eastFeed: ["enabled", "eastBlocksPrimary", "eastBlocksBackup", "eastBackupCountsAsBusy", "forecast", "deriveFrom", "statedWeeks"],
+  eastFeed: ["enabled", "eastBlocksPrimary", "eastBlocksBackup", "eastBackupCountsAsBusy", "forecast", "deriveFrom", "statedWeeks", "backupFreeOnEastDays"],
   "eastFeed.statedWeeks": ["eastPrimary", "eastBackup"],
   holidayRules: ["holidaysOff", "neverThanksgiving", "maxMajorHolidays"],
   monthlyCap: ["primary", "total", "preferred", "countsEastDays"],
@@ -5714,9 +5757,19 @@ function suRulesSummary(rules, info) {
   const mt = R.monthlyTarget;
   // generator.js genTargetOverride: a number = the primary target, an object = its numeric roles, anything else = none
   const mtP = suSumObj(mt) && typeof mt.primary === "number" ? mt.primary : null, mtB = suSumObj(mt) && typeof mt.backup === "number" ? mt.backup : null;
+  // the hard backup cap, only when it is a number below the backup number (Prompt 37 fix round - see the target words below)
+  const mtCap = mtB !== null && suSumObj(R.backupCap) && typeof R.backupCap.perMonthDays === "number" && isFinite(R.backupCap.perMonthDays) && R.backupCap.perMonthDays < mtB ? R.backupCap.perMonthDays : null;
   if (mt !== undefined && mt !== null && typeof mt !== "number" && mtP === null && mtB === null) lim.push("a monthly target without a number (ignored)");
   if (typeof mt === "number") lim.push("target " + mt + " primary days a month");
-  else if (mtP !== null || mtB !== null) lim.push("target " + [mtP !== null ? mtP + " primary" : null, mtB !== null ? mtB + " backup" : null].filter(Boolean).join(" / ") + " days a month");
+  // Prompt 37 (Faraz 11/22): a BACKUP number says what it does. It counts for the days in town - rules.js backupTargetFor
+  // prorates it by the days away - and for a pool member generator.js never takes it below the share he has without it, nor
+  // below the number itself when that is set lower. Outside the pool (poolMember false, date windows) there is no share to
+  // hold it at, so only "fewer when away" is true there. The number form and a primary-only object read as before.
+  // Fix round (11/22): his HARD backup cap (backupCap.perMonthDays) below the number is what the number can never pass
+  // (rules.js backupTargetFor answers the cap) - said last in the bracket (mtCap, below); a cap at or above the number is
+  // never reached, so nothing is added.
+  else if (mtP !== null || mtB !== null) lim.push("target " + [mtP !== null ? mtP + " primary" : null, mtB !== null ? mtB + " backup" : null].filter(Boolean).join(" / ") + " days a month"
+    + (mtB !== null ? " (" + (mtP !== null ? "the backup number: " : "") + "fewer when away" + (R.poolMember !== false && !windows.length ? " - not below the equal share, nor below the number itself when that is lower" : "") + (mtCap !== null ? " - at most his backup cap of " + mtCap : "") + ")" : ""));
   else if (R.poolMember === false) lim.push("no share target");
   else if (!windows.length) lim.push("equal share");
   const dpw = R.daysPerWindowWeek;
@@ -5746,6 +5799,15 @@ function suRulesSummary(rules, info) {
   }
   const standing = Array.isArray(R.eastStanding) ? R.eastStanding.filter(e => suSumObj(e) && e.name && Array.isArray(e.days) && e.days.length) : [];
   if (standing.length) ea.push("on East call every year: " + standing.map(e => e.name + " (" + e.days.map(md => { const m = /^(\d{2})-(\d{2})$/.exec(String(md)); return m ? Number(m[1]) + "/" + Number(m[2]) : String(md); }).join(", ") + ")").join(", ") + (efBlocks.length ? "" : " - ignored while the East feed blocks no role"));
+  // Prompt 37 (Faraz 11/22): eastFeed.backupFreeOnEastDays - EXACTLY true, as rules.js reads it (rdBackupFreeOn), and only
+  // while the East feed applies: on the surgeon's own East call days a backup carries none of the shape softs (days in a
+  // row, rest between stretches, back-to-back weekends, weekend style, backup after his own primary) - and, since the fix
+  // round (11/22), is also left out of the any-role run, the rest between stretches and the back-to-back-weekend test of
+  // his OTHER days (rules.js holdsShape; the weekend-style test still reads it as held). The line's last clause; without
+  // the switch (absent, false, any other value - rules.js warns about one that is not true / false) the line is what it
+  // was. Where East call days block backup no backup is placed on such a day at all, so the switch has nothing to act on
+  // - said so.
+  if (efOn && ef.backupFreeOnEastDays === true) ea.push("a backup on an East call day carries no run, rest or weekend-shape penalty and is left out of his other days' run, rest and back-to-back counts" + (efBlocks.indexOf("backup") >= 0 ? " (no effect while East call days block backup)" : ""));
   line("East / Davenport", ea);
 
   // Holidays
@@ -5891,7 +5953,7 @@ const SU_RULE_KEY_WORDS = {
   days: "counted days", weight: "weight", target: "target", countsBackup: "backup days count", min: "old min", max: "old max",
   minIsSoft: "old min is soft", primary: "primary", backup: "backup", total: "total (older name)", preferred: "preferred at most",
   countsEastDays: "East primary-week days count", perMonthDays: "backup days per month", weekendsPerMonth: "backup weekends per month",
-  minDaysOff: "days off between stretches",
+  minDaysOff: "days off between stretches", backupFreeOnEastDays: "backup on East call days without shape penalties",
 };
 function suRuleKeyWords(k) { return SU_RULE_KEY_WORDS[k] || String(k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase(); }
 // Review 2 (10/1): a choice field's lone value reads as its menu words in the confirm, not the stored token - the mode
@@ -7510,7 +7572,7 @@ if (typeof module !== "undefined" && module.exports) {
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
     tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
-    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttRound1, ttWeightedLoad, ttWeightedShare, ttCsvText, ttIsIso, ttOutsideSurgeons,
+    ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttRound1, ttWeightedLoad, ttWeightedShare, backupTargetNote, ttCsvText, ttIsIso, ttOutsideSurgeons,
     overSoftLimitWords, overSoftLimitLine, overSoftLimitTitle, overSoftLimitIndex, overSoftLimitForChanges, overSoftLimitAudit, overSoftLimitLegend, overSoftLimitMonthsText,
     buildWeekRows, exportColorsFor,
     SURGEON_DARK_TEXT_BY_CODE, surgeonTextColor,

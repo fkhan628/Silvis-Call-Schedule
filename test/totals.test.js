@@ -346,15 +346,195 @@ console.log("\n[W] Prompt 32 step 1 (Faraz 10/11) - weighted accounting: the ONE
     assert.strictEqual(H.ttWeightedLoad(7, 3, null), null);
     assert.strictEqual(H.ttWeightedLoad(7, 3, { primary: 1 }), null, "a weights object without both numbers is not guessed at (the default lives in rules.js only)");
   });
-  check("ttWeightedShare(targetP, targetB, weights) = targetP x w.primary + targetB x w.backup (a missing role target reads 0, like the green mark's sum); null with no target or no weights", () => {
+  check("ttWeightedShare(targetP, targetB, weights) = targetP x w.primary + targetB x w.backup (a missing BACKUP target reads 0 - a primary-only target keeps its share); null without a PRIMARY target (Prompt 37: a backup target alone is no share), with no target or with no weights", () => {
     const W = { primary: 1, backup: 0.5 };
     assert.strictEqual(H.ttWeightedShare(5.6, 5.8, W), 8.5);
     assert.strictEqual(H.ttWeightedShare(6, 4, W), 8);
     assert.strictEqual(H.ttWeightedShare(5, null, W), 5, "an explicit primary-only monthlyTarget");
-    assert.strictEqual(H.ttWeightedShare(null, 4, W), 2);
+    // pin moved deliberately 11/22 (Prompt 37): ttWeightedShare(null, 4, W) read 2 - a missing PRIMARY target read 0, so a
+    // surgeon with a backup-only explicit target showed a weighted share built from his backups alone (0.5 x his backup
+    // target), a green mark there and a weighted deviation that counted his whole primary load as over. Without a primary
+    // target there is no weighted share: null. (A missing BACKUP target still reads 0 - the pin above is unchanged.)
+    assert.strictEqual(H.ttWeightedShare(null, 4, W), null, "a backup target alone is no weighted share");
     assert.strictEqual(H.ttWeightedShare(null, null, W), null, "no target -> no share");
     assert.strictEqual(H.ttWeightedShare(5.6, 5.8, null), null);
     assert.strictEqual(H.ttWeightedShare(5.7, 5.9, W), 8.7, "one decimal (8.65 -> 8.7, no float noise)");
+    // Prompt 37 (Faraz 11/22): the four shapes side by side, weights 1 / 0.5
+    assert.strictEqual(H.ttWeightedShare(null, null, W), null, "both missing -> null");
+    assert.strictEqual(H.ttWeightedShare(5, null, W), 5, "primary 5 + no backup target -> 5 (the backup side reads 0)");
+    assert.strictEqual(H.ttWeightedShare(null, 4, W), null, "no primary target + backup 4 -> null");
+    assert.strictEqual(H.ttWeightedShare(5, 4, W), 7, "primary 5 + backup 4 -> 5 x 1 + 4 x 0.5 = 7");
+    // the missing-primary rule reads 'missing' as the helper always did (not a number, NaN) - a real 0 is a target
+    assert.strictEqual(H.ttWeightedShare(undefined, 4, W), null, "undefined primary");
+    assert.strictEqual(H.ttWeightedShare(NaN, 4, W), null, "NaN primary");
+    assert.strictEqual(H.ttWeightedShare("5", 4, W), null, "a string is not a target");
+    assert.strictEqual(H.ttWeightedShare(0, 4, W), 2, "a primary target of 0 is a target: 0 x 1 + 4 x 0.5 = 2");
+    assert.strictEqual(H.ttWeightedShare(5, NaN, W), 5, "a NaN backup target reads as missing: 0");
+  });
+  // Prompt 37 (Faraz 11/22): the note the Generate preview (and scripts/preview-generate.js) prints after a member's Target B
+  // when he has an explicit backup target - generator.js diagnostics.impliedTargets.months[m].members[id].backupOverride =
+  // { asked, days, away, prorated, share, target }. Made-up numbers; a 31-day month.
+  check("backupTargetNote(backupOverride): '' without a note; '(set N)' with nobody away; '(set N, away X of D days)' when the prorated number counts; ': held at the equal share' when the proration stopped at his share; ': kept as set' for a number set below his share (or outside the pool)", () => {
+    assert.strictEqual(typeof H.backupTargetNote, "function", "helpers.backupTargetNote is not exported");
+    // nobody away, the number counts as set
+    assert.strictEqual(H.backupTargetNote({ asked: 15, days: 31, away: 0, prorated: 15, share: 5.2, target: 15 }), " (set 15)");
+    assert.strictEqual(H.backupTargetNote({ asked: 15, days: 31, away: 0, prorated: 15, share: null, target: 15 }), " (set 15)", "outside the pool (no share), nobody away");
+    // away, the prorated number counts: 20 x 15 / 31 = 9.7 (above his share 5.2)
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 16, prorated: 9.7, share: 5.2, target: 9.7 }), " (set 20, away 16 of 31 days)");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 16, prorated: 9.7, share: null, target: 9.7 }), " (set 20, away 16 of 31 days)", "outside the pool the prorated number is the target");
+    // the proration stopped at his equal share: 10 x 15 / 31 = 4.8, his share 5.2 -> 5.2
+    assert.strictEqual(H.backupTargetNote({ asked: 10, days: 31, away: 16, prorated: 4.8, share: 5.2, target: 5.2 }), " (set 10, away 16 of 31 days: held at the equal share)");
+    assert.strictEqual(H.backupTargetNote({ asked: 5.2, days: 31, away: 16, prorated: 2.5, share: 5.2, target: 5.2 }), " (set 5.2, away 16 of 31 days: held at the equal share)", "a number set AT the share is held at the share");
+    // a number set below his share stays as set: 5 x 21 / 31 = 3.4, his share 6.1 -> 5
+    assert.strictEqual(H.backupTargetNote({ asked: 5, days: 31, away: 10, prorated: 3.4, share: 6.1, target: 5 }), " (set 5, away 10 of 31 days: kept as set)");
+    assert.strictEqual(H.backupTargetNote({ asked: 5, days: 31, away: 10, prorated: 3.4, share: null, target: 5 }), " (set 5, away 10 of 31 days: kept as set)", "no share to hold it at (share null) -> kept as set");
+    // the numbers print as stored - no extra rounding, no padding
+    assert.strictEqual(H.backupTargetNote({ asked: 13.5, days: 30, away: 0, prorated: 13.5, share: 4, target: 13.5 }), " (set 13.5)");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 28, away: 1, prorated: 19.3, share: 4, target: 19.3 }), " (set 20, away 1 of 28 days)");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 31, prorated: 0, share: null, target: 0 }), " (set 20, away 31 of 31 days)", "a whole month away outside the pool: 0");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 31, prorated: 0, share: 0, target: 0 }), " (set 20, away 31 of 31 days)", "a whole month away in the pool: his share without a target is 0 too, so nothing is held");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 28, prorated: 1.9, share: 3, target: 3 }), " (set 20, away 28 of 31 days: held at the equal share)", "nearly a whole month away: held at the small share the rules still allow him");
+    // every note starts with one space and is one bracket - it follows the Target B number in the cell
+    [{ asked: 15, days: 31, away: 0, prorated: 15, share: 5.2, target: 15 }, { asked: 10, days: 31, away: 16, prorated: 4.8, share: 5.2, target: 5.2 }].forEach((bo) => assert.ok(/^ \([^()]+\)$/.test(H.backupTargetNote(bo)), JSON.stringify(H.backupTargetNote(bo))));
+    // no note: a member without the key (an older preview, a member without a backup number) and junk
+    [undefined, null, "", "x", 0, 15, true, [], {}, { asked: 15 }, { asked: "15", days: 31, away: 0, prorated: 15, share: 5, target: 15 }, { asked: 15, days: 31, away: 0, prorated: 15, share: 5, target: null },
+      { asked: 15, days: 31, away: 0, prorated: NaN, share: 5, target: 15 }, { asked: 15, days: null, away: 0, prorated: 15, share: 5, target: 15 }, { asked: 15, days: 31, away: undefined, prorated: 15, share: 5, target: 15 },
+      { asked: Infinity, days: 31, away: 0, prorated: 15, share: 5, target: 15 }]
+      .forEach((junk) => assert.strictEqual(H.backupTargetNote(junk), "", "junk " + JSON.stringify(junk) + " -> no note"));
+    // a share that is not a number reads as no share (never a throw)
+    assert.strictEqual(H.backupTargetNote({ asked: 5, days: 31, away: 10, prorated: 3.4, share: "6.1", target: 5 }), " (set 5, away 10 of 31 days: kept as set)");
+    assert.strictEqual(H.backupTargetNote({ asked: 5, days: 31, away: 10, prorated: 3.4, target: 5 }), " (set 5, away 10 of 31 days: kept as set)", "share key absent");
+    // no $ and no name in any note
+    assert.ok(!/\$/.test(H.backupTargetNote({ asked: 10, days: 31, away: 16, prorated: 4.8, share: 5.2, target: 5.2 })));
+  });
+  // ...and the note agrees with the generator that writes it: a real run (made-up roster, a made-up month) with an explicit
+  // backup target and time off - every member's note is read back through the helper
+  check("backupTargetNote over real generator runs (Prompt 37): the note generator.js writes for a member with a backup number reads, through the helper, as each of the four cases; a member without a number carries no key and no note", () => {
+    const G = require(path.join(__dirname, "..", "generator.js"));
+    // four made-up pool members, March 2027 (31 days, no holiday unit): 31 backup slots / 4 = 7.75 -> a share of 7.8 each
+    const roster = ["a", "b", "c", "d"].map((id) => ({ id, name: id.toUpperCase(), code: id.toUpperCase(), active: true }));
+    const AWAY16 = [{ person_id: "a", start_date: "2027-03-01", end_date: "2027-03-16" }];
+    const run = (target, timeOffRows, extra) => {
+      const surgeonRules = {}; roster.forEach((r) => { surgeonRules[r.id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+      surgeonRules.a = Object.assign({}, surgeonRules.a, { monthlyTarget: target }, extra || {});
+      const ctx = R.buildContext({ roster, surgeonRules, groupRules: { defaultMaxConsecutiveDays: 31 }, holidays: {}, timeOffRows: timeOffRows || [], availabilityRows: [], schedule: {}, today: "2027-01-15" });
+      return G.generate(ctx, "2027-03-01", "2027-03-31", { seed: 7, bestOf: 1 }).diagnostics.impliedTargets.months["2027-03"].members;
+    };
+    const noteOf = (M) => H.backupTargetNote(M.a.backupOverride);
+    // nobody away: the number counts as set
+    const none = run({ backup: 20 }, []);
+    assert.deepStrictEqual(none.a.backupOverride, { asked: 20, days: 31, away: 0, prorated: 20, share: 7.8, target: 20 });
+    assert.strictEqual(noteOf(none), " (set 20)");
+    ["b", "c", "d"].forEach((id) => { assert.strictEqual("backupOverride" in none[id], false, id + " has no backup number - no key"); assert.strictEqual(H.backupTargetNote(none[id].backupOverride), "", id + ": no note"); });
+    // 16 days away (3/1 - 3/16): 20 x 15 / 31 = 9.7 - above his share, so the prorated number counts
+    const away = run({ backup: 20 }, AWAY16);
+    assert.deepStrictEqual(away.a.backupOverride, { asked: 20, days: 31, away: 16, prorated: 9.7, share: 7.8, target: 9.7 });
+    assert.strictEqual(away.a.backupTarget, 9.7, "the note's target is the member's backupTarget");
+    assert.strictEqual(noteOf(away), " (set 20, away 16 of 31 days)");
+    // 10 x 15 / 31 = 4.8 - below the share he has without a target (7.8): the proration stops at the share
+    const held = run({ backup: 10 }, AWAY16);
+    assert.deepStrictEqual(held.a.backupOverride, { asked: 10, days: 31, away: 16, prorated: 4.8, share: 7.8, target: 7.8 });
+    assert.strictEqual(noteOf(held), " (set 10, away 16 of 31 days: held at the equal share)");
+    // away the whole month: the share he has without a target is 0 (the rules allow him no day), and so is the target
+    const gone = run({ backup: 10 }, [{ person_id: "a", start_date: "2027-03-01", end_date: "2027-03-31" }]);
+    assert.deepStrictEqual(gone.a.backupOverride, { asked: 10, days: 31, away: 31, prorated: 0, share: 0, target: 0 });
+    assert.strictEqual(noteOf(gone), " (set 10, away 31 of 31 days)");
+    // a number set below his share: 4 x 15 / 31 = 1.9, but the number itself (4) stays
+    const low = run({ backup: 4 }, AWAY16);
+    assert.deepStrictEqual(low.a.backupOverride, { asked: 4, days: 31, away: 16, prorated: 1.9, share: 7.8, target: 4 });
+    assert.strictEqual(noteOf(low), " (set 4, away 16 of 31 days: kept as set)");
+    // outside the pool there is no share: the prorated number is the target
+    const out = run({ backup: 20 }, AWAY16, { poolMember: false });
+    assert.deepStrictEqual(out.a.backupOverride, { asked: 20, days: 31, away: 16, prorated: 9.7, share: null, target: 9.7 });
+    assert.strictEqual(noteOf(out), " (set 20, away 16 of 31 days)");
+    // a primary number beside it does not change the backup note
+    const both = run({ primary: 6, backup: 20 }, AWAY16);
+    assert.strictEqual(both.a.primaryTarget, 6);
+    assert.strictEqual(noteOf(both), " (set 20, away 16 of 31 days)");
+    // a primary-only target (a number, or { primary }) is no backup number: no key, no note
+    [6, { primary: 6 }].forEach((t) => { const M = run(t, AWAY16); assert.strictEqual("backupOverride" in M.a, false, JSON.stringify(t)); assert.strictEqual(noteOf(M), ""); });
+  });
+  // Prompt 37 fix round (11/22): the generator's note may carry two more keys - counted (the month's days in play, only for a
+  // month the run covers in part: the number then counts for those days) and cap (his hard backup cap, only when the number
+  // stopped at it: then prorated === target === cap). Every note WITHOUT the two keys reads byte for byte as before (the two
+  // checks above are untouched). Hand-worked numbers, a 31-day month:
+  //   10 of 31 days in play, 4 of them away, set 20 -> 20 x 6 / 31 = 3.9; set 5 -> 5 x 6 / 31 = 1.0, and the number as set
+  //   for the part in play is 5 x 10 / 31 = 1.6; 3 of 31 days in play, set 12 -> 12 x 3 / 31 = 1.2.
+  check("backupTargetNote, fix round: a part-covered month reads ', C of D days scheduled' (+ ', away X of them'); the suffix compares the share with the number as set FOR THE PART IN PLAY (never above the month's days); the hard cap reads ': at the backup cap N' and comes first; junk in the two new keys reads as a whole-month note", () => {
+    // a part-covered month, the prorated number counts
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 4, prorated: 3.9, share: 2.5, target: 3.9, counted: 10 }), " (set 20, 10 of 31 days scheduled, away 4 of them)");
+    assert.strictEqual(H.backupTargetNote({ asked: 12, days: 31, away: 0, prorated: 1.2, share: 1.5, target: 1.2, counted: 3 }), " (set 12, 3 of 31 days scheduled)", "nobody away: no 'away 0 of them'");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 4, prorated: 3.9, share: null, target: 3.9, counted: 10 }), " (set 20, 10 of 31 days scheduled, away 4 of them)", "outside the pool");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 1, prorated: 5.8, share: 2.5, target: 5.8, counted: 10 }), " (set 20, 10 of 31 days scheduled, away 1 of them)");
+    // target above prorated in a part-covered month: the number as set for the part in play, 5 x 10 / 31 = 1.6, is below
+    // his share 2.5 -> kept as set (a whole-month reading - 5 against 2.5 - would have said "held at the equal share")
+    assert.strictEqual(H.backupTargetNote({ asked: 5, days: 31, away: 4, prorated: 1, share: 2.5, target: 1.6, counted: 10 }), " (set 5, 10 of 31 days scheduled, away 4 of them: kept as set)");
+    // ... 20 x 10 / 31 = 6.5 is above his share 2 (8 of the 10 days away: 20 x 2 / 31 = 1.3) -> held at the share
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 8, prorated: 1.3, share: 2, target: 2, counted: 10 }), " (set 20, 10 of 31 days scheduled, away 8 of them: held at the equal share)");
+    assert.strictEqual(H.backupTargetNote({ asked: 5, days: 31, away: 4, prorated: 1, share: null, target: 1.6, counted: 10 }), " (set 5, 10 of 31 days scheduled, away 4 of them: kept as set)", "no share (outside the pool): kept as set");
+    // a number above the month's days counts as the month's days: 40 over 10 of 31 days is 31 x 10 / 31 = 10 as set, below
+    // a share of 11 -> kept as set (40 x 10 / 31 = 12.9 would have read "held")
+    assert.strictEqual(H.backupTargetNote({ asked: 40, days: 31, away: 8, prorated: 2, share: 11, target: 10, counted: 10 }), " (set 40, 10 of 31 days scheduled, away 8 of them: kept as set)");
+    assert.strictEqual(H.backupTargetNote({ asked: 40, days: 31, away: 0, prorated: 31, share: 7.8, target: 31 }), " (set 40)", "whole month, nobody away: every day of the month");
+    assert.strictEqual(H.backupTargetNote({ asked: 40, days: 31, away: 16, prorated: 15, share: 7.8, target: 15 }), " (set 40, away 16 of 31 days)");
+    assert.strictEqual(H.backupTargetNote({ asked: 40, days: 31, away: 28, prorated: 3, share: 3.4, target: 3.4 }), " (set 40, away 28 of 31 days: held at the equal share)");
+    // the hard backup cap: the suffix, before held / kept; the day phrase as in any other note
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 10, prorated: 4, share: 4, target: 4, cap: 4 }), " (set 20, away 10 of 31 days: at the backup cap 4)");
+    assert.strictEqual(H.backupTargetNote({ asked: 12, days: 31, away: 0, prorated: 7, share: 7, target: 7, cap: 7 }), " (set 12: at the backup cap 7)");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 4, prorated: 2, share: 2, target: 2, counted: 10, cap: 2 }), " (set 20, 10 of 31 days scheduled, away 4 of them: at the backup cap 2)");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 0, prorated: 2, share: 2, target: 2, counted: 10, cap: 2 }), " (set 20, 10 of 31 days scheduled: at the backup cap 2)");
+    assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 10, prorated: 4, share: null, target: 4, cap: 4 }), " (set 20, away 10 of 31 days: at the backup cap 4)", "outside the pool");
+    assert.strictEqual(H.backupTargetNote({ asked: 12, days: 31, away: 0, prorated: 6.5, share: 7, target: 7, cap: 6.5 }), " (set 12: at the backup cap 6.5)", "the cap comes before held / kept and prints as stored");
+    assert.strictEqual(H.backupTargetNote({ asked: 12, days: 31, away: 0, prorated: 0, share: 0, target: 0, cap: 0 }), " (set 12: at the backup cap 0)", "a cap of 0 is a cap");
+    // junk in the two new keys reads as if the key were absent (never a throw): a whole-month note, no cap suffix
+    for (const c of [31, 32, "10", NaN, null, Infinity, true]) assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 16, prorated: 9.7, share: 5.2, target: 9.7, counted: c }), " (set 20, away 16 of 31 days)", "counted " + String(c) + " is no part-covered month");
+    for (const c of ["4", NaN, null, Infinity, true]) assert.strictEqual(H.backupTargetNote({ asked: 20, days: 31, away: 10, prorated: 4, share: 4, target: 4, cap: c }), " (set 20, away 10 of 31 days)", "cap " + String(c) + " is no cap");
+    // a note without the two keys is what it was - also the one shape the engine never writes (target above prorated with
+    // nobody away), which printed its day phrase
+    assert.strictEqual(H.backupTargetNote({ asked: 10, days: 31, away: 0, prorated: 4, share: 5, target: 5 }), " (set 10, away 0 of 31 days: held at the equal share)", "unchanged, byte for byte");
+    // ... and a whole-month note is still read by the number as set alone: 4 as set is below a share of 5, so "kept as set"
+    // whatever its target says (only a part-covered note also looks at the target - see above)
+    assert.strictEqual(H.backupTargetNote({ asked: 4, days: 31, away: 10, prorated: 2.7, share: 5, target: 5 }), " (set 4, away 10 of 31 days: kept as set)", "unchanged, byte for byte");
+    // every note is still one space and one bracket; no $
+    [{ asked: 20, days: 31, away: 4, prorated: 3.9, share: 2.5, target: 3.9, counted: 10 }, { asked: 5, days: 31, away: 4, prorated: 1, share: 2.5, target: 1.6, counted: 10 }, { asked: 20, days: 31, away: 4, prorated: 2, share: 2, target: 2, counted: 10, cap: 2 }, { asked: 12, days: 31, away: 0, prorated: 7, share: 7, target: 7, cap: 7 }]
+      .forEach((bo) => assert.ok(/^ \([^()$]+\)$/.test(H.backupTargetNote(bo)), JSON.stringify(H.backupTargetNote(bo))));
+  });
+  check("backupTargetNote over real generator runs, fix round: a run over 3/1 - 3/10 only writes counted 10 and the note reads the days scheduled; the hard backup cap writes cap and the note reads it; a number above the month's days; the hand-made 'held' note of three days is one the engine does not write", () => {
+    const G = require(path.join(__dirname, "..", "generator.js"));
+    const run = (ids, aRules, timeOffRows, to) => {
+      const roster = ids.map((id) => ({ id, name: id.toUpperCase(), code: id.toUpperCase(), active: true }));
+      const surgeonRules = {}; roster.forEach((r) => { surgeonRules[r.id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+      surgeonRules.a = Object.assign({}, surgeonRules.a, aRules);
+      const ctx = R.buildContext({ roster, surgeonRules, groupRules: { defaultMaxConsecutiveDays: 31 }, holidays: {}, timeOffRows: timeOffRows || [], availabilityRows: [], schedule: {}, today: "2027-01-15" });
+      return G.generate(ctx, "2027-03-01", to, { seed: 7, bestOf: 1 }).diagnostics.impliedTargets.months["2027-03"].members.a;
+    };
+    const ABCD = ["a", "b", "c", "d"], awayTo = (d) => [{ person_id: "a", start_date: "2027-03-01", end_date: d }];
+    const both = (M, note, words) => { assert.deepStrictEqual(M.backupOverride, note); assert.strictEqual(M.backupTarget, note.target, "the note's target is the member's backupTarget"); assert.strictEqual(H.backupTargetNote(M.backupOverride), words); };
+    // the run covers 3/1 - 3/10 of an empty March (10 of 31 days in play; 10 backup slots / 4 = a share of 2.5), a away 3/1 - 3/4
+    both(run(ABCD, { monthlyTarget: { backup: 20 } }, awayTo("2027-03-04"), "2027-03-10"), { asked: 20, days: 31, away: 4, prorated: 3.9, share: 2.5, target: 3.9, counted: 10 }, " (set 20, 10 of 31 days scheduled, away 4 of them)");
+    both(run(ABCD, { monthlyTarget: { backup: 5 } }, awayTo("2027-03-04"), "2027-03-10"), { asked: 5, days: 31, away: 4, prorated: 1, share: 2.5, target: 1.6, counted: 10 }, " (set 5, 10 of 31 days scheduled, away 4 of them: kept as set)");
+    both(run(ABCD, { monthlyTarget: { backup: 20 } }, [], "2027-03-10"), { asked: 20, days: 31, away: 0, prorated: 6.5, share: 2.5, target: 6.5, counted: 10 }, " (set 20, 10 of 31 days scheduled)");
+    // away 3/1 - 3/8: 20 x 2 / 31 = 1.3, held at the share he has without a target (2 - the two days the rules leave him)
+    both(run(ABCD, { monthlyTarget: { backup: 20 } }, awayTo("2027-03-08"), "2027-03-10"), { asked: 20, days: 31, away: 8, prorated: 1.3, share: 2, target: 2, counted: 10 }, " (set 20, 10 of 31 days scheduled, away 8 of them: held at the equal share)");
+    both(run(ABCD, { poolMember: false, monthlyTarget: { backup: 20 } }, awayTo("2027-03-04"), "2027-03-10"), { asked: 20, days: 31, away: 4, prorated: 3.9, share: null, target: 3.9, counted: 10 }, " (set 20, 10 of 31 days scheduled, away 4 of them)");
+    // the hard backup cap (backupCap.perMonthDays): the whole of March, a away 3/1 - 3/10 -> 20 x 21 / 31 = 13.5, capped at 4
+    both(run(ABCD, { monthlyTarget: { backup: 20 }, backupCap: { perMonthDays: 4 } }, awayTo("2027-03-10"), "2027-03-31"), { asked: 20, days: 31, away: 10, prorated: 4, share: 4, target: 4, cap: 4 }, " (set 20, away 10 of 31 days: at the backup cap 4)");
+    both(run(ABCD, { monthlyTarget: { backup: 12 }, backupCap: { perMonthDays: 7 } }, [], "2027-03-31"), { asked: 12, days: 31, away: 0, prorated: 7, share: 7, target: 7, cap: 7 }, " (set 12: at the backup cap 7)");
+    both(run(ABCD, { monthlyTarget: { backup: 20 }, backupCap: { perMonthDays: 2 } }, awayTo("2027-03-04"), "2027-03-10"), { asked: 20, days: 31, away: 4, prorated: 2, share: 2, target: 2, counted: 10, cap: 2 }, " (set 20, 10 of 31 days scheduled, away 4 of them: at the backup cap 2)");
+    // a cap at or above the number never binds: no cap key, the note as before
+    both(run(ABCD, { monthlyTarget: { backup: 5 }, backupCap: { perMonthDays: 7 } }, [], "2027-03-31"), { asked: 5, days: 31, away: 0, prorated: 5, share: 7, target: 5 }, " (set 5)");
+    // ... and a cap above the prorated number does not either: 20 x 3 / 31 = 1.9 is below the cap 4, held at his share 3
+    both(run(ABCD, { monthlyTarget: { backup: 20 }, backupCap: { perMonthDays: 4 } }, awayTo("2027-03-28"), "2027-03-31"), { asked: 20, days: 31, away: 28, prorated: 1.9, share: 3, target: 3 }, " (set 20, away 28 of 31 days: held at the equal share)");
+    // a number above the month's days reads as the month's days (asked stays as set)
+    both(run(ABCD, { monthlyTarget: { backup: 40 } }, [], "2027-03-31"), { asked: 40, days: 31, away: 0, prorated: 31, share: 7.8, target: 31 }, " (set 40)");
+    both(run(ABCD, { monthlyTarget: { backup: 40 } }, awayTo("2027-03-16"), "2027-03-31"), { asked: 40, days: 31, away: 16, prorated: 15, share: 7.8, target: 15 }, " (set 40, away 16 of 31 days)");
+    // two members, a run over 3/1 - 3/3 (a share of 1.5), set 12: 12 x 3 / 31 = 1.2 as set - below the share, so it stays
+    // 1.2 and the note carries no suffix. A note { ..., share: 1.5, target: 1.5, counted: 3 } is not one the engine writes.
+    both(run(["a", "b"], { monthlyTarget: { backup: 12 } }, [], "2027-03-03"), { asked: 12, days: 31, away: 0, prorated: 1.2, share: 1.5, target: 1.2, counted: 3 }, " (set 12, 3 of 31 days scheduled)");
+    // outside the pool a backup number alone is no weighted share - generator.js genWeightedOf and helpers.js ttWeightedShare agree
+    const out = run(ABCD, { poolMember: false, monthlyTarget: { backup: 20 } }, awayTo("2027-03-16"), "2027-03-31");
+    assert.deepStrictEqual([out.primaryTarget, out.backupTarget, out.weightedShare], [null, 9.7, null], "the generator: no primary target, backup 9.7, no weighted share");
+    assert.strictEqual(H.ttWeightedShare(out.primaryTarget, out.backupTarget, { primary: 1, backup: 0.5 }), out.weightedShare, "Totals' helper reads the same pair the same way");
   });
   check("ttDeviation rounds a non-integer difference to one decimal (no float noise); integer outputs unchanged", () => {
     assert.strictEqual(H.ttDeviation(6, 5.6), "+0.4", "was +0.40000000000000036");

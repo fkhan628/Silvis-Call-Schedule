@@ -3758,6 +3758,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const sharesHead = gd.slice(gd.indexOf('data-testid={"gen-shares-" + m}'), gd.indexOf("</tr></thead>", gd.indexOf('data-testid={"gen-shares-" + m}')));
     assert.ok(sharesHead.includes(">Fill clip P / B</th>") && sharesHead.includes(">W share</th>"), "the shares table does not head Fill clip P / B and W share");
     assert.ok(gd.includes("M.fillClip") && gd.includes("M.makeupPrimary") && gd.includes("num(M.weightedShare)"), "the shares rows do not print the fill clips, the makeup and the weighted share");
+    // Prompt 37 (Faraz 11/22): the shares row prints an explicit backup target's note right after the Target B number -
+    // helpers.js backupTargetNote over the member's backupOverride ('' for a member without the key, so an older preview
+    // prints nothing extra) - and the paragraph above the table states the rule ([P37] below runs the component)
+    assert.ok(gd.includes('<td data-col="target-b">{num(M.backupTarget)}{backupTargetNote(M.backupOverride)}</td>'), "the shares row does not print the backup target's note after the Target B number");
+    assert.strictEqual(gd.split("backupTargetNote(").length - 1, 1, "one call of the note helper in the Generate preview");
+    // pin moved deliberately 11/22 (Prompt 37 fix round): the sentence ended "...when it is set lower; the note after Target B
+    // names the number as set, the days away and what held it." - the engine now also counts only the days scheduled in a
+    // month the run covers in part and never passes the hard backup cap, and the note names both
+    assert.ok(gd.includes("An explicit backup target (Setup) is prorated by the surgeon's days away in the month - not below the equal share, nor below the number itself when it is set lower; in a month this run covers only in part it counts the days scheduled, and it never exceeds his backup cap. The note after Target B names the number as set, the days scheduled and away, and what held it."), "the shares paragraph does not state the explicit backup target's rule");
+    assert.strictEqual(gd.split("An explicit backup target (Setup)").length - 1, 1, "the rule is stated once (the earlier sentence is gone)");
     assert.ok(!/Clip P<\/th>/.test(sharesHead) || sharesHead.includes("soft limit"), "the Clip P title still describes min(preferred cap, cap - 1)");
     assert.strictEqual(count("min(preferred cap, cap - 1)"), 0, "a title still states the cap - 1 clip");
   });
@@ -11809,7 +11819,10 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       // pins moved deliberately 10/11: Prompt 32 the seed's group default is the soft 7 (was "cap 8 ... (group default)"), and an
       // unreadable cap reads as the group default with a buildContext warning (was "invalid - no cap applied": the silently-uncapped hole)
       assert.strictEqual(fam({ monthlyTarget: {} }, "Limits"), "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); a monthly target without a number (ignored); equal share.");
-      assert.strictEqual(fam({ monthlyTarget: { backup: 3 } }, "Limits"), "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 3 backup days a month.");
+      // pin moved deliberately 11/22 (Prompt 37): the line ended "target 3 backup days a month." - an explicit backup number now
+      // counts for the days in town (prorated by the days away; for a pool member never below his equal share, nor below the
+      // number itself when it is set lower), and the Limits line says what the number does
+      assert.strictEqual(fam({ monthlyTarget: { backup: 3 } }, "Limits"), "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 3 backup days a month (fewer when away - not below the equal share, nor below the number itself when that is lower).");
       assert.strictEqual(fam({ monthlyCap: "8" }, "Limits"), "At most 2 primary days in a row (group default); a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's)); equal share.");
       assert.strictEqual(fam({ monthlyCap: true }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's))");
       assert.strictEqual(fam({ monthlyCap: [8] }, "Limits").split("; ")[1], "a monthly cap that is not a number (invalid - read as the group default: soft limit 7 primary days a month (the group's))", "an array is not a cap object (rules.js warns)");
@@ -11818,6 +11831,180 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.strictEqual(fam({ eastFeed: { enabled: true, eastBlocksPrimary: true }, eastStanding: [{ name: "Christmas", days: ["12-24", "12-25"] }] }, "Holidays"), "No Christmas primary (standing East call).");
       // the restated weight defaults are rules.js's
       assert.deepStrictEqual(H.SU_SUM_WEIGHT_DEFAULTS, require(path.join(ROOT, "rules.js")).defaultWeights(), "helpers SU_SUM_WEIGHT_DEFAULTS drifted from rules.js defaultWeights()");
+    });
+    // Prompt 37 (Faraz 11/22): the monthly target is a number (the PRIMARY target) or { primary?, backup? }. The number form
+    // and a primary-only object read as they always did; a BACKUP number now says what it does - it counts for the days in
+    // town (rules.js backupTargetFor prorates it by the days away) and, for a pool member, Generate never takes it below the
+    // share he has without it, nor below the number itself when it is set lower (generator.js genWeightedShares). Outside
+    // the pool (poolMember false, date windows) there is no share to hold it at, so the line says only "fewer when away".
+    // The words are pinned to the ENGINE below (made-up roster, made-up month).
+    check("Prompt 37 summary: the monthly target in words - a number and { primary } read as before; a backup number says what it does (fewer when away - not below the equal share, nor below the number itself when that is lower); outside the pool only 'fewer when away'; a hard backup cap below the number adds ' - at most his backup cap of N' (fix round); pinned to rules.js backupTargetFor and the generator's targets", () => {
+      const tgt = (rules) => ((H.suRulesSummary(rules, info).find(l => l.family === "Limits") || {}).text || "").replace(/\.$/, "").split("; ").filter(c => /target/i.test(c));
+      const FLOOR = "fewer when away - not below the equal share, nor below the number itself when that is lower";
+      // unchanged: the number form, the object with a primary only
+      assert.deepStrictEqual(tgt({ monthlyTarget: 4 }), ["target 4 primary days a month"], "the number form reads as before");
+      assert.deepStrictEqual(tgt({ monthlyTarget: { primary: 4 } }), ["target 4 primary days a month"], "an object with a primary only reads as the number form");
+      assert.deepStrictEqual(tgt({ monthlyTarget: { primary: 4, backup: null } }), ["target 4 primary days a month"], "a null backup is no backup number");
+      // a backup number: alone, and beside a primary number
+      assert.deepStrictEqual(tgt({ monthlyTarget: { backup: 3 } }), ["target 3 backup days a month (" + FLOOR + ")"]);
+      assert.deepStrictEqual(tgt({ monthlyTarget: { primary: 4, backup: 3 } }), ["target 4 primary / 3 backup days a month (the backup number: " + FLOOR + ")"]);
+      assert.strictEqual(tgt({ monthlyTarget: { backup: 3 } })[0], "target 3 backup days a month (fewer when away - not below the equal share, nor below the number itself when that is lower)", "the exact words, backup only");
+      assert.strictEqual(tgt({ monthlyTarget: { primary: 4, backup: 3 } })[0], "target 4 primary / 3 backup days a month (the backup number: fewer when away - not below the equal share, nor below the number itself when that is lower)", "the exact words, both");
+      assert.deepStrictEqual(tgt({ monthlyTarget: { primary: null, backup: 13.5 } }), ["target 13.5 backup days a month (" + FLOOR + ")"], "a null primary beside a backup number is a backup-only target; the number prints as set");
+      assert.deepStrictEqual(tgt({ monthlyTarget: { primary: "4", backup: 3 } }), ["target 3 backup days a month (" + FLOOR + ")"], "a primary that is not a number is no primary target");
+      assert.deepStrictEqual(tgt({ monthlyTarget: { backup: 0 } }), ["target 0 backup days a month (" + FLOOR + ")"], "0 is a number");
+      // no number at all reads as before
+      assert.deepStrictEqual(tgt({ monthlyTarget: { backup: "3" } }), ["a monthly target without a number (ignored)"]);
+      assert.deepStrictEqual(tgt({ monthlyTarget: null }), [], "null = equal share, no target clause");
+      // the whole line, both forms (the clause is the last one; nothing else on the line moved)
+      assert.strictEqual((H.suRulesSummary({ monthlyTarget: { primary: 4, backup: 3 } }, info).find(l => l.family === "Limits") || {}).text, "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 4 primary / 3 backup days a month (the backup number: fewer when away - not below the equal share, nor below the number itself when that is lower).");
+      // outside the pool there is no equal share: the number is prorated and nothing holds it up
+      assert.deepStrictEqual(tgt({ poolMember: false, monthlyTarget: { backup: 3 } }), ["target 3 backup days a month (fewer when away)"]);
+      assert.deepStrictEqual(tgt({ poolMember: false, monthlyTarget: { primary: 4, backup: 3 } }), ["target 4 primary / 3 backup days a month (the backup number: fewer when away)"]);
+      assert.deepStrictEqual(tgt({ availableWindows: [{ start: "2027-03-08", end: "2027-03-12" }], monthlyTarget: { backup: 3 } }), ["target 3 backup days a month (fewer when away)"], "a windows surgeon is outside the pool too");
+      assert.deepStrictEqual(tgt({ poolMember: false, monthlyTarget: 4 }), ["target 4 primary days a month"], "a primary number outside the pool reads as before");
+      // no summary line names a person, a date or the old bare text
+      for (const r of [{ monthlyTarget: { backup: 3 } }, { monthlyTarget: { primary: 4, backup: 3 } }, { poolMember: false, monthlyTarget: { backup: 3 } }]) assert.ok(!/backup days a month\.?$/.test(tgt(r)[0]), "the bare 'backup days a month' survives: " + tgt(r)[0]);
+      // Prompt 37 fix round (11/22): his HARD backup cap (backupCap.perMonthDays) below the backup number is what the number can
+      // never pass (rules.js backupTargetFor) - the bracket says so after the words it had. No cap, a cap at or above the
+      // number, a cap that is no number, or a weekends-only cap: nothing is added.
+      const CAP7 = { backupCap: { perMonthDays: 7 } };
+      assert.strictEqual(tgt(Object.assign({ monthlyTarget: { backup: 12 } }, CAP7))[0], "target 12 backup days a month (fewer when away - not below the equal share, nor below the number itself when that is lower - at most his backup cap of 7)", "the exact words, backup only");
+      assert.deepStrictEqual(tgt(Object.assign({ monthlyTarget: { primary: 4, backup: 12 } }, CAP7)), ["target 4 primary / 12 backup days a month (the backup number: " + FLOOR + " - at most his backup cap of 7)"], "beside a primary number");
+      assert.deepStrictEqual(tgt(Object.assign({ poolMember: false, monthlyTarget: { backup: 12 } }, CAP7)), ["target 12 backup days a month (fewer when away - at most his backup cap of 7)"], "outside the pool");
+      assert.deepStrictEqual(tgt({ monthlyTarget: { backup: 3 }, backupCap: { perMonthDays: 0 } }), ["target 3 backup days a month (" + FLOOR + " - at most his backup cap of 0)"], "a cap of 0 is a cap");
+      assert.deepStrictEqual(tgt({ monthlyTarget: { backup: 7.5 }, backupCap: { perMonthDays: 7, weekendsPerMonth: 1 } }), ["target 7.5 backup days a month (" + FLOOR + " - at most his backup cap of 7)"], "a cap just below the number; the weekend cap beside it is no day cap");
+      for (const bc of [undefined, { perMonthDays: 12 }, { perMonthDays: 15 }, { weekendsPerMonth: 1 }, { perMonthDays: "7" }, { perMonthDays: null }, {}, 7, null]) assert.deepStrictEqual(tgt(Object.assign({ monthlyTarget: { backup: 12 } }, bc === undefined ? {} : { backupCap: bc })), ["target 12 backup days a month (" + FLOOR + ")"], "no cap words for backupCap " + JSON.stringify(bc));
+      assert.deepStrictEqual(tgt(Object.assign({ monthlyTarget: 4 }, CAP7)), ["target 4 primary days a month"], "the backup cap says nothing about a primary number");
+      assert.deepStrictEqual(tgt(Object.assign({ monthlyTarget: { primary: 12 } }, CAP7)), ["target 12 primary days a month"], "... nor about { primary }");
+      assert.strictEqual((H.suRulesSummary(Object.assign({ monthlyTarget: { backup: 12 } }, CAP7), info).find(l => l.family === "Backup") || {}).text, "Any day; at most 7 days a month.", "the Backup line names the cap itself, as it always did");
+      assert.strictEqual((H.suRulesSummary(Object.assign({ monthlyTarget: { backup: 12 } }, CAP7), info).find(l => l.family === "Limits") || {}).text, "At most 2 primary days in a row (group default); soft limit 7 primary days a month (the group's); target 12 backup days a month (fewer when away - not below the equal share, nor below the number itself when that is lower - at most his backup cap of 7).", "the whole Limits line");
+      // ...and the ENGINE says the same: four made-up pool members, March 2027 (31 backup slots -> a share of 7.8 each); a is
+      // away 3/1 - 3/16 (16 of 31 days)
+      const R = require(path.join(ROOT, "rules.js")), GEN = require(path.join(ROOT, "generator.js"));
+      const roster = ["a", "b", "c", "d"].map(id => ({ id, name: id.toUpperCase(), code: id.toUpperCase(), active: true }));
+      const noteOf = (aRules, timeOffRows) => {
+        const surgeonRules = {}; roster.forEach(r => { surgeonRules[r.id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+        surgeonRules.a = Object.assign({}, surgeonRules.a, aRules);
+        const ctx = R.buildContext({ roster, surgeonRules, groupRules: { defaultMaxConsecutiveDays: 31 }, holidays: {}, timeOffRows: timeOffRows || [], availabilityRows: [], schedule: {}, today: "2027-01-15" });
+        const M = GEN.generate(ctx, "2027-03-01", "2027-03-31", { seed: 7, bestOf: 1 }).diagnostics.impliedTargets.months["2027-03"].members.a;
+        return { bt: R.backupTargetFor(ctx, "a", "2027-03"), M };
+      };
+      const AWAY = [{ person_id: "a", start_date: "2027-03-01", end_date: "2027-03-16" }], GONE = [{ person_id: "a", start_date: "2027-03-01", end_date: "2027-03-31" }];
+      // "fewer when away": 20 x 15 / 31 = 9.7 (rules.js), and that is the generator's target while it is above his share
+      const e1 = noteOf({ monthlyTarget: { backup: 20 } }, AWAY);
+      assert.deepStrictEqual([e1.bt.asked, e1.bt.away, e1.bt.days, e1.bt.target, e1.M.backupTarget], [20, 16, 31, 9.7, 9.7], "fewer when away");
+      assert.strictEqual(noteOf({ monthlyTarget: { backup: 20 } }, []).M.backupTarget, 20, "nobody away: the number as set");
+      // "not below the equal share": 10 x 15 / 31 = 4.8 is held at the 7.8 he has without a target; a whole month away too
+      const e2 = noteOf({ monthlyTarget: { backup: 10 } }, AWAY);
+      assert.deepStrictEqual([e2.bt.target, e2.M.backupOverride.share, e2.M.backupTarget], [4.8, 7.8, 7.8], "not below the equal share");
+      // (that share is the one he has WITHOUT a target, so it follows what the rules allow him: away the whole month it is 0,
+      // and so is the target - the floor never asks for backups he cannot take)
+      const e2g = noteOf({ monthlyTarget: { backup: 10 } }, GONE);
+      assert.deepStrictEqual([e2g.bt.target, e2g.M.backupOverride.share, e2g.M.backupTarget], [0, 0, 0], "a whole month away: his share without a target is 0, and so is the target");
+      // "nor below the number itself when that is lower": 4 x 15 / 31 = 1.9 stays 4 (his share is 7.8)
+      const e3 = noteOf({ monthlyTarget: { backup: 4 } }, AWAY);
+      assert.deepStrictEqual([e3.bt.target, e3.M.backupOverride.share, e3.M.backupTarget], [1.9, 7.8, 4], "nor below the number itself when that is lower");
+      // a primary number beside it changes none of this ("the backup number: ...")
+      const e4 = noteOf({ monthlyTarget: { primary: 6, backup: 10 } }, AWAY);
+      assert.deepStrictEqual([e4.M.primaryTarget, e4.M.backupTarget], [6, 7.8], "the primary number stands; the backup number is held at the share");
+      // outside the pool: prorated, and nothing holds it up - the same number and days away read 4.8 there (7.8 in the pool,
+      // e2), so "not below the equal share" would be untrue and the line says only "fewer when away"
+      const e5 = noteOf({ poolMember: false, monthlyTarget: { backup: 10 } }, AWAY);
+      assert.deepStrictEqual([e5.bt.target, e5.M.backupOverride.share, e5.M.backupTarget], [4.8, null, 4.8], "outside the pool: no share, the prorated number");
+      assert.strictEqual(noteOf({ poolMember: false, monthlyTarget: { backup: 10 } }, GONE).M.backupTarget, 0, "outside the pool a whole month away reads 0");
+      // Prompt 37 fix round - "at most his backup cap": 12 with nobody away stops at a hard cap of 7 (rules.js answers cap 7,
+      // the generator targets 7 and notes the cap); away most of the month the prorated number is below the cap and the cap
+      // is not what it stops at; a cap AT the number is never passed, so nothing is said and nothing is capped
+      const e6 = noteOf({ monthlyTarget: { backup: 12 }, backupCap: { perMonthDays: 7 } }, []);
+      assert.deepStrictEqual([e6.bt.target, e6.bt.cap, e6.M.backupTarget, e6.M.backupOverride.cap], [7, 7, 7, 7], "at most his backup cap");
+      const e6a = noteOf({ monthlyTarget: { backup: 12 }, backupCap: { perMonthDays: 7 } }, AWAY);
+      assert.deepStrictEqual([e6a.bt.target, "cap" in e6a.bt], [5.8, false], "12 x 15 / 31 = 5.8 is below the cap of 7: fewer when away, the cap not reached");
+      const e7 = noteOf({ monthlyTarget: { backup: 12 }, backupCap: { perMonthDays: 12 } }, []);
+      assert.deepStrictEqual([e7.bt.target, "cap" in e7.bt, e7.M.backupTarget, "cap" in e7.M.backupOverride], [12, false, 12, false], "a cap at the number is never passed");
+      // a target that carries no number: the summary says "(ignored)", the engine reads no backup number - and says so once
+      const wCtx = R.buildContext({ roster, surgeonRules: { a: { monthlyTarget: { backup: "3" } }, b: {}, c: {}, d: {} }, groupRules: {}, holidays: {}, schedule: {}, today: "2027-01-15" });
+      assert.strictEqual(R.backupTargetFor(wCtx, "a", "2027-03"), null, "no backup number in { backup: \"3\" }");
+      assert.deepStrictEqual(wCtx.warnings.filter(w => /monthlyTarget/.test(w)), ['surgeonRules.a.monthlyTarget = {"backup":"3"} is not a number or { primary, backup } with numbers (Prompt 37): what is not a number is ignored'], "the engine warns once");
+    });
+    // Prompt 37 (Faraz 11/22): eastFeed.backupFreeOnEastDays (exactly true = on) - on the surgeon's own East call days a BACKUP
+    // carries no shape penalty (rules.js rdBackupFreeOn). The summary knows the key (never "not read by the engine"), words it
+    // on the East line ONLY while it is exactly true and the East feed applies, and the Remove confirm names it in plain words.
+    // pin moved deliberately 11/22 (Prompt 37 fix round): the clause read "a backup on an East call day carries no run, rest or
+    // weekend-shape penalty". The switch is two-sided since the engine's review: such a backup is ALSO left out of the any-role
+    // run, the rest between stretches and the back-to-back-weekend test of his OTHER days (rules.js holdsShape) - the clause
+    // says both sides now (FREE below), and both are pinned to eligibility() at the end of the check.
+    check("Prompt 37 summary: eastFeed.backupFreeOnEastDays - known to the summary (true or false); exactly true appends '; a backup on an East call day carries no run, rest or weekend-shape penalty and is left out of his other days' run, rest and back-to-back counts' to the East line; false / absent / another truthy value / the feed off read exactly as before; plain words in the Remove confirm; both sides pinned to rules.js", () => {
+      const east = (rules) => lines(rules).find(l => l.startsWith("East"));
+      const FREE = "a backup on an East call day carries no run, rest or weekend-shape penalty and is left out of his other days' run, rest and back-to-back counts";
+      const base = { enabled: true, eastBlocksPrimary: true };
+      const today = "East / Davenport: East call days block primary (shifts in East backup weeks count).";
+      assert.strictEqual(east({ eastFeed: base }), today, "the line without the switch (today's)");
+      assert.strictEqual(east({ eastFeed: Object.assign({}, base, { backupFreeOnEastDays: true }) }), "East / Davenport: East call days block primary (shifts in East backup weeks count); " + FREE + ".");
+      assert.ok(east({ eastFeed: Object.assign({}, base, { backupFreeOnEastDays: true }) }).endsWith("; " + FREE + "."), "with the switch on the line ends with the new words");
+      // false, absent and anything that is not exactly true read as today - byte for byte
+      for (const v of [false, undefined, null, "true", 1, "yes", {}]) assert.strictEqual(east({ eastFeed: Object.assign({}, base, v === undefined ? {} : { backupFreeOnEastDays: v }) }), today, "backupFreeOnEastDays " + JSON.stringify(v) + " must read as today");
+      // the seed's East surgeons: unchanged without the switch (the verbatim pins above), the new words at the END with it
+      for (const id of ["s1", "s5"]) {
+        const was = east(seed.surgeonRules[id]);
+        assert.ok(was && !was.includes(FREE), id + ": the seed carries no switch");
+        const withIt = JSON.parse(JSON.stringify(seed.surgeonRules[id])); withIt.eastFeed.backupFreeOnEastDays = true;
+        assert.strictEqual(east(withIt), was.replace(/\.$/, "") + "; " + FREE + ".", id + ": the seed line plus the new words");
+        const off = JSON.parse(JSON.stringify(seed.surgeonRules[id])); off.eastFeed.backupFreeOnEastDays = false;
+        assert.deepStrictEqual(lines(off), lines(seed.surgeonRules[id]), id + ": false reads exactly as the seed, every line");
+        // only the East line moves
+        assert.deepStrictEqual(lines(withIt).filter(l => !l.startsWith("East")), lines(seed.surgeonRules[id]).filter(l => !l.startsWith("East")), id + ": no other line moved");
+      }
+      // the East feed off: rules.js never applies the switch (it needs the East feature) - the line says only that the feed is off
+      assert.strictEqual(east({ eastFeed: { enabled: false, eastBlocksPrimary: true, backupFreeOnEastDays: true } }), "East / Davenport: East feed off.");
+      // East call days that block backup: no backup is placed there, so the switch has nothing to act on - the line says so
+      assert.strictEqual(east({ eastFeed: { enabled: true, eastBlocksPrimary: true, eastBlocksBackup: true, backupFreeOnEastDays: true } }), "East / Davenport: East call days block primary and backup (shifts in East backup weeks count); " + FREE + " (no effect while East call days block backup).");
+      // known to the summary: never on the Other line, true or false
+      for (const v of [true, false]) {
+        assert.deepStrictEqual(H.suRulesUnknownKeys({ eastFeed: Object.assign({}, base, { backupFreeOnEastDays: v }) }), [], "backupFreeOnEastDays " + v + " is a key the summary knows");
+        assert.strictEqual(H.suRulesSummary({ eastFeed: Object.assign({}, base, { backupFreeOnEastDays: v }) }, info).some(l => l.family === "Other"), false, "no Other line for backupFreeOnEastDays " + v);
+      }
+      assert.ok(H.SU_SUM_KNOWN.eastFeed.includes("backupFreeOnEastDays"), "SU_SUM_KNOWN.eastFeed lists the key");
+      // the Remove confirm names it in plain words (no camelCase key)
+      const f = H.suRuleField("eastFeed");
+      assert.strictEqual(H.suRuleRemoveConfirm(f, { eastFeed: { enabled: true, backupFreeOnEastDays: true } }, "X"), 'Remove the rule "East (Davenport) call" for X? This deletes: backup on East call days without shape penalties.');
+      assert.strictEqual(H.suRuleRemoveConfirm(f, { eastFeed: { enabled: true, backupFreeOnEastDays: false } }, "X"), 'Remove the rule "East (Davenport) call" for X? This deletes: backup on East call days without shape penalties: off.');
+      assert.ok(!/[a-z][A-Z]/.test(H.suRuleRemoveConfirm(f, { eastFeed: { enabled: true, backupFreeOnEastDays: true } }, "X").replace(/"[^"]*"/, "")), "an internal key name in the confirm");
+      // ...and the ENGINE: a made-up surgeon with a published East call day (3/10/2027)
+      const R = require(path.join(ROOT, "rules.js"));
+      const DAY = "2027-03-10";
+      const ctxOf = (ef) => R.buildContext({ roster: [{ id: "a", name: "A", code: "AAA", active: true }, { id: "b", name: "B", code: "BBB", active: true }], surgeonRules: { a: { eastFeed: ef }, b: {} }, groupRules: {}, holidays: {}, schedule: {}, eastBusyDays: { a: [DAY] }, today: "2027-01-15" });
+      assert.strictEqual(typeof R.backupFreeOnEastDay, "function", "rules.js backupFreeOnEastDay");
+      assert.strictEqual(R.backupFreeOnEastDay(ctxOf(Object.assign({}, base, { backupFreeOnEastDays: true })), "a", DAY), true, "exactly true + the East feed: his East call day is free for backup");
+      assert.strictEqual(R.backupFreeOnEastDay(ctxOf(Object.assign({}, base, { backupFreeOnEastDays: true })), "a", "2027-03-11"), false, "a day that is not his East call day is not");
+      for (const v of [false, undefined, "true", 1]) assert.strictEqual(R.backupFreeOnEastDay(ctxOf(Object.assign({}, base, v === undefined ? {} : { backupFreeOnEastDays: v })), "a", DAY), false, "rules.js reads " + JSON.stringify(v) + " as off, like the summary");
+      assert.strictEqual(R.backupFreeOnEastDay(ctxOf({ enabled: false, eastBlocksPrimary: true, backupFreeOnEastDays: true }), "a", DAY), false, "the East feed off: the switch does nothing (the summary says 'East feed off')");
+      assert.deepStrictEqual(R.eligibility(ctxOf({ enabled: true, eastBlocksPrimary: true, eastBlocksBackup: true, backupFreeOnEastDays: true }), DAY, "backup", "a").hard, ["east-busy"], "East call days that block backup: the day is hard-blocked for backup - 'no effect', as the summary says");
+      assert.strictEqual(R.eligibility(ctxOf(Object.assign({}, base, { backupFreeOnEastDays: true })), DAY, "backup", "a").ok, true, "without the backup block he can be backup on his East call day");
+      // Prompt 37 fix round (11/22) - the clause's two sides, in the engine. Made-up days around his East call day 3/10/2027
+      // (a Wednesday); `softs` = the soft reasons eligibility() gives him for a backup on a day.
+      const row = (p, b) => ({ primary: p, backup: b, primaryLocked: false, backupLocked: false, source: "manual", externalCover: null, note: null });
+      const ctx2 = (sw, extra, schedule) => R.buildContext({ roster: [{ id: "a", name: "A", code: "AAA", active: true }, { id: "b", name: "B", code: "BBB", active: true }], surgeonRules: { a: Object.assign({ eastFeed: Object.assign({}, base, sw === undefined ? {} : { backupFreeOnEastDays: sw }) }, extra), b: {} }, groupRules: {}, holidays: {}, schedule, eastBusyDays: { a: [DAY] }, today: "2027-01-15" });
+      const softs = (ctx, d) => { const r = R.eligibility(ctx, d, "backup", "a"); assert.strictEqual(r.ok, true, d + " is open for backup"); return r.soft.map(s => s.reason); };
+      for (const [sw, on] of [[true, true], [false, false], [undefined, false], ["true", false], [1, false]]) {
+        // (a) "carries no run, rest or weekend-shape penalty": the backup ON his East call day, the day after his own primary
+        // (any-role limit 1) - without the switch it pays backup-after-primary and long-run:2
+        assert.deepStrictEqual(softs(ctx2(sw, { maxConsecutiveAnyRole: 1 }, { "2027-03-09": row("a", "b") }), DAY), on ? [] : ["backup-after-primary", "long-run:2"], "the East-day backup itself, switch " + JSON.stringify(sw));
+        // (b) "is left out of his other days' run ... counts": he HOLDS the backup on his East call day; a backup the day
+        // after is a run of two without the switch (long-run:2), a run of one with it
+        assert.deepStrictEqual(softs(ctx2(sw, { maxConsecutiveAnyRole: 1 }, { [DAY]: row("b", "a") }), "2027-03-11"), on ? [] : ["long-run:2"], "the day after a held East-day backup, switch " + JSON.stringify(sw));
+        // ... "rest": two days later, with 3 days off asked between stretches - one day of rest without the switch, none counted with it
+        assert.deepStrictEqual(softs(ctx2(sw, { restBetweenStretches: { minDaysOff: 3, weight: "medium" } }, { [DAY]: row("b", "a") }), "2027-03-12"), on ? [] : ["short-rest:1"], "two days after a held East-day backup, switch " + JSON.stringify(sw));
+      }
+      // a value that is not true / false is ignored - the summary reads it as off - and rules.js says so once (true / false / absent: no warning)
+      const bfWarn = (sw) => ctx2(sw, {}, {}).warnings.filter(w => /backupFreeOnEastDays/.test(w));
+      assert.deepStrictEqual(bfWarn("true"), ['surgeonRules.a.eastFeed.backupFreeOnEastDays = "true" is not true / false (Prompt 37): ignored']);
+      assert.deepStrictEqual(bfWarn(1), ["surgeonRules.a.eastFeed.backupFreeOnEastDays = 1 is not true / false (Prompt 37): ignored"]);
+      for (const sw of [true, false, undefined]) assert.deepStrictEqual(bfWarn(sw), [], "no warning for " + JSON.stringify(sw));
+      // "East call days" (the checkbox's title names them): a published day, a day an override added and a standing day are; a
+      // forecast day - however likely - and an ordinary day are not
+      const kinds = R.buildContext({ roster: [{ id: "a", name: "A", code: "AAA", active: true }], surgeonRules: { a: { eastFeed: Object.assign({}, base, { backupFreeOnEastDays: true, forecast: true }), eastStanding: [{ name: "Standing", days: ["03-20"] }] } }, groupRules: {}, holidays: {}, schedule: {}, eastBusyDays: { a: [DAY] }, eastForecast: { a: { "2027-03-15": 0.9 } }, eastOverrides: { a: { "2027-03-17": true } }, today: "2027-01-15" });
+      assert.deepStrictEqual(["2027-03-10", "2027-03-17", "2027-03-20", "2027-03-15", "2027-03-22"].map(d => R.backupFreeOnEastDay(kinds, "a", d)), [true, true, true, false, false], "published / override-added / standing: East call days; a forecast day and a plain day: not");
     });
     // S2 (review 10/1): the snapshots above pin the helper's own words; this pins them to the ENGINE. A small parser reads
     // every clause of the Primary and Backup lines that names days (only ..., of Mon-Thu only ..., X and Fri-Sun, no ...,
@@ -12174,7 +12361,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(!/<RuField key=\{k\} T=\{T\} label=\{k\}/.test(RE), "a weight is labelled by its key");
     });
     check("P24 editor: every data-testid the smoke and the pins use is still there (rules-editor, rules-pick-<id>, rules-save, rules-raw, group-save, the field testids, pattern-row / -preview / -error), the Prefers select sits after Weekend style, maxConsecutiveDays is the first max=14 number input", () => {
-      for (const t of ["rules-editor", "rules-save", "rules-raw", "group-save", "group-default-cap-primary", "rules-monthly-target", "rules-primary-contribution", "rules-weekend-style", "rules-cap-mode", "rules-cap-primary", "rules-backup-opt-out", "rules-window-week", "rules-window-week-target", "rules-max-consec-any", "rules-holiday-unit-one-day", "rules-prefer-alternate-days", "rules-weekend-block-penalty"]) {
+      // Prompt 37 (Faraz 11/22): the backup target box (rules-monthly-target-backup) and the East switch (rules-east-backup-free) join the list
+      for (const t of ["rules-editor", "rules-save", "rules-raw", "group-save", "group-default-cap-primary", "rules-monthly-target", "rules-monthly-target-backup", "rules-east-backup-free", "rules-primary-contribution", "rules-weekend-style", "rules-cap-mode", "rules-cap-primary", "rules-backup-opt-out", "rules-window-week", "rules-window-week-target", "rules-max-consec-any", "rules-holiday-unit-one-day", "rules-prefer-alternate-days", "rules-weekend-block-penalty"]) {
         assert.ok(SRC.includes('data-testid="' + t + '"') || SRC.includes('testid="' + t + '"'), "testid " + t + " is gone");
       }
       for (const t of ["pattern-row", "pattern-preview", "pattern-error"]) assert.ok(SRC.includes('data-testid="' + t + '"'), t);
@@ -12201,6 +12389,247 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(RE.slice(mcd, mca).includes('type="number" min="1" max="14"'), "maxConsecutiveDays is a max=14 number input");
       assert.ok(FIELD_IDS.indexOf("recurringAvailable") < FIELD_IDS.indexOf("recurringUnavailable") && FIELD_IDS.indexOf("recurringUnavailable") < FIELD_IDS.indexOf("recurringAvoid") && FIELD_IDS.indexOf("recurringAvoid") < FIELD_IDS.indexOf("aledo") && H.SU_RULE_FIELDS.slice(0, FIELD_IDS.indexOf("recurringAvailable")).every(f => !["recurringUnavailable", "recurringAvoid", "aledo"].includes(f.id)), "the pattern lists keep their order (the smoke reads previews[0] across recurringAvailable, recurringUnavailable, recurringAvoid)");
       assert.ok(!/data-testid="pattern-/.test(SRC.slice(SRC.indexOf('data-testid="rules-summary"'), SRC.indexOf('data-testid="rules-add"'))), "no pattern preview inside the summary");
+    });
+
+    // --- Prompt 37 (Faraz 11/22): the Monthly target field's two boxes and the East switch
+    // monthlyTarget is a number (the PRIMARY target) or { primary?, backup? }. The field is ONE field with two boxes, each the
+    // single child of its own RuField; both read the stored value through one normaliser (mtObj) and write the WHOLE next
+    // value with one set("monthlyTarget", next) per change: no number left -> null, a primary alone -> the plain number, a
+    // backup number -> { backup } or { primary, backup }. The East switch (eastFeed.backupFreeOnEastDays) is one more box in
+    // the East block. Source pins first, then the editor itself lifted and run.
+    check("Prompt 37 editor (source pins): the Monthly target field - two RuFields in one wrapper, 'Monthly target' (rules-monthly-target, its tag unchanged) and 'Backup target (days a month)' (rules-monthly-target-backup), each with one number input 0-31 of the same width, read through mtObj and written by the one writer; ONE set(\"monthlyTarget\", ...) in the editor and no path read / write inside the object; the East switch after the forecast box, exactly-true", () => {
+      const mt = RE.slice(RE.indexOf('case "monthlyTarget":'), RE.indexOf('case "monthlyCap":'));
+      assert.ok(mt.length > 300, "the Monthly target renderer");
+      assert.ok(/^case "monthlyTarget": return \(\n\s*<div>\n\s*<RuField /.test(mt) && /<\/RuField>\n\s*<\/div>\n\s*\);/.test(mt), "both boxes sit inside one wrapper element");
+      const fields = mt.split("<RuField ").slice(1).map(s => s.slice(0, s.indexOf("</RuField>")));
+      assert.strictEqual(fields.length, 2, "two RuFields");
+      fields.forEach((s, i) => { assert.strictEqual(s.split("<input ").length - 1, 1, "RuField " + i + ": one input"); assert.ok(/^T=\{T\} label="[^"]+" hint="[^"]+"><input data-testid="[^"]+" type="number" min="0" max="31" value=\{[^}]+\} onChange=\{e => setMonthlyTarget\("(primary|backup)", e\.target\.value\)\} style=\{\{ \.\.\.inp, width: 70 \}\} \/>$/.test(s), "RuField " + i + ": the input is the RuField's single child (a number box 0-31, width 70): " + s); });
+      assert.ok(fields[0].startsWith('T={T} label="Monthly target" hint="blank = equal share; a number = primary target"><input data-testid="rules-monthly-target" '), "the primary box keeps its label, hint and testid");
+      assert.ok(fields[1].startsWith('T={T} label="Backup target (days a month)" hint="blank = equal share; fewer when away"><input data-testid="rules-monthly-target-backup" '), "the backup box: label, hint, testid");
+      assert.ok(fields[0].includes('value={mtObj.primary === undefined ? "" : mtObj.primary} onChange={e => setMonthlyTarget("primary", e.target.value)}'), "the primary box reads mtObj and writes through setMonthlyTarget");
+      assert.ok(fields[1].includes('value={mtObj.backup === undefined ? "" : mtObj.backup} onChange={e => setMonthlyTarget("backup", e.target.value)}'), "the backup box reads mtObj and writes through setMonthlyTarget");
+      // ONE write of the whole value; no path into the object (set("monthlyTarget.backup", n) on a plain number would replace it)
+      assert.strictEqual(RE.split('set("monthlyTarget"').length - 1, 1, "one set(\"monthlyTarget\", next) in the editor");
+      assert.ok(RE.includes('    set("monthlyTarget", next);\n  };'), "the one write hands set() the whole next value");
+      assert.ok(!/[gs]et\("monthlyTarget\./.test(RE) && !RE.includes('get("monthlyTarget"'), "no get / set path into the target object, no second reader beside mtObj");
+      assert.ok(RE.includes('const next = cur.backup !== undefined ? (cur.primary !== undefined ? { primary: cur.primary, backup: cur.backup } : { backup: cur.backup }) : (cur.primary !== undefined ? cur.primary : null);'), "the writer's four shapes: { primary, backup }, { backup }, the plain number, null");
+      assert.ok(RE.includes('if (typeof mtRaw === "number" && isFinite(mtRaw)) mtObj.primary = mtRaw;') && RE.includes('else if (mtRaw && typeof mtRaw === "object" && !Array.isArray(mtRaw)) ["primary", "backup"].forEach(k => { if (typeof mtRaw[k] === "number" && isFinite(mtRaw[k])) mtObj[k] = mtRaw[k]; });'), "the one normaliser: a number = its primary, an object = its numeric members");
+      // the monthly target hint pin (3769's) still holds - once
+      assert.strictEqual(SRC.split('<RuField T={T} label="Monthly target" hint="blank = equal share; a number = primary target">').length - 1, 1, "the Monthly target tag, once");
+      // the East switch: one SuCheck after the forecast box, inside the block shown while the East feed is enabled
+      const ef = RE.slice(RE.indexOf('case "eastFeed":'), RE.indexOf('case "holidaysOff":'));
+      // pin moved deliberately 11/22 (Prompt 37 fix round): the title read "On his own East call days a Silvis backup day skips
+      // the soft terms for days in a row, rest between stretches, back-to-back weekends, weekend style and backup after his own
+      // primary. Hard rules still apply." It now names WHICH days are East call days (published, an override-added day, his
+      // standing days - never a forecast day) and the switch's second side (left out of the run, rest and back-to-back counts
+      // of his other days); label, testid, the exactly-true read and the write are unchanged. The summary check above pins
+      // both to rules.js.
+      const sw = '<SuCheck testid="rules-east-backup-free" label="Backup on East call days carries no run, rest or weekend-shape penalty" title="On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply." checked={get("eastFeed.backupFreeOnEastDays", false) === true} onChange={v => set("eastFeed.backupFreeOnEastDays", v)} />';
+      assert.strictEqual(RE.split(sw).length - 1, 1, "the East switch, once, exactly-true");
+      assert.strictEqual(RE.split('testid="rules-east-backup-free"').length - 1, 1, "one box with that testid (no copy with the old title left)");
+      assert.ok(ef.indexOf(sw) > ef.indexOf('testid="rules-east-forecast"') && ef.indexOf(sw) > ef.indexOf('{get("eastFeed.enabled", false) && <>') && ef.indexOf(sw) < ef.indexOf('label="Derive Silvis weeks from"'), "after the forecast box, inside the enabled block, before the derive-from field");
+    });
+    // RulesEditor lifted verbatim (the Setup constants + the editor block), transpiled by the build's own Babel (preset-react,
+    // classic runtime) and RUN on a stand-in React - createElement returns plain nodes, useState keeps its slots between
+    // renders - in a vm realm holding the real config.js, helpers.js, rules.js and app-styles.js. The boxes are driven through
+    // their own onChange, the Add menu through its select and button, Save through its onClick; what Save hands to
+    // onSaveSurgeon is the saved rules. (SuCheck and PatternListEditor are element types only - never called here.)
+    const liftEditor = () => {
+      const babel = require("@babel/core");
+      const a0 = SRC.indexOf("const SU_WEEKDAYS = ["), a1 = SRC.indexOf("function suPatternKind("), e0 = SRC.indexOf("// --- Rules editor:"), e1 = SRC.indexOf("// --- Availability statements");
+      assert.ok(a0 > 0 && a1 > a0 && e0 > a1 && e1 > e0, "the Setup constants and the rules editor block are where the lift expects them");
+      const code = babel.transformSync(SRC.slice(a0, a1) + "\n" + SRC.slice(e0, e1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const asked = [];
+      const box = {
+        console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Promise, Set, Map, setTimeout, clearTimeout, isNaN, isFinite, parseFloat, parseInt,
+        atob: (x) => Buffer.from(x, "base64").toString("binary"), navigator: { userAgent: "node" },
+        localStorage: { _m: {}, getItem(k) { return this._m[k] === undefined ? null : this._m[k]; }, setItem(k, v) { this._m[k] = String(v); }, removeItem(k) { delete this._m[k]; } },
+        fetch: () => Promise.reject(new Error("no network in this test")),
+        document: { activeElement: null, contains: () => false }, confirm: (m) => { asked.push(m); return true; },
+      };
+      box.window = box; box.addEventListener = () => {}; box.removeEventListener = () => {};
+      vm.createContext(box);
+      for (const f of ["config.js", "helpers.js", "rules.js", "app-styles.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), box, { filename: f });
+      let slots = [], cursor = 0;
+      Object.assign(box, {
+        React: {
+          createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment",
+          useState: (init) => { const i = cursor++; if (i >= slots.length) slots.push(typeof init === "function" ? init() : init); return [slots[i], (v) => { slots[i] = typeof v === "function" ? v(slots[i]) : v; }]; },
+          useEffect: () => {}, useId: () => "uid",
+        },
+        SuCheck: function SuCheck() { return null; }, PatternListEditor: function PatternListEditor() { return null; },
+      });
+      const RulesEditor = vm.runInContext(code + "\n;RulesEditor", box, { filename: "RulesEditor.jsx" });
+      const css = vm.runInContext("css", box);
+      const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+      const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+      const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+      const plain = (v) => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
+      // open(rules): the editor on one made-up surgeon ("p1") whose stored rules are `rules`
+      const open = (rules) => {
+        const saved = [];
+        const props = { css, dk: false, roster: [{ id: "p1", name: "Person One", code: "PON", active: true }], surgeonRules: { p1: rules }, groupRules: {}, holidayNames: HOL, onSaveSurgeon: (id, r) => saved.push([id, r]), onSaveGroup: () => {}, showToast: () => {}, today: "2027-01-15" };
+        slots = []; asked.length = 0;
+        let tree;
+        const render = () => { cursor = 0; tree = RulesEditor(props); return tree; };
+        render();
+        assert.ok(slots[0] === "p1" && slots[1] && typeof slots[1] === "object" && typeof slots[2] === "boolean", "the editor's first three state slots are the picked id, the draft and the dirty flag");
+        const node = (id) => all(tree, x => x.props && (x.props["data-testid"] === id || x.props.testid === id))[0] || null;
+        const E = {
+          node, asked, saved,
+          draft: () => plain(slots[1]),
+          status: () => text(node("rules-status")),
+          saveDisabled: () => node("rules-save").props.disabled,
+          fields: () => all(tree, x => x.props && /^rules-field-/.test(x.props["data-testid"] || "")).map(x => x.props["data-testid"].slice("rules-field-".length)),
+          lines: () => all(tree, x => x.props && x.props["data-testid"] === "rules-summary-line").map(x => x.props["data-family"] + ": " + text(kids(x)[1])),
+          val: (id) => { const n = node(id); return n ? n.props.value : null; },
+          type: (id, t) => { const n = node(id); assert.ok(n && typeof n.props.onChange === "function", "no input " + id); n.props.onChange({ target: { value: t } }); render(); },
+          tick: (id, on) => { const n = node(id); assert.ok(n && typeof n.props.onChange === "function", "no checkbox " + id); n.props.onChange(on); render(); },
+          add: (fieldId) => { node("rules-add").props.onChange({ target: { value: fieldId } }); render(); const b = node("rules-add-button"); assert.strictEqual(b.props.disabled, false, "Add is enabled once " + fieldId + " is chosen"); b.props.onClick(); render(); },
+          remove: (fieldId) => { node("rules-remove-" + fieldId).props.onClick(); render(); },
+          save: () => { const b = node("rules-save"); assert.strictEqual(b.props.disabled, false, "Save is enabled"); const n0 = saved.length; b.props.onClick(); render(); assert.strictEqual(saved.length, n0 + 1, "one onSaveSurgeon call"); assert.strictEqual(saved[n0][0], "p1"); return plain(saved[n0][1]); },
+        };
+        return E;
+      };
+      return { open, plain };
+    };
+    const P = "rules-monthly-target", B = "rules-monthly-target-backup";
+    check("Prompt 37 editor (RulesEditor lifted and run): a surgeon with no target - the field comes from the menu and writes nothing; a primary alone saves the plain number; a backup number beside it saves { primary, backup } and the primary box keeps its number; clearing the primary leaves { backup } (no null member); clearing the backup too leaves null (never an empty object)", () => {
+      const E = liftEditor().open({ maxConsecutiveDays: 3, monthlyTarget: null });
+      assert.strictEqual(E.node(P), null, "a null target is not in use: the field is not shown");
+      assert.ok(!E.fields().includes("monthlyTarget"));
+      E.add("monthlyTarget");
+      assert.ok(E.fields().includes("monthlyTarget"), "added from the menu");
+      assert.deepStrictEqual([E.val(P), E.val(B)], ["", ""], "both boxes blank");
+      assert.deepStrictEqual([E.draft(), E.status(), E.saveDisabled()], [{ maxConsecutiveDays: 3, monthlyTarget: null }, "Saved", true], "adding the field writes nothing");
+      // a primary alone: the plain number (the shape it always had)
+      E.type(P, "4");
+      assert.deepStrictEqual([E.draft().monthlyTarget, E.val(P), E.val(B), E.status()], [4, 4, "", "Unsaved"]);
+      // a backup number beside it: the object; the primary box keeps its number
+      E.type(B, "3");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { primary: 4, backup: 3 });
+      assert.deepStrictEqual([E.val(P), E.val(B)], [4, 3], "typing in the backup box did not lose the primary number");
+      assert.ok(E.lines().some(l => l.startsWith("Limits: ") && l.includes("target 4 primary / 3 backup days a month (the backup number: fewer when away - not below the equal share, nor below the number itself when that is lower)")), "the summary's Limits line says what the backup number does: " + E.lines().join(" | "));
+      assert.deepStrictEqual(E.save(), { maxConsecutiveDays: 3, monthlyTarget: { primary: 4, backup: 3 } }, "Save writes { primary, backup } and nothing else");
+      assert.strictEqual(E.status(), "Saved");
+      // a longer number is typed digit by digit: the other box is untouched at every step
+      E.type(B, "1"); E.type(B, "12");
+      assert.deepStrictEqual([E.draft().monthlyTarget, E.val(P), E.val(B)], [{ primary: 4, backup: 12 }, 4, 12]);
+      // clear the primary: { backup } - never primary: null
+      E.type(P, "");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { backup: 12 });
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(E.draft().monthlyTarget, "primary"), false, "no null primary member is stored");
+      assert.deepStrictEqual([E.val(P), E.val(B)], ["", 12], "clearing the primary box did not lose the backup number");
+      assert.ok(E.lines().some(l => l.startsWith("Limits: ") && l.includes("target 12 backup days a month (fewer when away - not below the equal share, nor below the number itself when that is lower)")), "backup only: " + E.lines().join(" | "));
+      assert.deepStrictEqual(E.save(), { maxConsecutiveDays: 3, monthlyTarget: { backup: 12 } }, "Save writes { backup }");
+      // clear the backup too: null - never an empty object, never { backup: null }
+      E.type(B, "");
+      assert.strictEqual(E.draft().monthlyTarget, null, "no number left = null (the blank value it always had)");
+      assert.ok(!E.lines().some(l => /backup days a month|a monthly target without a number/.test(l)), "no target words left: " + E.lines().join(" | "));
+      assert.deepStrictEqual(E.save(), { maxConsecutiveDays: 3, monthlyTarget: null }, "Save writes monthlyTarget null");
+      // the other order: backup first on an empty target, then a primary; clearing the backup returns the plain number
+      E.type(B, "5");
+      assert.deepStrictEqual([E.draft().monthlyTarget, E.val(P), E.val(B)], [{ backup: 5 }, "", 5], "a backup number alone: { backup }");
+      E.type(P, "2");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { primary: 2, backup: 5 });
+      E.type(B, "");
+      assert.strictEqual(E.draft().monthlyTarget, 2, "the backup cleared beside a primary: the plain number again");
+      // 0 is a number in either box (shown as 0, never blank)
+      E.type(B, "0");
+      assert.deepStrictEqual([E.draft().monthlyTarget, E.val(B)], [{ primary: 2, backup: 0 }, 0]);
+      E.type(P, "0"); E.type(B, "");
+      assert.deepStrictEqual([E.draft().monthlyTarget, E.val(P), E.val(B)], [0, 0, ""]);
+    });
+    check("Prompt 37 editor (RulesEditor lifted and run): every stored shape is read through the one normaliser and nothing is rewritten by looking - a plain number, { primary }, { backup }, { primary, backup }, members that are not numbers, a string, an array; an edit writes the whole next value; Remove rule deletes both numbers; a number typed as junk is a cleared box", () => {
+      const L = liftEditor();
+      const shows = (stored, p, b) => {
+        const E = L.open({ maxConsecutiveDays: 3, monthlyTarget: stored });
+        if (!E.node(P)) E.add("monthlyTarget"); // a value the registry reads as unused (null, a string) is added from the menu
+        assert.deepStrictEqual([E.val(P), E.val(B)], [p, b], "stored " + JSON.stringify(stored) + " shows " + JSON.stringify([p, b]));
+        assert.deepStrictEqual([E.draft(), E.status(), E.saveDisabled()], [L.plain({ maxConsecutiveDays: 3, monthlyTarget: stored }), "Saved", true], "stored " + JSON.stringify(stored) + " is not rewritten by showing it");
+        return E;
+      };
+      // a plain number is the primary; a backup typed beside it keeps it
+      let E = shows(7, 7, "");
+      E.type(B, "2");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { primary: 7, backup: 2 }, "a backup number typed beside a stored plain number keeps the number as the primary");
+      assert.deepStrictEqual(E.save(), { maxConsecutiveDays: 3, monthlyTarget: { primary: 7, backup: 2 } });
+      // { primary } alone shows as the number; it is rewritten as the plain number only when edited
+      E = shows({ primary: 6 }, 6, "");
+      E.type(B, "1"); E.type(B, "");
+      assert.strictEqual(E.draft().monthlyTarget, 6);
+      // { backup } alone; a primary typed beside it
+      E = shows({ backup: 9 }, "", 9);
+      assert.ok(E.fields().includes("monthlyTarget"), "a stored backup number shows the field by itself");
+      E.type(P, "5");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { primary: 5, backup: 9 });
+      // both
+      E = shows({ primary: 5, backup: 9 }, 5, 9);
+      E.type(P, "8");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { primary: 8, backup: 9 }, "editing the primary keeps the backup");
+      E.type(B, "10");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { primary: 8, backup: 10 }, "editing the backup keeps the primary");
+      // Remove rule deletes the key - both numbers - after naming them
+      E.remove("monthlyTarget");
+      assert.deepStrictEqual(E.draft(), { maxConsecutiveDays: 3 }, "Remove rule deletes the whole target");
+      assert.deepStrictEqual(E.asked, ['Remove the rule "Monthly target" for Person One? This deletes: primary 8; backup 10.'], "Remove names both numbers first");
+      // members that are not numbers read as blank and are dropped by the first edit (never a null member)
+      E = shows({ primary: null, backup: 3 }, "", 3);
+      E.type(B, "4");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { backup: 4 });
+      E = shows({ primary: "4", backup: null }, "", "");
+      E.type(P, "4");
+      assert.strictEqual(E.draft().monthlyTarget, 4);
+      // a string and an array are no target: blank boxes, replaced whole by the first edit
+      E = shows("5", "", "");
+      E.type(B, "5");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { backup: 5 });
+      E = shows([4, 3], "", "");
+      E.type(P, "1");
+      assert.strictEqual(E.draft().monthlyTarget, 1);
+      // text that is no number reads as a cleared box (a number input hands "" for it; anything else is treated alike)
+      E = shows({ primary: 5, backup: 9 }, 5, 9);
+      E.type(B, "abc");
+      assert.strictEqual(E.draft().monthlyTarget, 5, "junk in the backup box clears it: the plain primary is left");
+      E.type(P, "x");
+      assert.strictEqual(E.draft().monthlyTarget, null, "junk in the primary box clears it: null");
+      // decimals are kept as typed
+      E.type(B, "13.5");
+      assert.deepStrictEqual(E.draft().monthlyTarget, { backup: 13.5 });
+    });
+    check("Prompt 37 editor (RulesEditor lifted and run): the East switch - drawn only while the East feed applies, unticked unless the key is exactly true, ticking writes eastFeed.backupFreeOnEastDays true (unticking false) and nothing else; nothing is written by showing it; the summary's East line follows", () => {
+      const L = liftEditor();
+      // pin moved deliberately 11/22 (Prompt 37 fix round): FREE read "a backup on an East call day carries no run, rest or
+      // weekend-shape penalty" - the summary's clause names the switch's second side too (helpers.suRulesSummary)
+      const SW = "rules-east-backup-free", FREE = "a backup on an East call day carries no run, rest or weekend-shape penalty and is left out of his other days' run, rest and back-to-back counts";
+      const base = { enabled: true, eastBlocksPrimary: true };
+      let E = L.open({ eastFeed: base });
+      const sw = E.node(SW);
+      assert.ok(sw && sw.type && sw.type.name === "SuCheck", "the switch is a SuCheck");
+      assert.deepStrictEqual([sw.props.checked, sw.props.label], [false, "Backup on East call days carries no run, rest or weekend-shape penalty"], "unticked without the key");
+      // the title (fix round): which days are East call days, and both sides of the switch
+      assert.strictEqual(sw.props.title, "On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply.", "the switch's title");
+      assert.deepStrictEqual([E.draft(), E.status()], [{ eastFeed: base }, "Saved"], "showing the box writes nothing");
+      assert.ok(!E.lines().some(l => l.includes(FREE)), "the summary does not name it while it is off");
+      E.tick(SW, true);
+      assert.deepStrictEqual(E.draft(), { eastFeed: { enabled: true, eastBlocksPrimary: true, backupFreeOnEastDays: true } }, "ticking writes exactly the one key");
+      assert.strictEqual(E.node(SW).props.checked, true);
+      assert.ok(E.lines().some(l => l.startsWith("East / Davenport: ") && l.endsWith("; " + FREE + ".")), "the East line says so: " + E.lines().join(" | "));
+      assert.deepStrictEqual(E.save(), { eastFeed: { enabled: true, eastBlocksPrimary: true, backupFreeOnEastDays: true } }, "Save writes it");
+      E.tick(SW, false);
+      assert.deepStrictEqual([E.draft().eastFeed.backupFreeOnEastDays, E.node(SW).props.checked], [false, false], "unticking writes false");
+      assert.ok(!E.lines().some(l => l.includes(FREE)), "false reads as off in the summary");
+      // a stored value that is not exactly true shows unticked (rules.js reads only true as on)
+      for (const v of ["true", 1, "yes"]) assert.strictEqual(L.open({ eastFeed: Object.assign({}, base, { backupFreeOnEastDays: v }) }).node(SW).props.checked, false, JSON.stringify(v) + " is not on");
+      assert.strictEqual(L.open({ eastFeed: Object.assign({}, base, { backupFreeOnEastDays: true }) }).node(SW).props.checked, true, "a stored true shows ticked");
+      // the East feed off: the block's boxes are not drawn (the engine never applies the switch then)
+      E = L.open({ eastFeed: { enabled: false, backupFreeOnEastDays: true } });
+      assert.ok(E.node("rules-east-enabled") && E.node(SW) === null && E.node("rules-east-forecast") === null, "no switch while the East feed is off");
+      // a surgeon without the East rule: added from the menu ({ enabled: true }), the switch starts unticked
+      E = L.open({ maxConsecutiveDays: 3 });
+      assert.strictEqual(E.node(SW), null);
+      E.add("eastFeed");
+      assert.deepStrictEqual([E.draft().eastFeed, E.node(SW).props.checked], [{ enabled: true }, false], "Add writes { enabled: true } only - the switch is not part of the start value");
     });
   })();
 
@@ -14590,9 +15019,12 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const css = vm.runInContext("css", box);
       const render = (o) => {
         states = [o.mode || "month", o.year, o.month0]; // useState order: mode, year, month0, withPreview (year / month from today unless given)
-        const ctx = o.noCtx ? null : buildContext({ roster: ROSTER, surgeonRules: {}, groupRules: o.groupRules || {}, schedule: SCHED, today: "2026-11-15" });
+        // Prompt 37 (11/22): o.surgeonRules (the context's rules AND the card's prop - one object in the app) and o.timeOffRows
+        // (the context's vacations) are optional; without them the harness is what it was ({} and no time off)
+        const sr = o.surgeonRules || {};
+        const ctx = o.noCtx ? null : buildContext({ roster: ROSTER, surgeonRules: sr, groupRules: o.groupRules || {}, schedule: SCHED, timeOffRows: o.timeOffRows || [], today: "2026-11-15" });
         return TotalsCard({
-          css, dk: false, roster: ROSTER, schedule: SCHED, ctx, surgeonRules: {}, preview: o.preview === undefined ? PREVIEW : o.preview, today: "2026-11-15",
+          css, dk: false, roster: ROSTER, schedule: SCHED, ctx, surgeonRules: sr, preview: o.preview === undefined ? PREVIEW : o.preview, today: "2026-11-15",
           nameOf: (id) => (ROSTER.find(r => r.id === id) || {}).name || id, Badge: function Badge() { return null; }, showToast: (m, k) => toasts.push([m, k]),
           ytdFloors: { "2026": "2026-09-14" }, payVisible: false, payTotalsRole: null, payData: null, holidays: {}, payYear: 2026, onPayYear: () => {}, onPayRefresh: () => {},
           loaded: true, daysUnread: false, eastDetailsVisible: o.east !== false,
@@ -14733,6 +15165,161 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
         "tt.csvHeader.length !== 22",
       ]) assert.ok(smoke.includes(t), "the smoke lacks: " + t);
     });
+    // ---- P37 (Prompt 37, Faraz 11/22): an explicit BACKUP target in Totals. It counts for the days in town, so the period's
+    // Target B is the SUM of its months' numbers - for each month the last Generate preview's note when it was made with the
+    // same number (diagnostics.impliedTargets.months[m].members[id].backupOverride.target), else rules.js backupTargetFor
+    // (the number prorated by the days away) - never the number x months, and '-' when a month has no answer (no rules
+    // context). An explicit PRIMARY target stays number x months. A backup target alone is no weighted share (helpers
+    // ttWeightedShare): no share, no weighted deviation, no green mark. Same lifted card; made-up numbers and dates: Khan's
+    // backup target 10, away 1/11 - 1/20/2027 (10 of January's 31 days: 10 x 21 / 31 = 6.8), the view January + February 2027
+    // (year to date 2027 at February; nothing is scheduled there, so every count is 0).
+    const T37 = { s1: { monthlyTarget: { backup: 10 } }, s2: { monthlyTarget: 5 } };
+    const AWAY37 = [{ person_id: "s1", start_date: "2027-01-11", end_date: "2027-01-20" }];
+    const JANFEB = { mode: "ytd", year: 2027, month0: 1 }, JAN = { year: 2027, month0: 0 }, FEB = { year: 2027, month0: 1 };
+    const cells = (tree, id) => ["target", "deviation", "targetb", "deviationb"].map(c => text(byCol(byId(tree, "totals-row-" + id)[0], c)[0]));
+    const note37 = (months) => ({ respectLocks: true, schedule: {}, diagnostics: { tallies: {}, impliedTargets: { months } } });
+    check("P37 Totals (i): an explicit backup target with days away in one month of a two-month range reads the prorated month + the full month (6.8 + 10 = 16.8), not the number x 2; each month alone reads its own number; an explicit primary target stays number x months", () => {
+      const { render } = lift();
+      const o = { groupRules: SEEDW, surgeonRules: T37, timeOffRows: AWAY37, preview: null };
+      const two = render(Object.assign({}, o, JANFEB));
+      assert.ok(/Year to date 2027/.test(text(byId(two, "totals-period")[0])) && /2027-01-01 to 2027-02-28/.test(text(byId(two, "totals-period")[0])), "the view is January + February 2027: " + text(byId(two, "totals-period")[0]).slice(0, 90));
+      assert.deepStrictEqual(cells(two, "s1"), ["-", "-", "16.8", "-16.8"], "Khan: no primary target; Target B 6.8 + 10 = 16.8 (was 20 = 10 x 2), 0 backups held");
+      assert.deepStrictEqual(cells(two, "s2"), ["10", "-10", "-", "-"], "Burchett: the explicit PRIMARY target stays 5 x 2 months = 10");
+      assert.deepStrictEqual(cells(two, "s3"), ["-", "-", "-", "-"], "Acton: no target");
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, JAN)), "s1"), ["-", "-", "6.8", "-6.8"], "January alone: 10 x 21 / 31 = 6.8");
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, FEB)), "s1"), ["-", "-", "10", "-10"], "February alone: nobody away, the number as set");
+      // nobody away at all: the number x the months, as before
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, JANFEB, { timeOffRows: [] })), "s1"), ["-", "-", "20", "-20"], "no days away: 10 + 10");
+      // away the whole of January: 0 + 10
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, JANFEB, { timeOffRows: [{ person_id: "s1", start_date: "2026-12-28", end_date: "2027-02-01" }] })), "s1"), ["-", "-", "9.6", "-9.6"], "away 12/28 - 2/1: January 0, February 10 x 27 / 28 = 9.6");
+      // three months, a primary beside it: 5.5 x 3 = 16.5 stays; the backup is summed month by month (Sep - Nov 2026, nobody away)
+      const three = render({ groupRules: SEEDW, surgeonRules: { s1: { monthlyTarget: { primary: 5.5, backup: 2.2 } } }, preview: null, mode: "ytd" });
+      assert.deepStrictEqual(cells(three, "s1").filter((_, i) => i % 2 === 0), ["16.5", "6.6"], "5.5 x 3 months = 16.5 (unchanged); 2.2 + 2.2 + 2.2 = 6.6, one decimal");
+      // an explicit target shows no '*' and is no implied target (no footnote)
+      assert.ok(!/\*/.test(cells(two, "s1").join("")) && !/implied water-filled share/.test(text(two)), "an explicit target carries no '*'");
+    });
+    check("P37 Totals (ii) + (iii): a month the last Generate preview worked out with the SAME number reads the preview's number (9.4 - the share it was held at - + February's 10 = 19.4); a note made with another number, or without a target, is ignored (6.8 + 10 = 16.8 again)", () => {
+      const { render } = lift();
+      const o = Object.assign({ groupRules: SEEDW, surgeonRules: T37, timeOffRows: AWAY37 }, JANFEB);
+      const same = note37({ "2027-01": { members: { s1: { backupTarget: 9.4, backupOverride: { asked: 10, days: 31, away: 10, prorated: 6.8, share: 9.4, target: 9.4 } } } } });
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: same })), "s1"), ["-", "-", "19.4", "-19.4"], "January from the note (9.4), February from the days away (10)");
+      // both months noted
+      const both = note37({ "2027-01": { members: { s1: { backupOverride: { asked: 10, days: 31, away: 10, prorated: 6.8, share: 9.4, target: 9.4 } } } }, "2027-02": { members: { s1: { backupOverride: { asked: 10, days: 28, away: 0, prorated: 10, share: 9.1, target: 10 } } } } });
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: both })), "s1"), ["-", "-", "19.4", "-19.4"], "9.4 + 10");
+      // (iii) a note made with another number is not this target's
+      const other = note37({ "2027-01": { members: { s1: { backupOverride: { asked: 15, days: 31, away: 10, prorated: 10.2, share: 9.4, target: 10.2 } } } } });
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: other })), "s1"), ["-", "-", "16.8", "-16.8"], "a note with asked 15 is ignored for a target of 10");
+      // a note without a numeric target, another surgeon's note, a month without members, an older preview without impliedTargets
+      for (const months of [{ "2027-01": { members: { s1: { backupOverride: { asked: 10, target: null } } } } }, { "2027-01": { members: { s2: { backupOverride: { asked: 10, target: 9.4 } } } } }, { "2027-01": {} }, { "2027-01": { members: { s1: {} } } }])
+        assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: note37(months) })), "s1"), ["-", "-", "16.8", "-16.8"], "ignored: " + JSON.stringify(months));
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: { respectLocks: true, schedule: {}, diagnostics: { tallies: {} } } })), "s1"), ["-", "-", "16.8", "-16.8"], "a preview without impliedTargets");
+      // the month view of January reads the note alone
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, JAN, { mode: "month", preview: same })), "s1"), ["-", "-", "9.4", "-9.4"]);
+    });
+    check("P37 Totals (iv): no rules context (or no rules.js reader) -> the explicit backup target reads '-' unless the preview's notes answer every month - never the unprorated number; the primary target still shows", () => {
+      const { render, box } = lift();
+      const o = Object.assign({ groupRules: SEEDW, surgeonRules: T37, timeOffRows: AWAY37, preview: null }, JANFEB);
+      const none = render(Object.assign({}, o, { noCtx: true }));
+      assert.deepStrictEqual(cells(none, "s1"), ["-", "-", "-", "-"], "no rules context: Target B '-' (not 20)");
+      assert.deepStrictEqual(cells(none, "s2"), ["10", "-10", "-", "-"], "the explicit primary target needs no context: 5 x 2");
+      const janOnly = note37({ "2027-01": { members: { s1: { backupOverride: { asked: 10, days: 31, away: 10, prorated: 6.8, share: 9.4, target: 9.4 } } } } });
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { noCtx: true, preview: janOnly })), "s1"), ["-", "-", "-", "-"], "a note for January alone leaves February unanswered: '-'");
+      const both = note37({ "2027-01": { members: { s1: { backupOverride: { asked: 10, target: 9.4 } } } }, "2027-02": { members: { s1: { backupOverride: { asked: 10, target: 10 } } } } });
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { noCtx: true, preview: both })), "s1"), ["-", "-", "19.4", "-19.4"], "the notes answer both months: 9.4 + 10");
+      // with nobody else's target the four target columns are not drawn at all
+      const alone = render(Object.assign({}, o, { noCtx: true, surgeonRules: { s1: T37.s1 } }));
+      assert.strictEqual(byCol(alone, "targetb").length, 0, "no row has a target to show: no target columns");
+      // the context is there but rules.js has no backupTargetFor (an older rules.js): '-' as well
+      box.backupTargetFor = undefined;
+      assert.deepStrictEqual(cells(render(o), "s1"), ["-", "-", "-", "-"], "no reader: '-'");
+    });
+    check("P37 Totals (v): a backup target alone is no weighted share - the fairness row shows no share, no weighted deviation and no green mark, and reads 'no primary target' with the backup deviation; a primary number beside it brings the share back (primary x 1 + the summed backup target x 0.5); a primary-only target keeps its share and mark; the CSV carries the summed Target B", () => {
+      const { render, csvOf } = lift();
+      const o = { groupRules: SEEDW, surgeonRules: T37, timeOffRows: AWAY37, preview: null };
+      const fair = render(Object.assign({}, o, JAN, { mode: "fairness" }));
+      const s1 = byId(fair, "fairness-row-s1")[0], s2 = byId(fair, "fairness-row-s2")[0], s3 = byId(fair, "fairness-row-s3")[0];
+      assert.deepStrictEqual([s1.props["data-weighted"], s1.props["data-weighted-share"], s1.props["data-deviation"], s1.props["data-deviation-b"], s1.props["data-deviation-w"]], [0, undefined, "-", "-6.8", "-"], "Khan (backup target only): no weighted share, no weighted deviation");
+      assert.strictEqual(byId(s1, "fairness-target-mark").length, 0, "no green mark without a primary target");
+      const t1 = text(s1).replace(/\s+/g, " ");
+      assert.ok(/^0 total \(0 P \+ 0 B\) - weighted 0 - target - - target B 6\.8 - cap \(P\) - - no primary target \/ -6\.8 B$/.test(t1), "Khan's row text: " + t1);
+      assert.ok(!/share/.test(t1), "no ' / share ...' on his row: " + t1);
+      // a primary-only target keeps its share and its mark (the backup side reads 0)
+      assert.deepStrictEqual([s2.props["data-weighted-share"], s2.props["data-deviation"], s2.props["data-deviation-w"], byId(s2, "fairness-target-mark").length], [5, "-5", "-5", 1], "Burchett (primary 5): share 5, the mark");
+      assert.ok(/deviation -5 P$/.test(text(s2).replace(/\s+/g, " ")), "Burchett's row text: " + text(s2));
+      assert.deepStrictEqual([s3.props["data-weighted-share"], byId(s3, "fairness-target-mark").length, /no target$/.test(text(s3).replace(/\s+/g, " "))], [undefined, 0, true], "Acton: no target at all reads 'no target'");
+      // the table: no weighted deviation column to check, but the row's targets
+      const both = Object.assign({}, o, { surgeonRules: { s1: { monthlyTarget: { primary: 4, backup: 10 } } } });
+      const fb = byId(render(Object.assign({}, both, JANFEB, { mode: "ytd" })), "totals-row-s1")[0];
+      assert.deepStrictEqual(["target", "deviation", "targetb", "deviationb"].map(c => text(byCol(fb, c)[0])), ["8", "-8", "16.8", "-16.8"], "primary 4 x 2 months = 8; backup 6.8 + 10");
+      const fj = byId(render(Object.assign({}, both, JAN, { mode: "fairness" })), "fairness-row-s1")[0];
+      assert.deepStrictEqual([fj.props["data-weighted-share"], fj.props["data-deviation-w"], byId(fj, "fairness-target-mark").length], [7.4, "-7.4", 1], "primary 4 + 6.8 x 0.5 = 7.4: the share and the mark are back");
+      assert.ok(/4 x 1 \+ 6\.8 x 0\.5 = 7\.4/.test(byId(fj, "fairness-target-mark")[0].props.title), "the mark's title shows the sum: " + byId(fj, "fairness-target-mark")[0].props.title);
+      // an implied primary share beside an explicit backup target (November 2026, the harness preview: Khan's primary 5.6*)
+      const nov = byId(render({ groupRules: SEEDW, surgeonRules: { s1: T37.s1 } }), "totals-row-s1")[0];
+      assert.deepStrictEqual(["target", "deviation", "targetb", "deviationb"].map(c => text(byCol(nov, c)[0])), ["5.6*", "+1.4", "10", "-7"], "the implied primary 5.6* stays; the explicit backup 10 (nobody away in November) replaces the implied 5.8*");
+      // the CSV: Target B / Deviation B carry the summed number; 23 columns, Weighted last
+      const csv = csvOf(render(Object.assign({}, o, JANFEB)));
+      const khan = csv.find(l => l[4] === "Khan"), bur = csv.find(l => l[4] === "Burchett");
+      assert.deepStrictEqual([csv[0].length, csv[0][15], csv[0][19], csv[0][20], csv[0][22]], [23, "Target", "Target B", "Deviation B", "Weighted"], "the CSV header is unchanged");
+      assert.deepStrictEqual([khan[15], khan[16], khan[19], khan[20], khan[22]], ["", "", "16.8", "-16.8", "0"], "Khan's CSV row: no primary target, Target B 16.8");
+      assert.deepStrictEqual([bur[15], bur[16], bur[19], bur[20]], ["10", "-10", "", ""], "Burchett's CSV row: Target 10");
+    });
+    // Prompt 37 fix round (11/22): (a) a preview note that carries `counted` is a PART-covered month's number - the number for
+    // the days that run scheduled, not the month's - so Totals skips it and reads the whole month from rules.js; a whole-month
+    // note is used as before, one that carries `cap` included. (b) Called for a whole month, rules.js backupTargetFor now stops
+    // at the surgeon's hard backup cap and reads a number above the month's days as the month's days - Totals shows both.
+    // Same made-up data as above: Khan's backup target 10, away 1/11 - 1/20/2027, the view January + February 2027.
+    check("P37 Totals (vi), fix round: a preview note of a month that run covered only in part (it carries counted) is NOT the month's number - Totals reads the whole month from rules.js instead; a whole-month note with a cap is used; the hard backup cap and a number above the month's days come through backupTargetFor", () => {
+      const { render } = lift();
+      const o = Object.assign({ groupRules: SEEDW, surgeonRules: T37, timeOffRows: AWAY37 }, JANFEB);
+      const jan = (bo) => note37({ "2027-01": { members: { s1: { backupOverride: bo } } } });
+      // the control: (ii)'s whole-month January note - asked 10, target 9.4 - is used
+      const whole = { asked: 10, days: 31, away: 10, prorated: 6.8, share: 9.4, target: 9.4 };
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: jan(whole) })), "s1"), ["-", "-", "19.4", "-19.4"], "the whole-month note is used: 9.4 + 10");
+      // a note written by a run that covered 10 of January's 31 days: its 2.5 is the number for those ten days
+      const part = { asked: 10, days: 31, away: 4, prorated: 1.9, share: 2.5, target: 2.5, counted: 10 };
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: jan(part) })), "s1"), ["-", "-", "16.8", "-16.8"], "a part-covered note is skipped: January reads 10 x 21 / 31 = 6.8 from rules.js (the part's 2.5 + 10 would be 12.5)");
+      // any note that carries counted is skipped - the whole-month note's own numbers with the key added, and beside a cap
+      for (const extra of [{ counted: 10 }, { counted: 30 }, { counted: 31 }, { counted: 0 }, { counted: 10, cap: 9.4 }])
+        assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: jan(Object.assign({}, whole, extra)) })), "s1"), ["-", "-", "16.8", "-16.8"], "skipped: " + JSON.stringify(extra));
+      // the month view of January does not show the part's number either
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, JAN, { mode: "month", preview: jan(part) })), "s1"), ["-", "-", "6.8", "-6.8"], "January alone");
+      // with no rules context a part-covered note is no answer: '-' (never the part's number, never the number as set)
+      const partAndFeb = note37({ "2027-01": { members: { s1: { backupOverride: part } } }, "2027-02": { members: { s1: { backupOverride: { asked: 10, target: 10 } } } } });
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { noCtx: true, preview: partAndFeb })), "s1"), ["-", "-", "-", "-"], "no context: January has no answer, so the period has none");
+      // a whole-month note that carries cap (the number stopped at his hard cap in that run) is a whole-month number: used
+      const capped = { asked: 10, days: 31, away: 10, prorated: 3, share: 3, target: 3, cap: 3 };
+      assert.deepStrictEqual(cells(render(Object.assign({}, o, { preview: jan(capped) })), "s1"), ["-", "-", "13", "-13"], "January from the capped note (3), February from rules.js (10)");
+      // (b) the hard backup cap through rules.js, no preview: January's 6.8 is below a cap of 7, February's 10 stops at 7
+      const oc = Object.assign({}, o, { surgeonRules: { s1: { monthlyTarget: { backup: 10 }, backupCap: { perMonthDays: 7 } }, s2: T37.s2 }, preview: null });
+      assert.deepStrictEqual(cells(render(oc), "s1"), ["-", "-", "13.8", "-13.8"], "6.8 + 7 (16.8 without the cap)");
+      assert.deepStrictEqual(cells(render(Object.assign({}, oc, JAN, { mode: "month" })), "s1"), ["-", "-", "6.8", "-6.8"], "January: below the cap");
+      assert.deepStrictEqual(cells(render(Object.assign({}, oc, FEB, { mode: "month" })), "s1"), ["-", "-", "7", "-7"], "February: at the cap");
+      assert.deepStrictEqual(cells(render(Object.assign({}, oc, { surgeonRules: { s1: { monthlyTarget: { backup: 10 }, backupCap: { perMonthDays: 10 } }, s2: T37.s2 } })), "s1"), ["-", "-", "16.8", "-16.8"], "a cap at the number changes nothing");
+      // a number above the month's days reads as the month's days: January 31 x 21 / 31 = 21, February 28
+      const big = Object.assign({}, o, { surgeonRules: { s1: { monthlyTarget: { backup: 40 } }, s2: T37.s2 }, preview: null });
+      assert.deepStrictEqual(cells(render(big), "s1"), ["-", "-", "49", "-49"], "21 + 28 (never 40 x 2)");
+      assert.deepStrictEqual(cells(render(Object.assign({}, big, FEB, { mode: "month" })), "s1"), ["-", "-", "28", "-28"], "February has 28 days");
+    });
+    check("P37 Totals source pins: the Target B title keeps its opening and says an explicit backup target counts for the days in town (days away, the sum of the months, the Generate preview's number); targetFor reads the preview's note only for the same number and rules.js backupTargetFor behind a typeof guard; no East word in the new text", () => {
+      const code = stripComments(tcSrc);
+      const th = code.slice(code.indexOf('title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview'), code.indexOf(">Target B</th>"));
+      assert.ok(th.length > 100, "the Target B header");
+      assert.ok(/\(\*\)\. An explicit backup target counts for the days in town: a month's number is fewer when the month has days away, and the period's target is the sum of its months\. The Generate preview shows each month's number/.test(th), "the title's new sentence: " + th.slice(-420));
+      // pin moved deliberately 11/22 (Prompt 37 fix round): the title ended "...shows each month's number (never below the equal
+      // share, nor below the number itself when that is set lower); a month the last preview worked out with the same target
+      // reads that number here" - the bracket now also says the number never passes his backup cap, and the end says that a
+      // month the preview covered only in part is read whole (Totals skips such a note)
+      assert.ok(th.endsWith("The Generate preview shows each month's number (never below the equal share, nor below the number itself when that is set lower, never above his backup cap); a month the last preview worked out with the same target reads that number here (a month that preview covered only in part reads the whole-month number)\""), "the title's end: " + th.slice(-330));
+      assert.ok(!/East|Davenport/.test(th), "the Target B title names no East word");
+      assert.ok(code.includes('const bt = ctx && typeof backupTargetFor === "function" ? backupTargetFor(ctx, id, m) : null;'), "rules.js backupTargetFor behind a typeof guard and a context check");
+      assert.strictEqual((code.match(/backupTargetFor\(/g) || []).length, 1, "one call of the ONE reading");
+      // pin moved deliberately 11/22 (Prompt 37 fix round): the line read `if (bo && typeof bo === "object" && bo.asked === asked
+      // && typeof bo.target === "number") return bo.target;` - a note that carries counted (a part-covered month) is skipped now
+      assert.ok(code.includes('if (bo && typeof bo === "object" && bo.counted === undefined && bo.asked === asked && typeof bo.target === "number") return bo.target;'), "the preview's note counts only when it is a whole-month note made with the same number");
+      assert.ok(code.includes('if (explicit[role] !== null) { out[role] = { value: Math.round(explicit[role] * nMonths * 10) / 10, kind: "explicit" }; return; }'), "the explicit primary target is still number x months");
+      assert.ok(!/explicit\.backup \* nMonths/.test(code), "the backup target is never the number x months");
+    });
     // ---- P32-4 (Prompt 32 step 4; Faraz 10/11 decision 5 / DESIGN "Totals" Over-7): Totals flags each MONTH whose primary
     // count is over the holder's soft limit - rules.overSoftLimitMonths (the month's count; never cap x months) - on the cap
     // cell ("over <L>", "over <L>: Oct, Nov" over a longer range) and at the end of the fairness row. Same lifted card as P32-1.
@@ -14872,6 +15459,68 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(kids(none)[0].props["data-testid"] === "gen-over-soft" && /None/.test(text(kids(none)[0])), "no day over -> the box says None");
       const old = GD({ css, dg: Object.assign({}, dg, { overSoftLimit: undefined }), nameOf, roster: [] });
       assert.strictEqual(all(old, n => n.props && n.props["data-testid"] === "gen-over-soft").length, 0, "a preview without the list shows no box");
+    });
+    // Prompt 37 (Faraz 11/22): the Generate preview's shares table prints an explicit backup target's note after the Target B
+    // number. GenDiagnostics lifted as above and run over REAL generator output (four made-up pool members, March 2027; member
+    // a carries the backup number and is away 3/1 - 3/16), so the note is the generator's own backupOverride read through
+    // helpers.js backupTargetNote.
+    check("P37 GenDiagnostics (lifted and run over real generator output): the shares row's Target B cell reads the number then the note - '(set 20)', '(set 20, away 16 of 31 days)', '(set 10, away 16 of 31 days: held at the equal share)', '(set 4, away 16 of 31 days: kept as set)' - and nothing extra for a member without a backup number or for a preview made before the note existed; fix round: a part-covered month ('10 of 31 days scheduled, away 4 of them') and the hard cap (': at the backup cap 4')", () => {
+      const babel = require("@babel/core");
+      const R = require(path.join(ROOT, "rules.js")), GEN = require(path.join(ROOT, "generator.js"));
+      const g0 = src.indexOf("function GenDiagnostics({"), g1 = src.indexOf("// RF2 a (9/23): the merged map's");
+      assert.ok(g0 > 0 && g1 > g0, "GenDiagnostics is where the test expects it");
+      const code = babel.transformSync(src.slice(g0, g1), { babelrc: false, configFile: false, presets: [["@babel/preset-react", { runtime: "classic" }]] }).code;
+      const box = { console, Date, JSON, Math, Object, Array, String, Number, Boolean, RegExp, Error, Set, Map, isNaN, isFinite };
+      box.window = box;
+      vm.createContext(box);
+      vm.runInContext(fs.readFileSync(path.join(ROOT, "helpers.js"), "utf8"), box, { filename: "helpers.js" });
+      Object.assign(box, { React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children }), Fragment: "Fragment" }, mono: "monospace", LIGHT: { warnText: "#7a4a10", accentText: "#C2410C" }, reasonLabel: (c) => String(c), softTag: () => null });
+      const GD = vm.runInContext(code + "\n;GenDiagnostics", box, { filename: "GenDiagnostics.jsx" });
+      const kids = (n) => (n && n.children ? n.children : []).flat(Infinity).filter(c => c !== null && c !== undefined && c !== false && c !== true);
+      const all = (n, pred, out = []) => { if (n && typeof n === "object") { if (pred(n)) out.push(n); kids(n).forEach(c => all(c, pred, out)); } return out; };
+      const text = (n) => typeof n === "string" || typeof n === "number" ? String(n) : kids(n).map(text).join("");
+      const css = { subT: {}, tableWrap: {} };
+      const roster = ["a", "b", "c", "d"].map(id => ({ id, name: "M" + id, code: id.toUpperCase(), active: true }));
+      const AWAY = [{ person_id: "a", start_date: "2027-03-01", end_date: "2027-03-16" }];
+      const dgOf = (aRules, timeOffRows, to) => {
+        const surgeonRules = {}; roster.forEach(r => { surgeonRules[r.id] = { poolMember: true, maxConsecutiveDays: 31 }; });
+        surgeonRules.a = Object.assign({}, surgeonRules.a, aRules);
+        const ctx = R.buildContext({ roster, surgeonRules, groupRules: { defaultMaxConsecutiveDays: 31 }, holidays: {}, timeOffRows: timeOffRows || [], availabilityRows: [], schedule: {}, today: "2027-01-15" });
+        return GEN.generate(ctx, "2027-03-01", to || "2027-03-31", { seed: 7, bestOf: 1 }).diagnostics; // `to` (fix round): a run that covers the month only in part
+      };
+      const cellsOf = (dg) => {
+        const tree = GD({ css, dg, nameOf, roster });
+        const rows = all(tree, n => n.props && n.props["data-share"]);
+        assert.deepStrictEqual(rows.map(r => r.props["data-share"]), ["a:2027-03", "b:2027-03", "c:2027-03", "d:2027-03"], "one shares row per member");
+        return rows.map(r => { const c = all(r, n => n.props && n.props["data-col"] === "target-b"); assert.strictEqual(c.length, 1, "one Target B cell per row"); return text(c[0]); });
+      };
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 20 } }, [])), ["20 (set 20)", "3.7", "3.7", "3.7"], "nobody away: the number as set");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 20 } }, AWAY)), ["9.7 (set 20, away 16 of 31 days)", "7.1", "7.1", "7.1"], "away 16 of 31 days: 20 x 15 / 31 = 9.7");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 10 } }, AWAY)), ["7.8 (set 10, away 16 of 31 days: held at the equal share)", "7.8", "7.8", "7.8"], "4.8 would be below his share: held at 7.8");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 4 } }, AWAY)), ["4 (set 4, away 16 of 31 days: kept as set)", "9", "9", "9"], "a number set below his share stays as set");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { primary: 6, backup: 20 } }, AWAY))[0], "9.7 (set 20, away 16 of 31 days)", "a primary number beside it: the same note");
+      // no backup number anywhere: no note at all
+      assert.deepStrictEqual(cellsOf(dgOf({}, AWAY)), ["7.8", "7.8", "7.8", "7.8"], "no explicit backup target: the bare numbers");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: 6 }, AWAY)).map(t => /\(/.test(t)), [false, false, false, false], "a primary-only target prints no backup note");
+      // a preview made before Prompt 37 carries no backupOverride key: the cell reads as it always did
+      const older = dgOf({ monthlyTarget: { backup: 20 } }, AWAY);
+      delete older.impliedTargets.months["2027-03"].members.a.backupOverride;
+      assert.deepStrictEqual(cellsOf(older), ["9.7", "7.1", "7.1", "7.1"], "an older preview: no note, no throw");
+      // Prompt 37 fix round (11/22): a run over 3/1 - 3/10 only (10 of March's 31 days in play; a away 3/1 - 3/4) - the note names
+      // the days scheduled; the hard backup cap - the note names the cap. Hand-worked: 20 x 6 / 31 = 3.9; 5 x 6 / 31 = 1.0, kept
+      // at the number as set for the ten days, 5 x 10 / 31 = 1.6; 20 x 21 / 31 = 13.5 stops at a cap of 4; 12 at a cap of 7.
+      const AWAY4 = [{ person_id: "a", start_date: "2027-03-01", end_date: "2027-03-04" }], AWAY10 = [{ person_id: "a", start_date: "2027-03-01", end_date: "2027-03-10" }];
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 20 } }, AWAY4, "2027-03-10")), ["3.9 (set 20, 10 of 31 days scheduled, away 4 of them)", "2", "2", "2"], "a part-covered month: the days scheduled, the away days among them");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 5 } }, AWAY4, "2027-03-10")), ["1.6 (set 5, 10 of 31 days scheduled, away 4 of them: kept as set)", "2.8", "2.8", "2.8"], "a part-covered month: the number as set for the days in play");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 20 } }, [], "2027-03-10"))[0], "6.5 (set 20, 10 of 31 days scheduled)", "a part-covered month, nobody away: 20 x 10 / 31 = 6.5");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 20 }, backupCap: { perMonthDays: 4 } }, AWAY10)), ["4 (set 20, away 10 of 31 days: at the backup cap 4)", "9", "9", "9"], "the hard backup cap");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 12 }, backupCap: { perMonthDays: 7 } }, []))[0], "7 (set 12: at the backup cap 7)", "the cap with nobody away");
+      assert.deepStrictEqual(cellsOf(dgOf({ monthlyTarget: { backup: 20 }, backupCap: { perMonthDays: 2 } }, AWAY4, "2027-03-10"))[0], "2 (set 20, 10 of 31 days scheduled, away 4 of them: at the backup cap 2)", "a part-covered month at the cap");
+      // the paragraph above the table states the rule
+      // pin moved deliberately 11/22 (Prompt 37 fix round): the sentence now also names the part-covered month and the cap
+      const para = text(all(GD({ css, dg: older, nameOf, roster }), n => n.props && n.props["data-testid"] === "gen-shares")[0]);
+      assert.ok(para.includes("An explicit backup target (Setup) is prorated by the surgeon's days away in the month - not below the equal share, nor below the number itself when it is set lower; in a month this run covers only in part it counts the days scheduled, and it never exceeds his backup cap. The note after Target B names the number as set, the days scheduled and away, and what held it."), "the shares box states the rule: " + para.slice(para.indexOf("An explicit backup target"), para.indexOf("An explicit backup target") + 420));
+      assert.ok(!/\$/.test(para), "no $ in the shares box");
     });
     check("P32-4 DayEditor (lifted and run): the 'over 7' badge on the primary row - the summary (every signed-in role) and the scheduler's editor; never on ?public=1 (not even computed); never on a day the helper does not list", () => {
       const babel = require("@babel/core");

@@ -6776,6 +6776,16 @@ try {
   totalsOct: try {
     if (!TOT_OCT_OFFERED) { console.log(`     (Totals: the year picker offers ${Number(todayCentral.slice(0, 4)) - 1}-${Number(todayCentral.slice(0, 4)) + 2} - October 2026, the month the independent recount restates, is out of its reach; the Totals October checks are not exercised - re-pin the recount month)`); break totalsOct; }
     // ---- Totals: October 2026 ----
+    // Prompt 37 (Faraz 11/22): the smoke reads the LIVE blob, and a surgeon may now carry an explicit monthly target of his
+    // own there (Setup > Rules). What the Totals table and the fairness view must show for the five the smoke does not set
+    // is DERIVED from the served rules (liveBlobData.surgeonRules.<id>.monthlyTarget: a number or { primary } = a primary
+    // target, { backup } alone = a backup-only target, anything else = none) - never assumed to be "no target".
+    const servedTargetKind = (id) => {
+      const mt = (((liveBlobData && liveBlobData.surgeonRules) || {})[id] || {}).monthlyTarget;
+      const obj = mt && typeof mt === "object" && !Array.isArray(mt) ? mt : null;
+      if (typeof mt === "number" || (obj && typeof obj.primary === "number")) return "primary";
+      return obj && typeof obj.backup === "number" ? "backup-only" : "none";
+    };
     await setActonTarget(ACTON_TARGET);
     targetSet = true;
     await gotoTotalsOct();
@@ -6804,8 +6814,12 @@ try {
       const acton = published.find(r => r.id === "s3");
       if (!acton || acton.visible.target !== String(ACTON_TARGET) || acton.visible.deviation !== expDev || acton.flags.deviation !== (expDev.startsWith("+") ? "over" : expDev === "0" ? "ok" : "under")) fail(`Totals target: Acton should show Target ${ACTON_TARGET} / Deviation ${expDev} (flag ${expDev.startsWith("+") ? "over" : "under/ok"}), got target '${acton && acton.visible.target}' deviation '${acton && acton.visible.deviation}' flag ${acton && acton.flags.deviation}`);
       else ok(`Totals target: Acton (monthlyTarget ${ACTON_TARGET} saved through the Rules card) shows Target ${ACTON_TARGET} and Deviation ${expDev} = ${recount.s3.primary} (primary) - ${ACTON_TARGET}`);
+      // pin moved deliberately 11/22 (Prompt 37): the other five were ALL expected to show '-' in Target and Deviation. By the
+      // served rules (servedTargetKind, above): a primary target of his own shows a Target and a Deviation; a backup number
+      // alone, or no target, shows '-' in both PRIMARY cells. With no explicit target live this is the old check, row for row.
       const others = published.filter(r => r.id !== "s3");
-      if (others.some(r => r.visible.target !== "-" || r.visible.deviation !== "-")) fail("Totals target: a surgeon without a target shows a target/deviation: " + JSON.stringify(others.map(r => [r.id, r.visible.target, r.visible.deviation])));
+      const othersBad = others.filter(r => servedTargetKind(r.id) === "primary" ? (r.visible.target === "-" || r.visible.deviation === "-") : (r.visible.target !== "-" || r.visible.deviation !== "-"));
+      if (othersBad.length) fail("Totals target: a surgeon's Target / Deviation cells disagree with his served monthly target (a primary number shows both, a backup number alone or no target shows '-'): " + JSON.stringify(othersBad.map(r => [r.id, servedTargetKind(r.id), r.visible.target, r.visible.deviation])));
     }
     const totalsText = await page.$eval("[data-testid=totals-card]", el => el.innerText);
     if (/\$/.test(totalsText)) fail("Totals: a '$' appears in the card text (counts are unweighted; pay lives in the Pay mode only)"); else ok("Totals: no '$' anywhere in the card");
@@ -6918,11 +6932,19 @@ try {
     // the bar text is "<Name> <total> total (<P> P + <B> B) - target ... - cap ... - deviation/no target"
     const fairBad = fairRows.filter(r => { const x = recount[r.id]; return !x || r.total !== x.total || !new RegExp(`^\\S+ ${x.total} total \\(${x.primary} P \\+ ${x.backup} B\\)`).test(r.text); });
     const actonFair = fairRows.find(r => r.id === "s3");
-    const noTargetRows = fairRows.filter(r => r.id !== "s3");
+    // pin moved deliberately 11/22 (Prompt 37): the other five were ALL expected to read 'no target' with no mark. The smoke
+    // reads the LIVE blob, and since Prompt 37 a surgeon may carry an explicit monthly target there (Setup > Rules): a backup
+    // number alone reads 'no primary target' - no primary deviation and, a backup target alone being no weighted share, no
+    // mark; a primary number reads its deviation with the mark. What each of the five must read is DERIVED from the served
+    // rules (servedTargetKind, at the top of the Totals block). With no explicit target live this is the old check, row for row.
+    const otherRows = fairRows.filter(r => r.id !== "s3").map(r => Object.assign({ kind: servedTargetKind(r.id) }, r));
+    const noTargetRows = otherRows.filter(r => r.kind === "none"), backupOnlyRows = otherRows.filter(r => r.kind === "backup-only"), primaryTargetRows = otherRows.filter(r => r.kind === "primary");
     if (fairRows.length !== 6 || fairBad.length) fail("Fairness view: bars whose visible text or total disagree with the recount: " + JSON.stringify(fairBad.map(r => [r.id, r.total, r.text.slice(0, 60)])));
     else if (!actonFair || actonFair.deviation !== expDev || !actonFair.text.includes("deviation " + expDev) || !actonFair.mark || actonFair.markColor !== "rgb(26, 128, 64)" || !actonFair.text.includes(" - target " + ACTON_TARGET + " ")) fail(`Fairness view: Acton's row should read 'target ${ACTON_TARGET}', 'deviation ${expDev}', data-deviation ${expDev} and carry a green target mark; got ${JSON.stringify(actonFair)}`);
     else if (!noTargetRows.every(r => r.deviation === "-" && /no target/.test(r.text) && !r.mark)) fail("Fairness view: a surgeon without a target shows a deviation or a target mark: " + JSON.stringify(noTargetRows.map(r => [r.id, r.deviation, r.mark])));
-    else ok(`Fairness view: 6 bars whose visible text reads '<Name> <total> total (<P> P + <B> B)' per the recount; Acton (target ${ACTON_TARGET}) shows 'deviation ${expDev}' with the green target mark, the other five read 'no target' with no mark - ` + fairRows.map(r => `${r.id} ${r.total} ${r.deviation}`).join(", "));
+    else if (!backupOnlyRows.every(r => r.deviation === "-" && /no primary target/.test(r.text) && !/no target/.test(r.text) && !r.mark)) fail("Fairness view: a surgeon whose served rules carry a backup target only should read 'no primary target' with no primary deviation and no target mark (Prompt 37): " + JSON.stringify(backupOnlyRows.map(r => [r.id, r.deviation, r.mark, r.text.slice(-70)])));
+    else if (!primaryTargetRows.every(r => r.deviation !== "-" && r.text.includes("deviation " + r.deviation + " P") && r.mark)) fail("Fairness view: a surgeon whose served rules carry a primary target should read its deviation with the target mark: " + JSON.stringify(primaryTargetRows.map(r => [r.id, r.deviation, r.mark, r.text.slice(-70)])));
+    else ok(`Fairness view: 6 bars whose visible text reads '<Name> <total> total (<P> P + <B> B)' per the recount; Acton (target ${ACTON_TARGET}) shows 'deviation ${expDev}' with the green target mark; of the other five, by the served rules: ${noTargetRows.length} without a target read 'no target' with no mark${backupOnlyRows.length ? `, ${backupOnlyRows.map(r => r.id).join(", ")} (a backup target only) 'no primary target' with no mark` : ""}${primaryTargetRows.length ? `, ${primaryTargetRows.map(r => r.id).join(", ")} (a primary target) the deviation with the mark` : ""} - ` + fairRows.map(r => `${r.id} ${r.total} ${r.deviation}`).join(", "));
     if (/\$/.test(await page.$eval("[data-testid=totals-card]", el => el.innerText))) fail("Fairness view: a '$' appears");
     const fierceFair = fairRows.find(r => r.id === "s5");
     if (fierceFair && /East/.test(fierceFair.text)) ok("Fairness view: Fierce's row shows his East days beside the Silvis total (" + fierceFair.text.slice(0, 90) + ")");
@@ -9775,8 +9797,11 @@ try {
     // editor shows (read through its own JSON editor); Advanced is closed by default and holds the JSON editors, the group rules
     // and the Weights (closed too); a rule added from the menu and removed again leaves no trace; ONE edit per group (availability
     // mode, the never-on notice days, weekend style, any-role run, a backup cap added from the menu, the East feed added from the
-    // menu with its forecast, a holiday) is saved, the call_schedule_data PATCH carries exactly those edits on top of the shown
-    // rules, a re-pick reads every value back; then the per-surgeon JSON editor puts the original rules back into the form
+    // menu with its forecast and - Prompt 37 - its backup-free box, a holiday) is saved, the call_schedule_data PATCH carries
+    // exactly those edits on top of the shown rules, a re-pick reads every value back; Prompt 37 (11/22): the Monthly target
+    // field's two boxes - a primary and a backup number saved as { primary, backup }, the primary cleared ({ backup }), the
+    // backup cleared too (null), the Limits line naming what the backup number does; then the per-surgeon JSON editor puts the
+    // original rules back into the form
     // (the form shows them) and Save writes them unchanged; the group JSON editor applied unchanged saves the same group rules.
     // Writes are the harness's (never the live project); the original is restored before the step ends.
     {
@@ -9951,6 +9976,8 @@ try {
         const efAdded = await ensureRuleField(page, "eastFeed");
         if (!(await page.isChecked("[data-testid=rules-east-enabled]"))) await page.check("[data-testid=rules-east-enabled]");
         if (!(await page.isChecked("[data-testid=rules-east-forecast]"))) await page.check("[data-testid=rules-east-forecast]"); // East / Davenport
+        // Prompt 37 (Faraz 11/22): the East block's new box - a backup on his own East call days carries no shape penalty (eastFeed.backupFreeOnEastDays)
+        if (!(await page.isChecked("[data-testid=rules-east-backup-free]"))) await page.check("[data-testid=rules-east-backup-free]");
         await ensureRuleField(page, "holidaysOff");
         await page.locator("[data-testid=rules-field-holidaysOff] label", { hasText: "Christmas" }).locator("input").click(); // holidays
         // review fixes 10/1: a pattern bound (the from / until inputs) set on the first recurring day off, and the data-holding
@@ -9964,7 +9991,7 @@ try {
         let exp = JSON.parse(JSON.stringify(orig));
         exp.availabilityMode = modeNew; exp.hardNeverWeekdaysNoticeDays = 56; exp.weekendStyle = wsNew; exp.maxConsecutiveAnyRole = mcaNew;
         exp.backupCap = Object.assign({}, orig.backupCap || {}, { perMonthDays: 6 });
-        exp.eastFeed = Object.assign({}, orig.eastFeed || {}, { enabled: true, forecast: true });
+        exp.eastFeed = Object.assign({}, orig.eastFeed || {}, { enabled: true, forecast: true, backupFreeOnEastDays: true }); // Prompt 37: + the backup-free box
         exp.holidayRules = Object.assign({}, orig.holidayRules || {}, { holidaysOff: holNew });
         if (bRow) exp.recurringUnavailable[0][bKey] = bVal;
         if (rmId) exp = HELPERS.suRuleFieldRemove(HELPERS.suRuleField(rmId), exp);
@@ -9977,7 +10004,7 @@ try {
         }
         const lastS3 = (blobPatches(before).pop() && s3Of(blobPatches(before).pop())) || null;
         if (!hit) fail(`${P24}: no call_schedule_data PATCH carried surgeonRules.s3 = the shown rules + the seven edits${addId ? " (and no " + addId + ")" : ""}: want ${canon(expSaved).slice(0, 600)} - last write ${canon(lastS3).slice(0, 600)}`);
-        else ok(`${P24}: Save -> PATCH call_schedule_data with surgeonRules.s3 = the shown rules + one edit per group (availabilityMode ${modeNew}, hardNeverWeekdaysNoticeDays 56, weekendStyle ${wsNew}, maxConsecutiveAnyRole ${mcaNew}, backupCap.perMonthDays 6${bcAdded ? " (added from the menu)" : ""}, eastFeed { enabled, forecast }${efAdded ? " (added from the menu)" : ""}, holidaysOff ${JSON.stringify(holNew)})${bRow ? ", the first recurring day off's " + (bKey === "start" ? "from" : "until") + " bound " + bVal : ""}${rmId ? ", '" + rmId + "' removed (confirm accepted)" : ""} and nothing else`);
+        else ok(`${P24}: Save -> PATCH call_schedule_data with surgeonRules.s3 = the shown rules + one edit per group (availabilityMode ${modeNew}, hardNeverWeekdaysNoticeDays 56, weekendStyle ${wsNew}, maxConsecutiveAnyRole ${mcaNew}, backupCap.perMonthDays 6${bcAdded ? " (added from the menu)" : ""}, eastFeed { enabled, forecast, backupFreeOnEastDays }${efAdded ? " (added from the menu)" : ""}, holidaysOff ${JSON.stringify(holNew)})${bRow ? ", the first recurring day off's " + (bKey === "start" ? "from" : "until") + " bound " + bVal : ""}${rmId ? ", '" + rmId + "' removed (confirm accepted)" : ""} and nothing else`);
         // (e) read back after a re-pick (the field set is re-read from the saved rules)
         await page.click("[data-testid=rules-pick-s1]");
         await page.waitForTimeout(200);
@@ -9986,16 +10013,22 @@ try {
         const rb = await page.evaluate(() => {
           const v = (t) => { const el = document.querySelector("[data-testid=" + t + "]"); return el ? (el.type === "checkbox" ? el.checked : el.value) : null; };
           const xmas = Array.from(document.querySelectorAll("[data-testid=rules-field-holidaysOff] label")).find(l => /Christmas/.test(l.textContent));
-          return { mode: v("rules-avail-mode"), notice: v("rules-hard-never-notice"), ws: v("rules-weekend-style"), mca: v("rules-max-consec-any"), bc: v("rules-backup-cap-days"), ef: v("rules-east-enabled"), fc: v("rules-east-forecast"), xmas: xmas ? xmas.querySelector("input").checked : null };
+          return { mode: v("rules-avail-mode"), notice: v("rules-hard-never-notice"), ws: v("rules-weekend-style"), mca: v("rules-max-consec-any"), bc: v("rules-backup-cap-days"), ef: v("rules-east-enabled"), fc: v("rules-east-forecast"), bf: v("rules-east-backup-free"), xmas: xmas ? xmas.querySelector("input").checked : null };
         });
         if (bRow) rb.bound = await page.inputValue(`[data-testid=rules-field-recurringUnavailable] [data-testid=pattern-${bKey}] >> nth=0`).catch(() => null);
         if (rmId) rb.removedGone = !(await page.$(`[data-testid=rules-field-${rmId}]`));
         const stB = await pageState();
-        const rbWant = { mode: modeNew, notice: "56", ws: wsNew, mca: String(mcaNew), bc: "6", ef: true, fc: true, xmas: holNew.includes("Christmas") };
+        const rbWant = { mode: modeNew, notice: "56", ws: wsNew, mca: String(mcaNew), bc: "6", ef: true, fc: true, bf: true, xmas: holNew.includes("Christmas") }; // Prompt 37: bf = the East backup-free box
         if (bRow) rbWant.bound = bVal;
         if (rmId) rbWant.removedGone = true;
+        // Prompt 37: the summary equals the helper's either way, so the East line's new words are checked literally too
+        // pin moved deliberately 11/22 (Prompt 37 fix round): the clause read "...carries no run, rest or weekend-shape penalty" -
+        // the switch is two-sided now (the East-day backup is also left out of his other days' run, rest and back-to-back counts)
+        const EAST_FREE_WORDS = "a backup on an East call day carries no run, rest or weekend-shape penalty and is left out of his other days' run, rest and back-to-back counts";
+        const eastLineB = stB.lines.find(l => l.startsWith("East / Davenport")) || "";
         if (canon(rb) !== canon(rbWant)) fail(`${P24}: read back after a re-pick - want ${canon(rbWant)}, got ${canon(rb)}`);
         else if (JSON.stringify(stB.lines) !== JSON.stringify(sumOf(expSaved))) fail(`${P24}: the summary after the save should read the saved rules - want ${JSON.stringify(sumOf(expSaved))}, got ${JSON.stringify(stB.lines)}`);
+        else if (!eastLineB.includes(EAST_FREE_WORDS)) fail(`${P24}: with the East backup-free box ticked the summary's East line should say '${EAST_FREE_WORDS}', got: ${JSON.stringify(eastLineB)}`);
         else ok(`${P24}: a re-pick reads every edited value back (${Object.keys(rbWant).length} fields${bRow ? ", the pattern bound" : ""}${rmId ? ", the removed rule gone" : ""}) and the summary reads the saved rules (e.g. '${stB.lines.find(l => l.startsWith("Backup"))}')`);
         // (e2) review fixes 10/1: clearing a pattern bound deletes its key (read through the JSON editor), then Revert
         if (bRow) {
@@ -10012,6 +10045,72 @@ try {
           if (Object.prototype.hasOwnProperty.call(row0, bKey) || canon(row0) !== canon(wantRow0)) fail(`${P24}: clearing the ${bKey === "start" ? "from" : "until"} bound should delete the key and keep the rest of the pattern - got ${canon(row0)}, want ${canon(wantRow0)}`);
           else if (backTo !== bVal) fail(`${P24}: Revert after clearing the bound should show the saved ${bVal} again, shows '${backTo}'`);
           else ok(`${P24}: clearing the ${bKey === "start" ? "from" : "until"} bound deletes the key (the rest of the pattern kept: ${canon(row0)}); Revert shows the saved ${bVal} again`);
+        }
+        // (e3) Prompt 37 (Faraz 11/22): the Monthly target field is ONE field with two boxes - the primary target and the backup
+        // target. A primary number, then a backup number beside it (the primary box must keep its number) are saved as
+        // { primary, backup }; the primary cleared is saved as { backup }; the backup cleared too as null. While a backup number
+        // is set the summary's Limits line says what it does. The base is the rules the editor shows NOW, read through its own
+        // JSON editor (leg (d)'s saved rules); leg (f) below puts the original back whatever this leg leaves.
+        {
+          const MT = "[data-testid=rules-monthly-target]", MTB = "[data-testid=rules-monthly-target-backup]";
+          if ((await page.getAttribute("[data-testid=rules-advanced]", "data-open")) !== "1") await page.click("[data-testid=rules-advanced-toggle]");
+          if (!(await page.$("[data-testid=rules-raw]"))) await page.click("[data-testid=rules-raw-toggle]");
+          const base3 = JSON.parse(await page.inputValue("[data-testid=rules-raw]"));
+          await page.click("[data-testid=rules-raw-toggle]");
+          await page.click("[data-testid=rules-advanced-toggle]");
+          const mt0 = base3.monthlyTarget;
+          const mt0Of = (k) => (mt0 && typeof mt0 === "object" && !Array.isArray(mt0) && typeof mt0[k] === "number") ? mt0[k] : (k === "primary" && typeof mt0 === "number" ? mt0 : null);
+          const pNew = mt0Of("primary") === 4 ? 5 : 4, bNew = mt0Of("backup") === 3 ? 2 : 3; // numbers the shown rules do not carry, so every step below is a change
+          const draftMt = (v) => { const r = JSON.parse(JSON.stringify(base3)); r.monthlyTarget = v; return r; };
+          const savedMt = (v) => savedDerived(draftMt(v));
+          // outside the pool (poolMember false, date windows) the summary says only "fewer when away" (helpers.suRulesSummary)
+          const inPool3 = base3.poolMember !== false && !(Array.isArray(base3.availableWindows) && base3.availableWindows.length);
+          // Prompt 37 fix round: a hard backup cap below the backup number adds " - at most his backup cap of N" (leg (d) saved a
+          // cap of 6 days, above bNew, so normally nothing - derived from the shown rules all the same)
+          const cap3 = base3.backupCap && typeof base3.backupCap === "object" && !Array.isArray(base3.backupCap) && typeof base3.backupCap.perMonthDays === "number" && base3.backupCap.perMonthDays < bNew ? base3.backupCap.perMonthDays : null;
+          const awayWords = "fewer when away" + (inPool3 ? " - not below the equal share, nor below the number itself when that is lower" : "") + (cap3 !== null ? " - at most his backup cap of " + cap3 : "");
+          const boxes3 = async () => [await page.inputValue(MT), await page.inputValue(MTB)];
+          const limitsOf = (st) => st.lines.find(l => l.startsWith("Limits")) || "";
+          // the block's two-attempt save loop, waiting for a PATCH whose s3 rules equal `want`
+          const saveMt = async (want) => {
+            const before = writes.length;
+            let hit = null;
+            for (let attempt = 1; attempt <= 2 && !hit; attempt++) {
+              if (await page.$eval("[data-testid=rules-save]", el => !el.disabled)) await page.click("[data-testid=rules-save]");
+              await waitFor(() => { hit = blobPatches(before).find(w => canon(s3Of(w)) === canon(want)) || null; return !!hit; }, 6000, 100);
+              if (!hit && attempt === 1) console.log(`     (${P24}: no blob write carried the monthly target within 6 s - the background blob refresh may have raced the save; retrying once)`);
+            }
+            return { hit, last: (blobPatches(before).pop() && s3Of(blobPatches(before).pop())) || null };
+          };
+          await ensureRuleField(page, "monthlyTarget");
+          await page.waitForSelector(MTB, { timeout: 5000 });
+          const labs3 = await page.evaluate(() => ["rules-monthly-target", "rules-monthly-target-backup"].map(t => { const el = document.querySelector("[data-testid=" + t + "]"); return el && el.labels && el.labels.length ? el.labels[0].textContent : null; }));
+          // step 1: a primary number, then a backup number beside it
+          await page.fill(MT, String(pNew));
+          await page.fill(MTB, String(bNew));
+          const bx1 = await boxes3(), st1 = await pageState();
+          const sv1 = await saveMt(savedMt({ primary: pNew, backup: bNew }));
+          // step 2: the primary cleared - the backup number stays
+          await page.fill(MT, "");
+          const bx2 = await boxes3(), st2 = await pageState();
+          const sv2 = await saveMt(savedMt({ backup: bNew }));
+          // step 3: the backup cleared too - no number left
+          await page.fill(MTB, "");
+          const bx3 = await boxes3(), st3 = await pageState();
+          const sv3 = await saveMt(savedMt(null));
+          const bothWords = `target ${pNew} primary / ${bNew} backup days a month (the backup number: ${awayWords})`, backupWords = `target ${bNew} backup days a month (${awayWords})`;
+          const mtOfHit = (r) => (r.hit ? s3Of(r.hit).monthlyTarget : (r.last ? r.last.monthlyTarget : undefined));
+          if (JSON.stringify(labs3) !== JSON.stringify(["Monthly target", "Backup target (days a month)"])) fail(`${P24}: the Monthly target field's two boxes should each carry their <label> ('Monthly target', 'Backup target (days a month)') - got ${JSON.stringify(labs3)}`);
+          else if (JSON.stringify(bx1) !== JSON.stringify([String(pNew), String(bNew)])) fail(`${P24}: typing a backup target must keep the primary box's number - the boxes should read ${pNew} / ${bNew}, got ${JSON.stringify(bx1)}`);
+          else if (JSON.stringify(st1.lines) !== JSON.stringify(sumOf(draftMt({ primary: pNew, backup: bNew }))) || !limitsOf(st1).includes(bothWords)) fail(`${P24}: with both targets typed the summary's Limits line should say '${bothWords}', got: ${JSON.stringify(limitsOf(st1))}`);
+          else if (!sv1.hit) fail(`${P24}: no call_schedule_data PATCH carried surgeonRules.s3 = the shown rules + monthlyTarget { primary: ${pNew}, backup: ${bNew} } - the last write's monthlyTarget: ${JSON.stringify(mtOfHit(sv1))}; its rules ${canon(sv1.last).slice(0, 400)}`);
+          else if (JSON.stringify(bx2) !== JSON.stringify(["", String(bNew)])) fail(`${P24}: clearing the primary box must keep the backup number - the boxes should read '' / ${bNew}, got ${JSON.stringify(bx2)}`);
+          else if (JSON.stringify(st2.lines) !== JSON.stringify(sumOf(savedMt({ backup: bNew }))) || !limitsOf(st2).includes(backupWords)) fail(`${P24}: with a backup target alone the summary's Limits line should say '${backupWords}', got: ${JSON.stringify(limitsOf(st2))}`);
+          else if (!sv2.hit) fail(`${P24}: no call_schedule_data PATCH carried surgeonRules.s3 with monthlyTarget { backup: ${bNew} } (no primary member) after the primary box was cleared - the last write's monthlyTarget: ${JSON.stringify(mtOfHit(sv2))}`);
+          else if (JSON.stringify(bx3) !== JSON.stringify(["", ""])) fail(`${P24}: clearing both boxes should leave both blank, got ${JSON.stringify(bx3)}`);
+          else if (JSON.stringify(st3.lines) !== JSON.stringify(sumOf(savedMt(null))) || /backup days a month|monthly target without a number/.test(limitsOf(st3))) fail(`${P24}: with both boxes cleared the summary should carry no target words, got: ${JSON.stringify(limitsOf(st3))}`);
+          else if (!sv3.hit || !Object.prototype.hasOwnProperty.call(s3Of(sv3.hit), "monthlyTarget") || s3Of(sv3.hit).monthlyTarget !== null) fail(`${P24}: no call_schedule_data PATCH carried surgeonRules.s3 with monthlyTarget null (never an empty object) after both boxes were cleared - the last write's monthlyTarget: ${JSON.stringify(mtOfHit(sv3))}`);
+          else ok(`${P24}: Monthly target, two boxes (Prompt 37) - primary ${pNew} then backup ${bNew} (the primary box kept its number) saved as monthlyTarget { primary: ${pNew}, backup: ${bNew} }, the Limits line reading '${bothWords}'; the primary cleared -> { backup: ${bNew} } ('${backupWords}'); the backup cleared too -> null, no target words`);
         }
       } catch (e) { fail(`${P24}: ` + errLine(e)); try { await page.screenshot({ path: path.join(OUT, "failure-p24-rules.png"), fullPage: true }); } catch (e2) {} }
       // (f) the per-surgeon JSON editor puts the original back: Apply shows it in the form, Save writes it unchanged

@@ -11866,7 +11866,9 @@ function suPatternLabel(p) {
 // The tallies come from helpers.js ttTotalsFor (unit-tested); cap and East
 // days from the rules context; the target is the surgeon's explicit
 // monthlyTarget, else the implied target from the last generator preview's
-// diagnostics when it covers the range, else '-'.
+// diagnostics when it covers the range, else '-'. (Prompt 37: an explicit
+// BACKUP target is summed month by month, each month prorated by the days
+// away - see targetFor.)
 const TOTALS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // The year-to-date floor per year (the published schedule starts 2026-09-14): the Totals card's YTD range and the
 // Item C trade suggestions' running yearly tally both read it.
@@ -11909,6 +11911,22 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
   // number is the PRIMARY target ({ primary, backup } sets each); otherwise the implied water-filled share (WF 9/23) from
   // the last Generate preview's diagnostics when it covers every month of the period
   // (tallies[id].months[m].target = { primary, backup }; a pre-J numeric target reads as primary); else '-'.
+  // Prompt 37 (Faraz 11/22): an explicit BACKUP target counts for the days in town, so one month's number is not the number
+  // as set. The month's number is the last Generate preview's note when it has one for this surgeon and month AND was made
+  // with the same number (impliedTargets ... members[id].backupOverride: its target is the number Generate used - prorated,
+  // and for a pool member never below his equal share, which only Generate can work out); else rules.js backupTargetFor,
+  // the ONE reading of the proration by the days away (never above his hard backup cap; a number above the month's days
+  // reads as the month's days); null when neither can answer (no rules context).
+  // Fix round (11/22): only a WHOLE-MONTH note is the month's number. A note that carries `counted` was written by a run
+  // that covered the month only in part - its number counts for the days that run scheduled - so it is skipped and the
+  // whole month is read from rules.js. A note that carries `cap` is a whole-month number and is used.
+  const backupMonthTarget = (id, m, asked) => {
+    const mem = dg && dg.impliedTargets && dg.impliedTargets.months && dg.impliedTargets.months[m] && dg.impliedTargets.months[m].members;
+    const bo = mem && mem[id] ? mem[id].backupOverride : null;
+    if (bo && typeof bo === "object" && bo.counted === undefined && bo.asked === asked && typeof bo.target === "number") return bo.target;
+    const bt = ctx && typeof backupTargetFor === "function" ? backupTargetFor(ctx, id, m) : null;
+    return bt && typeof bt.target === "number" ? bt.target : null;
+  };
   const targetFor = (id) => {
     const r = surgeonRules && surgeonRules[id];
     const mt = r ? r.monthlyTarget : undefined;
@@ -11918,6 +11936,14 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     };
     const out = { primary: { value: null, kind: "none" }, backup: { value: null, kind: "none" } };
     ["primary", "backup"].forEach(role => {
+      // Prompt 37: the period's explicit backup target is the SUM of its months' numbers (one decimal, like the implied sum
+      // below) - never the number x months; a month with no answer leaves the whole target '-', never the unprorated number
+      if (role === "backup" && explicit.backup !== null) {
+        let sumB = 0, allB = nMonths > 0;
+        range.months.forEach(m => { const v = backupMonthTarget(id, m, explicit.backup); if (typeof v === "number") sumB += v; else allB = false; });
+        if (allB) out.backup = { value: Math.round(sumB * 10) / 10, kind: "explicit" };
+        return;
+      }
       // Prompt 32 step 1: one decimal, like the implied target below (5.5 x 3 months reads 16.5; 1.1 x 3 no longer 3.3000000000000003)
       if (explicit[role] !== null) { out[role] = { value: Math.round(explicit[role] * nMonths * 10) / 10, kind: "explicit" }; return; }
       if (dg && dg.tallies && dg.tallies[id] && dg.tallies[id].months) {
@@ -11966,7 +11992,8 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
     // J: Target / Deviation are PRIMARY days against the primary target; Target B / Deviation B are backup days
     // against the backup target (ttDeviation per role; '-' without a target).
     // Prompt 32 step 1: the weighted load (ttWeightedLoad) and the weighted share = primary target x 1 + backup target x 0.5
-    // (ttWeightedShare; a missing role target reads 0, null without any target) with their deviation - one decimal each
+    // (ttWeightedShare; a missing backup target reads 0; null without a PRIMARY target - Prompt 37: a backup target alone is
+    // no share, so such a row shows no share, no weighted deviation and no green mark) with their deviation - one decimal each
     const weighted = ttWeightedLoad(t.primary, t.backup, sw), weightedShare = ttWeightedShare(tg.primary.value, tg.backup.value, sw);
     const overSoft = osMonths[src.key].filter(x => x.id === s.id); // Prompt 32 step 4: his months over the soft limit
     rows.push({ id: s.id, name: s.name, code: s.code, src: src.key, srcLabel: src.label, t, target: tg.primary.value, targetKind: tg.primary.kind, targetB: tg.backup.value, targetBKind: tg.backup.kind, cap, capUse, east, eastP, maxRule: maxConsecRule(s.id), maxRuleAny: maxConsecAnyRule(s.id), deviation: ttDeviation(t.primary, tg.primary.value), deviationB: ttDeviation(t.backup, tg.backup.value), weighted, weightedShare, weightedImplied: tg.primary.kind === "implied" || tg.backup.kind === "implied", deviationW: weighted === null ? "-" : ttDeviation(weighted, weightedShare), overSoft, overSoftText: overSoft.length && typeof overSoftLimitMonthsText === "function" ? overSoftLimitMonthsText(overSoft, nMonths) : null });
@@ -12056,7 +12083,7 @@ function TotalsCard({ css, dk, roster, schedule, ctx, surgeonRules, preview, tod
                 <th style={thL}>Surgeon</th>{sources.length > 1 && <th style={thL}>Source</th>}
                 <th style={th}>Primary</th><th style={th}>Backup</th><th style={th}>Total</th><th style={th} data-testid="totals-th-weighted" title={swText ? "Weighted load: " + swText + (eastDetailsVisible ? " (groupRules.shiftAccounting.weights - Setup -> Rules -> Edit group rules as JSON); Silvis days only. The raw Primary / Backup / Total stay beside it; pay is unchanged (primary days only)" : "; Silvis days only") : "Weighted load: unavailable until the rules engine loads"}>Weighted</th><th style={th}>Weekend days</th><th style={th} title="Holiday units held (once per unit): major / minor">Holidays maj/min</th><th style={th} data-testid="totals-th-maxconsec" title="Longest run of consecutive PRIMARY days touching the period, real days (the hard limit in brackets)">Max consec. P</th><th style={th} data-testid="totals-th-maxconsecany" title="Longest run of consecutive on-call days in either role touching the period, real days (the soft limit in brackets)">Max consec. any</th>
                 {showEast && <th style={th} title="Days on East (Davenport) call in the period, either role. For a cap that counts East days only the East PRIMARY-week days count (see the Cap (P) tooltip)">East days</th>}
-                <th style={th} title={(eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th>{anyTarget && <><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th></>}
+                <th style={th} title={(eastDetailsVisible ? "Monthly cap on PRIMARY days (backup days never count); flagged when the primary count - plus East primary-week days for a cap that counts them - is over it" : "Monthly cap on PRIMARY days (backup days never count); flagged when the days counted against it are over it") + ". '(over 7)' marks a month whose primary count is over the surgeon's SOFT limit (the group's 7, or his own) - per month, never cap x months"}>Cap (P){nMonths > 1 ? " /mo" : ""}</th>{anyTarget && <><th style={th} title="Primary-day target for the period: an explicit monthlyTarget in Setup, else min(level, clip) from the last Generate preview, where the level is the water-filled share of ALL the period's pool primary slots, open + already held (a locked day counts against its holder), and the clip is the soft limit (else the hard cap) or what the rules allow (*)">Target</th><th style={th} title="Primary days minus the primary target">Deviation</th><th style={th} title="Backup-day target for the period: an explicit { backup } target in Setup, else the weighted share from the last Generate preview: the backup days that bring his weighted load (see Weighted) to the group's weighted level over ALL the period's pool slots, open + already held (a locked day counts against its holder) - two backups per primary below the primary level - within the backup cap and what the rules allow (*). An explicit backup target counts for the days in town: a month's number is fewer when the month has days away, and the period's target is the sum of its months. The Generate preview shows each month's number (never below the equal share, nor below the number itself when that is set lower, never above his backup cap); a month the last preview worked out with the same target reads that number here (a month that preview covered only in part reads the whole-month number)">Target B</th><th style={th} title="Backup days minus the backup target">Deviation B</th></>}
               </tr>
             </thead>
             <tbody>
@@ -12873,6 +12900,23 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
   const capObj = capRaw && typeof capRaw === "object" && !Array.isArray(capRaw) ? capRaw : (typeof capRaw === "number" ? { primary: capRaw } : {});
   const capPrimaryVal = typeof capObj.primary === "number" ? capObj.primary : (typeof capObj.total === "number" ? capObj.total : undefined);
   const setCapPrimary = (v) => { if (Object.prototype.hasOwnProperty.call(capObj, "total")) set("monthlyCap.total", undefined); set("monthlyCap.primary", v); };
+  // Prompt 37 (Faraz 11/22): monthlyTarget is a number (the PRIMARY target - the shape it always had) or an object
+  // { primary, backup } with either member. ONE reading for the field's two boxes (a number = its primary, an object = its
+  // numeric members, anything else = nothing - as generator.js genTargetOverride reads it) and ONE write of the WHOLE next
+  // value per change, in the shapes the engine reads: no number left = null, a primary alone = the plain number, a backup
+  // number = { backup } or { primary, backup } - never a null member, never an empty object, never a path write into the
+  // object (on a plain number that would replace the number). So typing in one box never loses the other box's number, and
+  // nothing is rewritten by looking: the stored shape changes only here, on a change.
+  const mtRaw = draft.monthlyTarget;
+  const mtObj = {};
+  if (typeof mtRaw === "number" && isFinite(mtRaw)) mtObj.primary = mtRaw;
+  else if (mtRaw && typeof mtRaw === "object" && !Array.isArray(mtRaw)) ["primary", "backup"].forEach(k => { if (typeof mtRaw[k] === "number" && isFinite(mtRaw[k])) mtObj[k] = mtRaw[k]; });
+  const setMonthlyTarget = (role, text) => {
+    const cur = { ...mtObj }, n = Number(text);
+    if (text === "" || !isFinite(n)) delete cur[role]; else cur[role] = n; // a cleared box (or text that is no number) drops that number
+    const next = cur.backup !== undefined ? (cur.primary !== undefined ? { primary: cur.primary, backup: cur.backup } : { backup: cur.backup }) : (cur.primary !== undefined ? cur.primary : null);
+    set("monthlyTarget", next);
+  };
   const wp = get("outsideDerivedWeeks.weekdayPattern", null);
   const holNames = holidayNames && holidayNames.length ? holidayNames : SU_HOLIDAY_NAMES;
   const s = (roster || []).find(x => x.id === sel) || {};
@@ -13033,8 +13077,14 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
         </div>
       );
       case "holidayUnitCountsAsOneDay": return <SuCheck label="A holiday unit counts as one day for the days-in-a-row limits" title="Unchecked: every day of the unit counts." checked={draft.holidayUnitCountsAsOneDay === true} onChange={v => set("holidayUnitCountsAsOneDay", v ? true : undefined)} testid="rules-holiday-unit-one-day" />;
+      // Prompt 37 (Faraz 11/22): ONE field, two boxes - the primary target and the backup target - each the single child of its
+      // own RuField (the label's htmlFor), both read through mtObj and written whole by setMonthlyTarget (above); Remove rule
+      // deletes the one key, so both numbers go together
       case "monthlyTarget": return (
-        <RuField T={T} label="Monthly target" hint="blank = equal share; a number = primary target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={get("monthlyTarget", null) === null ? "" : get("monthlyTarget", "")} onChange={e => set("monthlyTarget", e.target.value === "" ? null : Number(e.target.value))} style={{ ...inp, width: 70 }} /></RuField>
+        <div>
+          <RuField T={T} label="Monthly target" hint="blank = equal share; a number = primary target"><input data-testid="rules-monthly-target" type="number" min="0" max="31" value={mtObj.primary === undefined ? "" : mtObj.primary} onChange={e => setMonthlyTarget("primary", e.target.value)} style={{ ...inp, width: 70 }} /></RuField>
+          <RuField T={T} label="Backup target (days a month)" hint="blank = equal share; fewer when away"><input data-testid="rules-monthly-target-backup" type="number" min="0" max="31" value={mtObj.backup === undefined ? "" : mtObj.backup} onChange={e => setMonthlyTarget("backup", e.target.value)} style={{ ...inp, width: 70 }} /></RuField>
+        </div>
       );
       case "monthlyCap": return (
         <div>
@@ -13069,6 +13119,10 @@ function RulesEditor({ css, dk, roster, surgeonRules, groupRules, holidayNames, 
               <SuCheck label="East call days block Silvis backup" checked={!!get("eastFeed.eastBlocksBackup", false)} onChange={v => set("eastFeed.eastBlocksBackup", v)} />
               <SuCheck label="East backup weeks count as busy" checked={get("eastFeed.eastBackupCountsAsBusy", true) !== false} onChange={v => set("eastFeed.eastBackupCountsAsBusy", v)} />
               <SuCheck testid="rules-east-forecast" label="Use the East forecast while Davenport is unpublished" checked={!!get("eastFeed.forecast", false)} onChange={v => set("eastFeed.forecast", v)} />
+              {/* Prompt 37 (Faraz 11/22): exactly true = on (rules.js reads nothing else as on); off for everyone until ticked.
+                  Fix round: the switch is two-sided - the East-day backup carries no shape soft AND is left out of the run, rest
+                  and back-to-back counts of his other days - and the title says which days count as East call days */}
+              <SuCheck testid="rules-east-backup-free" label="Backup on East call days carries no run, rest or weekend-shape penalty" title="On his own East call days - the days Davenport has published, a day an override added and his standing East days, never a forecast day - a Silvis backup carries no soft term for days in a row, rest between stretches, back-to-back weekends, weekend style or backup after his own primary, and is left out of the run, rest and back-to-back counts of his other days. Hard rules still apply." checked={get("eastFeed.backupFreeOnEastDays", false) === true} onChange={v => set("eastFeed.backupFreeOnEastDays", v)} />
             </div>
             <RuField T={T} label="Derive Silvis weeks from" hint="East primary week = Silvis backup all week; East backup week = Silvis primary"><input type="date" value={get("eastFeed.deriveFrom", "") || ""} onChange={e => set("eastFeed.deriveFrom", e.target.value || undefined)} style={inp} /></RuField>
             <RuField T={T} label="Stated East primary weeks (Mondays)" width={300}><input type="text" value={(get("eastFeed.statedWeeks.eastPrimary", []) || []).join(", ")} onChange={e => set("eastFeed.statedWeeks.eastPrimary", suIsoList(e.target.value))} style={{ ...inp, width: "100%", fontFamily: mono }} /></RuField>
@@ -13923,13 +13977,13 @@ function GenDiagnostics({ css, dg, nameOf, roster }) {
       {hasShares && (
         <div style={box} data-testid="gen-shares">
           <div style={{ ...css.subT, margin: "0 0 4px" }}>Implied shares (water-filled primary share, weighted backup share: target vs what the rules allow)</div>
-          <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 6px", lineHeight: 1.5 }}>Pool: {(IT.pool || []).map(nameOf).join(", ")}. Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's fill clip (Fill clip P / B: Clip P - the soft limit, else the hard cap - or the backup cap, met by what the rules allow, Allowed + Held): a member below the level takes his clip and the rest is shared by the others. Primary first; the backup share is WEIGHTED across the roles (Silvis days, primary x 1 + backup x 0.5 by default): every member is brought to one weighted level, so a member short of primaries carries two backups per missing primary, and a member at his backup clip below that level takes extra primaries up to his primary clip (P makeup). W share = Target P x 1 + Target B x 0.5. A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone.</p>
+          <p style={{ fontSize: 11, color: "#5B6B82", margin: "0 0 6px", lineHeight: 1.5 }}>Pool: {(IT.pool || []).map(nameOf).join(", ")}. Every pool member is targeted, per role, at the water-filled share of ALL the month's pool slots - the open ones (primary: after the window surgeon's reserved primaries) plus the days pool members already hold (locked, derived, claimed, published) - poured over the members up to each one's fill clip (Fill clip P / B: Clip P - the soft limit, else the hard cap - or the backup cap, met by what the rules allow, Allowed + Held): a member below the level takes his clip and the rest is shared by the others. Primary first; the backup share is WEIGHTED across the roles (Silvis days, primary x 1 + backup x 0.5 by default): every member is brought to one weighted level, so a member short of primaries carries two backups per missing primary, and a member at his backup clip below that level takes extra primaries up to his primary clip (P makeup). W share = Target P x 1 + Target B x 0.5. An explicit backup target (Setup) is prorated by the surgeon's days away in the month - not below the equal share, nor below the number itself when it is set lower; in a month this run covers only in part it counts the days scheduled, and it never exceeds his backup cap. The note after Target B names the number as set, the days scheduled and away, and what held it. A locked or derived day counts against its holder's share (no locked floor), and the deviation is convex (|days - target| ^ weights.deviationConvexity, the seed knob), so a day further over target costs more. Allowed = the open slots the rules let the surgeon take (a weekend day of a full weekend unit as a block member); a target above it is an availability shortfall the generator cannot close, not a defect. Targets and held days are whole-month figures even where the range only touches a month. Placeable = the open slots the targets ask for (target minus held days, summed); where a cap clips a member or he already holds more than the level it reads below the open count and the surplus days are placed by the soft terms alone.</p>
           {months.map(m => { const I = IT.months[m]; if (!I || !I.members) return null; return (
             <div key={m} style={{ marginBottom: 6 }}>
               <div style={{ fontSize: 12, fontFamily: mono }} data-testid={"gen-shares-head-" + m}>{m}: {I.poolSlots ? ("primary " + I.poolSlots.primary + " pool slots (" + I.primaryOpen + " open - " + I.reservedForWindows + " reserved + " + (I.heldByPool ? I.heldByPool.primary : "-") + " held) = level " + (I.primaryShare === null || I.primaryShare === undefined ? "at caps" : I.primaryShare) + " each of " + I.poolSize + "; backup " + I.poolSlots.backup + " pool slots (" + I.backupOpen + " open + " + (I.heldByPool ? I.heldByPool.backup : "-") + " held) = level " + (I.backupShare === null || I.backupShare === undefined ? "at caps" : I.backupShare) + (typeof I.weightedShare === "number" ? " at the primary level; weighted level " + I.weightedShare + " (P x " + (I.weights ? I.weights.primary : 1) + " + B x " + (I.weights ? I.weights.backup : 0.5) + ")" + (I.makeupRounds ? ", " + I.makeupRounds + " makeup round(s)" : "") : "")) : ("pre-9/23 preview (flat share): primary " + I.primaryOpen + " open - " + I.reservedForWindows + " reserved, share " + num(I.primaryShare) + " each of " + I.poolSize + "; backup " + I.backupOpen + " open, share " + num(I.backupShare))}{I.placeableAtTarget ? " | placeable at target " + num(I.placeableAtTarget.primary) + " P / " + num(I.placeableAtTarget.backup) + " B of " + I.primaryOpen + " / " + I.backupOpen + " open" : ""}{typeof I.rangeDays === "number" && I.rangeDays < new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate() ? " | partial month: " + I.rangeDays + " day(s) in range, whole-month targets" : ""}</div>
               <div className="table-wrap" style={css.tableWrap}><table className="setup-table" data-testid={"gen-shares-" + m}><thead><tr><th>Surgeon</th><th>Target P</th><th>Allowed P</th><th title="Primary days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share">Held P</th><th title="The soft limit (else the hard cap) minus East primary-week days (a cap that counts them); '-' when neither is set">Clip P</th><th>Target B</th><th>Allowed B</th><th title="Backup days the surgeon already holds in the month (locked, derived, claimed or published); they count against his share">Held B</th><th title="The clips the fill used: min(Clip P, Allowed P + Held P) / min(backup cap, Allowed B + Held B)">Fill clip P / B</th><th title="Weighted share = Target P x w.primary + Target B x w.backup; P makeup = extra primaries a member at his backup clip takes up to his primary clip">W share</th></tr></thead><tbody>
                 {ids.filter(id => I.members[id]).map(id => { const M = I.members[id]; const shortP = typeof M.primaryTarget === "number" && M.allowedPrimary + M.lockedHeld.primary < M.primaryTarget; const shortB = typeof M.backupTarget === "number" && M.allowedBackup + M.lockedHeld.backup < M.backupTarget; return (
-                  <tr key={id} data-share={id + ":" + m}><td>{nameOf(id)}</td><td>{num(M.primaryTarget)}</td><td style={{ color: shortP ? "#a83232" : undefined }} title={shortP ? "the rules allow fewer open primary slots than the target" : undefined}>{M.allowedPrimary}{shortP ? " (short)" : ""}</td><td>{M.lockedHeld.primary}</td><td>{num(M.clipPrimary)}</td><td>{num(M.backupTarget)}</td><td style={{ color: shortB ? "#a83232" : undefined }} title={shortB ? "the rules allow fewer open backup slots than the target" : undefined}>{M.allowedBackup}{shortB ? " (short)" : ""}</td><td>{M.lockedHeld.backup}</td><td>{M.fillClip ? M.fillClip.primary + " / " + M.fillClip.backup : "-"}</td><td>{num(M.weightedShare)}{M.makeupPrimary > 0 ? " (+" + num(M.makeupPrimary) + " P makeup)" : ""}</td></tr>); })}
+                  <tr key={id} data-share={id + ":" + m}><td>{nameOf(id)}</td><td>{num(M.primaryTarget)}</td><td style={{ color: shortP ? "#a83232" : undefined }} title={shortP ? "the rules allow fewer open primary slots than the target" : undefined}>{M.allowedPrimary}{shortP ? " (short)" : ""}</td><td>{M.lockedHeld.primary}</td><td>{num(M.clipPrimary)}</td><td data-col="target-b">{num(M.backupTarget)}{backupTargetNote(M.backupOverride)}</td><td style={{ color: shortB ? "#a83232" : undefined }} title={shortB ? "the rules allow fewer open backup slots than the target" : undefined}>{M.allowedBackup}{shortB ? " (short)" : ""}</td><td>{M.lockedHeld.backup}</td><td>{M.fillClip ? M.fillClip.primary + " / " + M.fillClip.backup : "-"}</td><td>{num(M.weightedShare)}{M.makeupPrimary > 0 ? " (+" + num(M.makeupPrimary) + " P makeup)" : ""}</td></tr>); })}
               </tbody></table></div>
             </div>); })}
         </div>
