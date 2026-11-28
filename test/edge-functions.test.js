@@ -5467,12 +5467,32 @@ async function onCall(w, raw, opts) {
 const onNothing = (w, label, reads) => assert.deepStrictEqual([w.calls, w.mails.length, w.states.length], [reads || [], 0, 0], label + ": nothing read past the gate, nothing sent, no baseline write - " + JSON.stringify(w.calls).slice(0, 200));
 // jsonb's text form, what pg_net sends: keys shorter first, then in byte order; ": " and ", " between
 const onJsonbText = (v) => (v && typeof v === "object" && !Array.isArray(v)) ? "{" + Object.keys(v).sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0)).map((k) => JSON.stringify(k) + ": " + onJsonbText(v[k])).join(", ") + "}" : Array.isArray(v) ? "[" + v.map(onJsonbText).join(", ") + "]" : JSON.stringify(v);
-// the app's publish POST (index-source.html triggerPublishNotify): the keys of its body literal, in order
+// the app's publish POST (index-source.html triggerPublishNotify): the TOP-LEVEL keys of its body literal, in order. A scan that
+// skips strings and anything inside brackets, so a key added on any line - inline beside another included - is seen (review
+// 11/28: a first-key-per-line read missed `groups: x, source: "app"`); a quoted, computed or spread key, or a comment where a key
+// stands, fails the check instead of hiding a key
 function onAppPublishKeys() {
   const at = appSrc.indexOf("const res = await authFetch(`${EDGE_FN_BASE}/office-notifications`, {");
-  const b0 = appSrc.indexOf("body: JSON.stringify({", at), b1 = appSrc.indexOf("\n        }),\n", b0);
-  assert.ok(at > 0 && b0 > at && b0 - at < 200 && b1 > b0, "index-source.html: the publish POST and its body literal");
-  return appSrc.slice(b0 + "body: JSON.stringify({".length, b1).split("\n").map((l) => (l.match(/^\s+([A-Za-z_$][\w$]*):/) || [])[1]).filter(Boolean);
+  const open = "body: JSON.stringify({", b0 = appSrc.indexOf(open, at);
+  assert.ok(at > 0 && b0 > at && b0 - at < 200, "index-source.html: the publish POST and its body literal");
+  const src = appSrc.slice(b0 + open.length), keys = [];
+  let depth = 0, expectKey = true, closed = false;
+  for (let i = 0; i < src.length && !closed; i++) {
+    const c = src[i];
+    if (/\s/.test(c)) continue;
+    if (depth === 0 && c === "}") { closed = true; continue; }
+    if (depth === 0 && expectKey) {
+      const m = /^[A-Za-z_$][\w$]*(?=\s*[:,}])/.exec(src.slice(i));
+      assert.ok(m, "a top-level key of the publish body is a plain name (no quoted, computed or spread key, no comment): " + JSON.stringify(src.slice(i, i + 40)));
+      keys.push(m[0]); i += m[0].length - 1; expectKey = false; continue;
+    }
+    if (c === "\"" || c === "'" || c === "`") { for (i++; i < src.length && src[i] !== c; i++) if (src[i] === "\\") i++; continue; }
+    if (c === "(" || c === "[" || c === "{") { depth++; continue; }
+    if (c === ")" || c === "]" || c === "}") { depth--; continue; }
+    if (depth === 0 && c === ",") expectKey = true;
+  }
+  assert.ok(closed && depth === 0, "the publish body literal closes");
+  return keys;
 }
 // README section 4: the weekly digest job's body
 function onCronBody() {
@@ -5678,7 +5698,18 @@ check("11/28 (the body fails closed): edge-functions/README.md - section 3's '20
     "`" + RETRY_DEPLOYED_SHA256["office-notifications"].slice(0, 12) + "...`",
     "vault.decrypted_secrets where name = 'silvis_cron_secret'", "never a `curl.exe -d` body from PowerShell 5.1",
     "Rollback: section 7 (the backup the script took is the deployed v7",
+    // review 11/28: an unknown mode is a 403 on the cron path; the live job's body is read back before the deploy; the first
+    // live run is read from the function logs (the job keeps pg_net's 5 s timeout, a digest takes about 6 s)
+    "the cron secret takes `digest` and `rebaseline` only (403 - an unknown mode on the cron path included), an unknown mode on a scheduler session is a 400",
+    "Before the deploy (Faraz, the SQL editor, read-only - review of 11/28): v8 refuses a body v7 took as a digest",
+    "from cron.job where jobname = 'silvis-office-digest-weekly';", "do not deploy - paste it back.]",
+    "Read it in the function logs - `function_edge_logs`: the POST 200 on version 8", "not in `net._http_response`: the job keeps pg_net's 5 s default timeout", "may read `timed_out` with no status",
   ].forEach((s) => assert.ok(flat.includes(s), "the record names " + s));
+  assert.ok(!flat.includes("(403), an unknown mode is a 400") && !flat.includes("its `net._http_response` row answers 200 and the function log reads"), "the review's two wordings are gone");
+  assert.ok(rec.indexOf("Before the deploy (Faraz, the SQL editor, read-only") < rec.indexOf("The deploy: `deploy-office-body.sh`"), "the job's read-back comes before the deploy");
+  const pre = rec.match(/\)\[1\]\)::jsonb = '([^']*)'::jsonb as body_is_mode_digest\nfrom cron\.job where jobname = 'silvis-office-digest-weekly';/);
+  assert.ok(pre && rec.includes("((regexp_match(command, 'body" + String.fromCharCode(92) + "s*:=" + String.fromCharCode(92) + "s*''([^'']*)''::jsonb'))[1])::jsonb"), "the read-back extracts the job's jsonb body from cron.job.command");
+  assert.deepStrictEqual(JSON.parse(pre[1]), JSON.parse(onCronBody()), "the read-back expects exactly section 4's body");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
   const row = readme.split("\n").find((l) => l.startsWith("| `office-notifications` |")) || "";
   assert.ok(row.includes("v7 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:15 UTC") && row.includes("v8 (the body fails closed, section 3's \"2026-11-28 - the body fails closed\") PREPARED, NOT deployed"), "the slug row: v7 deployed, v8 prepared");

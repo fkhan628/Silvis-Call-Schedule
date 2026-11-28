@@ -1107,7 +1107,8 @@ was sent or written"}` before any read of the schedule, the baseline or the cont
 at all is read before it; on a scheduler session only the gate's own two reads (the GoTrue user, the `user_profiles` role) come
 first - the gate stays ahead of the body, so a caller without the secret or a scheduler session gets the 401 whatever it sends.
 After the body everything is as in v7: `dryRun` must be a boolean and goes with `digest` only (400), the cron secret takes `digest`
-and `rebaseline` only (403), an unknown mode is a 400, and the modes are unchanged. No new secret, table, RPC or cron change.
+and `rebaseline` only (403 - an unknown mode on the cron path included), an unknown mode on a scheduler session is a 400, and the
+modes are unchanged. No new secret, table, RPC or cron change.
 
 The callers, each checked on 2026-11-28 (`test/edge-functions.test.js` runs every one of these bodies through the real handler):
 the weekly cron `silvis-office-digest-weekly` (section 4: `'{"mode":"digest"}'::jsonb`; pg_net sends jsonb's text form,
@@ -1118,6 +1119,18 @@ from section 5's lines or by hand. Nothing else calls the function.
 The order: independent of every other function - `daily-reminder` v12 is deployed (2026-11-28 15:41:28 UTC, the record above) and
 its deploy left `office-notifications` at v7. Any day after the merge to `main`, but not on a Monday from 10:50 to 12:05 UTC (the
 weekly digest runs Monday 11:00 UTC - 12:00 UTC if the job was moved for standard time, section 4).
+
+Before the deploy (Faraz, the SQL editor, read-only - review of 11/28): v8 refuses a body v7 took as a digest, and nothing has read
+the live job's `cron.job.command` back since the job was created (the job's body above is section 4's record; the Monday runs cannot
+tell - v7 ran `{}` or no body as a digest too). So the job's body is read once -
+```sql
+select jobname, schedule, active,
+       ((regexp_match(command, 'body\s*:=\s*''([^'']*)''::jsonb'))[1])::jsonb = '{"mode":"digest"}'::jsonb as body_is_mode_digest
+from cron.job where jobname = 'silvis-office-digest-weekly';
+```
+[one row: `silvis-office-digest-weekly`, `0 11 * * 1` (or `0 12 * * 1`), `active` true, `body_is_mode_digest` true. Anything else -
+no row, `false`, or an empty `body_is_mode_digest` (no body: pg_net then sends `{}`) - and v8 would answer that job 400 every Monday
+(nothing sent; the 400 only in the function log): do not deploy - paste it back.]
 
 The deploy: `deploy-office-body.sh` in the private apply-scripts folder (machine paths keep it out of this repo), run from a clean
 `main` that carries this change - `deploy-close-summary.sh` for `office-notifications`. `--dry-run` first: it checks the CLI and
@@ -1159,8 +1172,10 @@ schedule changed since the last notice, `0` on a quiet week; `sent` 0) - one row
 of a minute ago: v7 answered the first body (as a dry run - nothing sent, nothing written), the deploy did not land - paste it back.
 No row, or an old `created`: read `select status_code, timed_out, error_msg, created, content from net._http_response order by
 created desc limit 3;` (a timeout or a connection error shows in `timed_out` / `error_msg`).] The first live v8 run is the next
-Monday digest (11:00 UTC): its `net._http_response` row answers 200 and the function log reads `[office-notifications]
-mode=digest dryRun=false via=cron`.
+Monday digest (11:00 UTC). Read it in the function logs - `function_edge_logs`: the POST 200 on version 8, and the line
+`[office-notifications] mode=digest dryRun=false via=cron` - not in `net._http_response`: the job keeps pg_net's 5 s default
+timeout and a digest takes about 6 s (the 10/12 digest: 5856 ms, "2026-10-26 - the PGRST303 retry" above), so its row may read
+`timed_out` with no status - pg_net giving up waiting, not the function failing.
 
 Rollback: section 7 (the backup the script took is the deployed v7; with v7 back a body it cannot parse reads as `{}` again -
 section 5's lines keep their `Invoke-RestMethod` bodies either way; nothing else to undo).
