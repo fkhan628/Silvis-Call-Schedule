@@ -164,8 +164,8 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   (`edge-functions/README.md` section 3). From PowerShell 5.1 a JSON body past a gate goes through `Invoke-RestMethod`, never
   `curl.exe -d` (README section 5). `office-notifications` v8 reads its body the same way (text that does not parse, no string
   `mode` - `{}` included - or a key its mode does not take answers 400; v7 sends the live digest on a body it cannot parse, on `{}`
-  and on a typo of `dryRun`); it goes live with Faraz's `deploy-office-body.sh` after his read-only check of the weekly job's body
-  (README section 3, "2026-11-28 - the body fails closed").
+  and on a typo of `dryRun`) and is deployed - 2026-11-28 17:54:16 UTC, Faraz's `deploy-office-body.sh`, after the read-only check
+  of the weekly job's body (README section 3, "2026-11-28 - the body fails closed").
 - East feed (`east-feed.js`) reads the Davenport project's `schedule_weeks` **read-only** with its public anon key and
   caches into `east_feed`. Fetch failure keeps the cache and warns — never "no East call". Its Davenport `time_off` read is
   guarded the same way (`eastVacationReadGuard`: a failed or suspiciously empty read keeps the cached ranges and resets no
@@ -260,5 +260,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   v12 was deployed after it (2026-11-28 15:41:28 UTC, Faraz's `deploy-close-summary.sh`; recorded in `edge-functions/README.md` §3,
   "2026-11-27 - the close summary as text"). Faraz's own step left: its offers dry-run proof (the two statements of that section).
   The office body (11/28, the follow-up Prompt 38's reviews named): `office-notifications` v8 reads its body failing closed like
-  daily-reminder's; Faraz's own steps: the merge to `main`, the read-only check of the weekly job's body, then `deploy-office-body.sh`
-  (private apply-scripts) and its pg_net proof (`edge-functions/README.md` §3, "2026-11-28 - the body fails closed") - until then v7 is live.
+  daily-reminder's - deployed 2026-11-28 17:54:16 UTC (Faraz's `deploy-office-body.sh`, after the weekly job's body read back as
+  `{"mode":"digest"}`; recorded in `edge-functions/README.md` §3, "2026-11-28 - the body fails closed"). Faraz's own step left: its
+  pg_net proof (the statements of that section).

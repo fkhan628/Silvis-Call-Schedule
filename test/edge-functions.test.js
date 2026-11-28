@@ -68,10 +68,13 @@ const CLOSE_TEXT_DEPLOYED_SHA256 = "44039dc61c49a10deb8b0418c50ccc8da292a04e6551
 // 2026-11-28 (the body fails closed - README section 3, "2026-11-28 - the body fails closed"): office-notifications' source
 // changed, so it is no longer the deployed v7 (RETRY_DEPLOYED_SHA256 above stays the record of v7's bytes - the README quotes it,
 // and the deploy script's backup must equal it). Its header's retry wording flipped to deployed, as the flip rule says, and the
-// new paragraph reads "v8 on base v7 - prepared, NOT deployed". This is the PREPARED v8, raw bytes: the file deploy-office-body.sh
-// stages (its NEW hash) - a source change moves this pin and that script's hash together. It becomes the deployed pin at the
-// deploy's record step.
-const OFFICE_BODY_PREPARED_SHA256 = "91a209cd55f5adba017abddac7f84b4175be4fd67d5c4203733695508daa3da2";
+// new paragraph reads "v8 on base v7 - prepared, NOT deployed". It was the PREPARED v8, raw bytes: the file deploy-office-body.sh
+// staged (its NEW hash). Pin kept deliberately 11/28 (the deploy's record step; it was OFFICE_BODY_PREPARED_SHA256 until then):
+// this IS the deployed v8 - office-notifications v7 -> v8, deployed 2026-11-28 17:54:16 UTC by Faraz (deploy-office-body.sh: the
+// staged file this hash, the re-download equal to it CRLF-normalised; the workdir's re-downloaded copy hashed by Claude Code
+// afterwards - the same). The header keeps the as-deployed "prepared, NOT deployed" wording; that wording flips, with this pin, at
+// the next source change.
+const OFFICE_BODY_DEPLOYED_SHA256 = "91a209cd55f5adba017abddac7f84b4175be4fd67d5c4203733695508daa3da2";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -3905,8 +3908,8 @@ check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 and 
   {
     const s5i = readme.slice(readme.indexOf("## 5. Verification"), readme.indexOf("## 6. Invocations"));
     // pin moved deliberately 11/28 (the body fails closed): the sentence names office-notifications v7 live until the v8 deploy
-    // and v8 answering 400 - it moves again at v8's record step
-    assert.ok(s5i.includes("secret must never get one: office-notifications v7 (live until the v8 deploy -\nsection 3) reads a broken body as `{}` - a LIVE send, as daily-reminder v11 did;\ndaily-reminder v12 (live since 2026-11-28) answers it 400, and so does\noffice-notifications v8 - so their lines past the gate use `Invoke-RestMethod") && !s5i.includes("daily-reminder v11 and office-notifications read a broken") && !s5i.includes("office-notifications reads a broken body as `{}`"), "section 5's intro: office-notifications v7 reads a broken body as {} until the v8 deploy, as daily-reminder v11 did; v12 and v8 answer it 400");
+    // and v8 answering 400; pin moved deliberately 11/28 (v8's record step): v7 in the past, v12 and v8 both live
+    assert.ok(s5i.includes("secret must never get one: office-notifications v7 (live until the v8 deploy,\n2026-11-28 17:54:16 UTC) read a broken body as `{}` - a LIVE send, as daily-reminder\nv11 did; daily-reminder v12 and office-notifications v8 (both live since 2026-11-28)\nanswer it 400 - so their lines past the gate use `Invoke-RestMethod") && !s5i.includes("daily-reminder v11 and office-notifications read a broken") && !s5i.includes("office-notifications reads a broken body as `{}`") && !s5i.includes("(live until the v8 deploy -\nsection 3) reads"), "section 5's intro: office-notifications v7 read a broken body as {} until the v8 deploy (2026-11-28 17:54:16 UTC), as daily-reminder v11 did; v12 and v8 answer it 400");
   }
   // review 2 (11/28): section 5 sends no JSON body past a gate as curl.exe -d '<json>' - Windows PowerShell 5.1 strips its inner
   // quotes, and office-notifications (like daily-reminder v11, live until 2026-11-28 15:41:28 UTC) reads the broken body as {}
@@ -5274,7 +5277,7 @@ check("10/26 retry: no PostgREST call of this project bypasses rest() - each fun
     assert.strictEqual(s.split("restFetchWithRetry(").length - 1, 2, n + ": restFetchWithRetry defined once, called once (by rest())");
   });
 });
-check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 11/11, daily-reminder 11/27 and office-notifications 11/28): the two untouched functions (calendar-sync v8 on v7, send-notification v13 on v12 - deployed 2026-10-27 03:30 UTC) keep the as-deployed 'prepared, NOT deployed' wording and are the deployed files RETRY_DEPLOYED_SHA256 pins (raw bytes); east-feed-refresh, daily-reminder and office-notifications (FLIPPED) record the retry as deployed and are their next version (NEXT: east-feed-refresh's prepared v3, daily-reminder's deployed v12, office-notifications' prepared v8)", () => {
+check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 11/11, daily-reminder 11/27 and office-notifications 11/28): the two untouched functions (calendar-sync v8 on v7, send-notification v13 on v12 - deployed 2026-10-27 03:30 UTC) keep the as-deployed 'prepared, NOT deployed' wording and are the deployed files RETRY_DEPLOYED_SHA256 pins (raw bytes); east-feed-refresh, daily-reminder and office-notifications (FLIPPED) record the retry as deployed and are their next version (NEXT: east-feed-refresh's prepared v3, daily-reminder's deployed v12, office-notifications' deployed v8)", () => {
   const V = { "calendar-sync": [8, 7], "daily-reminder": [11, 10], "east-feed-refresh": [2, 1], "office-notifications": [7, 6], "send-notification": [13, 12] };
   // pin moved deliberately 11/11 (Prompt 34): east-feed-refresh met its next source change (the East week lists, v3 prepared), so
   // ITS header flipped to the deployed wording and its source is the prepared v3 (EAST_LISTS_PREPARED_SHA256); the other four are
@@ -5283,10 +5286,10 @@ check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 
   // prepared) - its header flipped the same way and its source was the prepared v12; pin kept deliberately 11/28 (the deploy's
   // record step): that v12 is deployed (2026-11-28 15:41:28 UTC) - CLOSE_TEXT_DEPLOYED_SHA256
   // pin moved deliberately 11/28 (the body fails closed): office-notifications met its next source change too (v8 prepared) - its
-  // header flipped the same way (v7 deployed 2026-10-27 03:30:15 UTC, the deploy's third) and its source is the prepared v8
-  // (OFFICE_BODY_PREPARED_SHA256)
+  // header flipped the same way (v7 deployed 2026-10-27 03:30:15 UTC, the deploy's third) and its source was the prepared v8; pin
+  // kept deliberately 11/28 (the deploy's record step): that v8 is deployed (2026-11-28 17:54:16 UTC) - OFFICE_BODY_DEPLOYED_SHA256
   const FLIPPED = { "east-feed-refresh": "TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz;", "daily-reminder": "TOKEN RACE RETRY (2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz;", "office-notifications": "TOKEN RACE RETRY (2026-10-26; v7 - deployed 2026-10-27 03:30:15 UTC by Faraz;" };
-  const NEXT = { "east-feed-refresh": EAST_LISTS_PREPARED_SHA256, "daily-reminder": CLOSE_TEXT_DEPLOYED_SHA256, "office-notifications": OFFICE_BODY_PREPARED_SHA256 };
+  const NEXT = { "east-feed-refresh": EAST_LISTS_PREPARED_SHA256, "daily-reminder": CLOSE_TEXT_DEPLOYED_SHA256, "office-notifications": OFFICE_BODY_DEPLOYED_SHA256 };
   Object.entries(RETRY_FNS).forEach(([n, s]) => {
     const head = s.slice(0, s.indexOf("\nimport "));
     const [v, base] = V[n];
@@ -5295,7 +5298,7 @@ check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 
     if (FLIPPED[n]) {
       assert.strictEqual(head.split(FLIPPED[n]).length - 1, 1, n + ": the header records the retry (v" + v + ") as deployed - once");
       assert.strictEqual(head.split(pending).length - 1, 0, n + ": the as-deployed 'prepared, NOT deployed' wording for the retry is gone (the flip)");
-      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), NEXT[n], n + ": the source is its next version (east-feed-refresh v3, the East week lists - prepared; daily-reminder v12, the close summary as text - deployed 2026-11-28 15:41:28 UTC; office-notifications v8, the body fails closed - prepared) - RETRY_DEPLOYED_SHA256 keeps the retry's deployed bytes as the record");
+      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), NEXT[n], n + ": the source is its next version (east-feed-refresh v3, the East week lists - prepared; daily-reminder v12, the close summary as text - deployed 2026-11-28 15:41:28 UTC; office-notifications v8, the body fails closed - deployed 2026-11-28 17:54:16 UTC) - RETRY_DEPLOYED_SHA256 keeps the retry's deployed bytes as the record");
       return;
     }
     assert.strictEqual(head.split(pending).length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");
@@ -5680,11 +5683,29 @@ acheck("11/28 (the body fails closed): the README's pg_net proof binds - its fir
   const s5 = readme.slice(readme.indexOf("### office-notifications\n```powershell"), readme.indexOf("### send-notification"));
   assert.ok(s5.split("\n").some((l) => l.startsWith("try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri \"$URL/office-notifications\" -Headers @{ \"x-cron-secret\" = $SECRET } -ContentType \"application/json\" -Body '" + bodies[0] + "').StatusCode }") && l.endsWith("# 400 (v7: 200)")), "section 5's v8 line sends the proof's first body and expects 400 (v7: 200)");
 });
-check("11/28 (the body fails closed): edge-functions/README.md - section 3's '2026-11-28 - the body fails closed (office-notifications v8)' (after the v12 record) is PREPARED, NOT deployed and names why (v7's req.json with a {} fallback, the bodies that ran the live digest), the change (officeBody, the keys per mode, the 400's words, the gate first), the callers, the order (daily-reminder v12 deployed, not Monday 10:50-12:05 UTC), the deploy script and what it checks (the deployed v7's bytes, DEPLOY, --no-verify-jwt --use-api), the proof (pg_net, the Vault secret) and the rollback; the slug row names v7 deployed and v8 prepared; section 5's office warning names v7 and v8; section 7 the rollback; ASCII", () => {
+check("11/28 (the body fails closed): edge-functions/README.md - section 3's '2026-11-28 - the body fails closed (office-notifications v8)' (after the v12 record) is DEPLOYED 2026-11-28 17:54:16 UTC by Faraz (v7 -> v8; the observed paragraph - the job's body read back first, the dry run, every step of the real run, the re-download's hash, what is not observed yet) and keeps the plan as prepared: why (v7's req.json with a {} fallback, the bodies that ran the live digest), the change (officeBody, the keys per mode, the 400's words, the gate first), the callers, the order (daily-reminder v12 deployed, not Monday 10:50-12:05 UTC), the deploy script and what it checks (the deployed v7's bytes, DEPLOY, --no-verify-jwt --use-api), the proof (pg_net, the Vault secret) and the rollback; the slug row names v7 and v8 deployed; section 5's office warning puts v7 in the past; section 7 the rollback and the deploy's own backup; ASCII", () => {
   const rec = onRecord(), flat = rec.replace(/\s+/g, " ");
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   assert.ok(s3.indexOf("### 2026-11-28 - the body fails closed (office-notifications v8)") > s3.indexOf("### 2026-11-27 - the close summary as text"), "the record follows the v12 record");
-  assert.ok(flat.includes("*Status: PREPARED, NOT deployed - `office-notifications` v8 on base v7.") && !/Status: DEPLOYED/.test(flat), "Status: PREPARED, NOT deployed");
+  // pin moved deliberately 11/28 (v8's record step): PREPARED -> DEPLOYED, and the observed paragraph from the log
+  assert.ok(flat.includes("*Status: DEPLOYED 2026-11-28 17:54:16 UTC by Faraz (`deploy-office-body.sh`, log `deploy-office-body-20261128T175401Z.log`, DEPLOYED AND VERIFIED): `office-notifications` v7 -> v8.") && !/Status: PREPARED/.test(flat), "Status: DEPLOYED with the version step");
+  const iOb = flat.indexOf("**Observed** (deploy, 2026-11-28 - the log and the PASTE THIS BACK block Faraz pasted back, read again by Claude Code)");
+  assert.ok(iOb > 0 && iOb < flat.indexOf("Rollback: section 7 (the backup the script took is the deployed v7"), "the observed paragraph, before the rollback line");
+  const ob = flat.slice(iOb);
+  [
+    "first the weekly job's body, read-only (Cowork, 2026-11-28 17:38Z - the statement of \"Before the deploy\" verbatim): one row, `silvis-office-digest-weekly`, `0 11 * * 1`, `active` true, `body_is_mode_digest` true.",
+    "The dry run (`deploy-office-body-20261128T175141Z.log`, 17:51:41Z): nothing deployed, the live copy the deployed v7.",
+    "The real run started 17:54:01Z from the main clone at `99d1b59`.",
+    "Step 0: the repo file the pinned hash (`" + OFFICE_BODY_DEPLOYED_SHA256.slice(0, 12) + "...`)",
+    "Step 1: `office-notifications` ACTIVE, `verify_jwt` false, v7.",
+    "Step 2: the backup in the workdir's `backup-office-body-20261128T175401Z` folder, the deployed v7 byte for byte (`" + RETRY_DEPLOYED_SHA256["office-notifications"].slice(0, 12) + "...`, CRLF-normalised).",
+    "Step 4: the clock Sat 17:54 UTC, Sat 17:54 after DEPLOY was typed.", "Step 5: the deploy answered `Deployed Functions.`",
+    "Step 6: ACTIVE, one version up, `verify_jwt` false - v8 (`functions list` read from the log by Claude Code afterwards: updated 2026-11-28 17:54:16 UTC; `calendar-sync` v8, `daily-reminder` v12, `east-feed-refresh` v2 and `send-notification` v13 unchanged)",
+    "Claude Code hashed the workdir's re-downloaded copy afterwards: `" + OFFICE_BODY_DEPLOYED_SHA256.slice(0, 12) + "...`, the repo file's byte for byte). Step 7: the unauthenticated POST 401.",
+    "The source's own header still reads `v8 on base v7 - prepared, NOT deployed` (pinned in `test/edge-functions.test.js`) on purpose",
+    "Not observed yet: the pg_net proof (Faraz's - the statements above) and v8's first live run, the Monday digest of 2026-11-30 11:00 UTC (read `function_edge_logs`, as above).",
+  ].forEach((s) => assert.ok(ob.includes(s), "observed: " + s));
+  assert.ok(onSrc.slice(0, onSrc.indexOf("\nimport ")).includes("THE BODY FAILS CLOSED (2026-11-28; v8 on base v7 - prepared, NOT deployed;"), "the source header keeps its as-deployed wording (the flip rule: it flips at the next source change)");
   [
     "v7 reads its body with `req.json()` and a `{}` fallback, and a missing or non-string `mode` as `digest`",
     "`{mode:digest,dryRun:true}`", "`{}`, `{\"mode\":1}` and a typo of `dryRun`",
@@ -5712,11 +5733,35 @@ check("11/28 (the body fails closed): edge-functions/README.md - section 3's '20
   assert.deepStrictEqual(JSON.parse(pre[1]), JSON.parse(onCronBody()), "the read-back expects exactly section 4's body");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
   const row = readme.split("\n").find((l) => l.startsWith("| `office-notifications` |")) || "";
-  assert.ok(row.includes("v7 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:15 UTC") && row.includes("v8 (the body fails closed, section 3's \"2026-11-28 - the body fails closed\") PREPARED, NOT deployed"), "the slug row: v7 deployed, v8 prepared");
-  const s5 = readme.slice(readme.indexOf("### office-notifications\n```powershell"), readme.indexOf("### send-notification"));
-  assert.ok(s5.includes("# !! ({mode:digest,dryRun:true}). v7 (live until the v8 deploy) reads a body it cannot parse as {} - mode digest, LIVE: a real") && s5.includes("v8 answers it 400 (it fails closed - section 3, \"2026-11-28 - the body fails closed\")") && !s5.includes("and office-notifications reads a body it cannot parse as {}"), "section 5's office warning: v7 until the deploy, v8 answers 400");
+  // pin moved deliberately 11/28 (v8's record step): the row, section 5's warning and section 7 say deployed
+  assert.ok(row.includes("v7 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:15 UTC") && row.includes("v8 (the body fails closed, section 3's \"2026-11-28 - the body fails closed\") deployed 2026-11-28 17:54:16 UTC") && !row.includes("PREPARED"), "the slug row: v7 deployed, v8 deployed 2026-11-28 17:54:16 UTC");
+  const s5 = readme.slice(readme.indexOf("### office-notifications\n```powershell"), readme.indexOf("### send-notification")), s5f = s5.replace(/\n# !! /g, " ");
+  assert.ok(s5f.includes("inner quotes stripped ({mode:digest,dryRun:true}). v7 (live until the v8 deploy, 2026-11-28 17:54:16 UTC) read a body it could not parse as {} - mode digest, LIVE: a real digest e-mail to the office contacts; v8 answers it 400 (it fails closed - section 3, \"2026-11-28 - the body fails closed\").") && !s5.includes("v7 (live until the v8 deploy) reads") && !s5.includes("and office-notifications reads a body it cannot parse as {}"), "section 5's office warning: v7 in the past since the deploy, v8 answers 400");
   const s7 = readme.slice(readme.indexOf("## 7.")), s7f = s7.replace(/\s+/g, " ");
   assert.ok(s7f.includes("The body fails closed (section 3, \"2026-11-28 - the body fails closed\"; `office-notifications` v8): `deploy-office-body.sh`") && s7.includes("backup-office-body-<UTC stamp>\\office-notifications\\index.ts") && s7f.includes("The backup is the deployed v7 (the retry stays)"), "section 7: the rollback of the v8 deploy");
+  assert.ok(s7f.includes("Since 2026-11-28 17:54:16 UTC the live `office-notifications` is v8 (section 3's record): that deploy's backup is the workdir's `backup-office-body-20261128T175401Z` folder (the deployed v7, `" + RETRY_DEPLOYED_SHA256["office-notifications"].slice(0, 12) + "...`), and the script's log (`deploy-office-body-20261128T175401Z.log`) holds its two rollback lines."), "section 7: the deployed v8's own backup folder and log");
+});
+// v8's record step (11/28): CLAUDE.md and the tracked docs say office-notifications v8 is deployed - windowed around each mention,
+// as the Prompt 38 record's sweep is - and no mention there still reads prepared / not deployed / waiting for the deploy
+check("11/28 (v8's record step): CLAUDE.md and the tracked docs name office-notifications v8 deployed 2026-11-28 17:54:16 UTC (CLAUDE.md's two lines), and no mention of v8 / deploy-office-body.sh / the body fails closed there still says prepared, NOT deployed or waits for the deploy", () => {
+  const docs = ["CLAUDE.md"].concat(fs.readdirSync(path.join(ROOT, "docs")).filter((f) => f.endsWith(".md")).map((f) => "docs/" + f));
+  const flatOf = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8").replace(/\s+/g, " ");
+  const NAMES = /office-notifications`? v8|deploy-office-body|the body fails closed/g;
+  const OLD = /prepared, NOT deployed|NOT deployed|not deployed|is prepared|waits for it|it goes live with|until then v7 is live/;
+  const hits = [];
+  let seen = 0;
+  docs.forEach((rel) => {
+    const t = flatOf(rel);
+    for (const m of t.matchAll(NAMES)) {
+      seen++;
+      const w = t.slice(Math.max(0, m.index - 220), m.index + 260);
+      if (OLD.test(w)) hits.push(rel + ": ..." + w.slice(0, 220) + "...");
+    }
+  });
+  assert.ok(seen >= 4, "the sweep met the v8 mentions (" + seen + ")");
+  assert.deepStrictEqual(hits, [], "no mention of office-notifications v8 in CLAUDE.md or the docs still says it is prepared / not deployed");
+  const cm = flatOf("CLAUDE.md");
+  assert.ok(cm.includes("and on a typo of `dryRun`) and is deployed - 2026-11-28 17:54:16 UTC, Faraz's `deploy-office-body.sh`, after the read-only check of the weekly job's body") && cm.includes("daily-reminder's - deployed 2026-11-28 17:54:16 UTC (Faraz's `deploy-office-body.sh`, after the weekly job's body read back as `{\"mode\":\"digest\"}`;"), "CLAUDE.md: v8 deployed 2026-11-28 17:54:16 UTC, in both lines");
 });
 
 (async () => {
