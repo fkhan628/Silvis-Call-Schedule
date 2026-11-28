@@ -160,7 +160,7 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   empty), and its reads skip a signed-out / session-expired page (and wait for that account's profile) and drop an answer or
   failure for another account or from an older read.
   `daily-reminder` v12 (the close's summary as text, the ids under `rollcall_summary`; a body that does not parse answers 400
-  instead of running the live hourly reminder) is prepared, NOT deployed - Faraz's `deploy-close-summary.sh`
+  instead of running the live hourly reminder) is deployed - 2026-11-28 15:41:28 UTC, Faraz's `deploy-close-summary.sh`
   (`edge-functions/README.md` section 3). From PowerShell 5.1 a JSON body past a gate goes through `Invoke-RestMethod`, never
   `curl.exe -d` (README section 5).
 - East feed (`east-feed.js`) reads the Davenport project's `schedule_weeks` **read-only** with its public anon key and
@@ -253,6 +253,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   Prompt 37 (Khan's monthly backup target and the East-day switch, Faraz 11/22): the engine reads `monthlyTarget { backup }` and
   `eastFeed.backupFreeOnEastDays`; the seed carries neither - Faraz enters the number (Setup > Rules > Limits > Backup target) and the
   switch (Setup > Rules > East) after the preview, and the seed and its pins follow in a record change; readings to confirm: §8 item 32.
-  Prompt 38 (the Activity log crash, Faraz 11/27): the client fix ships first and ends the crash; Faraz's own step after it is the
-  `daily-reminder` v12 deploy (`deploy-close-summary.sh`, private apply-scripts) and its offers dry-run proof (`edge-functions/README.md`
-  §3, "2026-11-27 - the close summary as text") - v12 is prepared and waits for it.
+  Prompt 38 (the Activity log crash, Faraz 11/27): the client fix shipped first and ended the crash (2026.11.28a); `daily-reminder`
+  v12 was deployed after it (2026-11-28 15:41:28 UTC, Faraz's `deploy-close-summary.sh`; recorded in `edge-functions/README.md` §3,
+  "2026-11-27 - the close summary as text"). Faraz's own step left: its offers dry-run proof (the two statements of that section).

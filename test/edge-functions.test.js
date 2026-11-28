@@ -57,11 +57,14 @@ const EAST_LISTS_PREPARED_SHA256 = "0291ed8628defb4abc666b8093cdbf0705a6c3ef0011
 // 2026-11-27 (Prompt 38, the close summary as text - README section 3, "2026-11-27 - the close summary as text"): daily-reminder's
 // source changed, so it is no longer the deployed v11 (RETRY_DEPLOYED_SHA256 above stays the record of v11's bytes - the README
 // quotes it, and the deploy script's backup must equal it). Its header's retry wording flipped to deployed, as the flip rule says,
-// and the new paragraph reads "v12 on base v11 - prepared, NOT deployed". This is the PREPARED v12, raw bytes: the file the deploy
-// script stages (its NEW hash) - a source change moves this pin and that script's hash together. It becomes the deployed pin at
-// the deploy's record step. Review 2 (11/28): v12 also reads its body failing closed (reminderBody) and prints a finite number
-// in the close line as text - the pin moved with that source (2d95d090... was the first v12).
-const CLOSE_TEXT_PREPARED_SHA256 = "44039dc61c49a10deb8b0418c50ccc8da292a04e655130e4bf9a8aa29f780239";
+// and the new paragraph reads "v12 on base v11 - prepared, NOT deployed". It was the PREPARED v12, raw bytes: the file the deploy
+// script staged (its NEW hash). Review 2 (11/28): v12 also reads its body failing closed (reminderBody) and prints a finite number
+// in the close line as text - the pin moved with that source (2d95d090... was the first v12). Pin kept deliberately 11/28 (the
+// deploy's record step; it was CLOSE_TEXT_PREPARED_SHA256 until then): this IS the deployed v12 - daily-reminder v11 -> v12,
+// deployed 2026-11-28 15:41:28 UTC by Faraz (deploy-close-summary.sh: the staged file this hash, the re-download equal to it
+// CRLF-normalised; the workdir's re-downloaded copy hashed by Claude Code afterwards - the same). The header keeps the
+// as-deployed "prepared, NOT deployed" wording; that wording flips, with this pin, at the next source change.
+const CLOSE_TEXT_DEPLOYED_SHA256 = "44039dc61c49a10deb8b0418c50ccc8da292a04e655130e4bf9a8aa29f780239";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -3853,25 +3856,49 @@ check("P34 edge-functions/README.md: the east-feed-refresh row names v3 as PREPA
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
 });
 // Prompt 38 (review, 11/27): the v12 records are pinned the way the v3 ones above are - the README cannot drift from
-// RETRY_DEPLOYED_SHA256 / CLOSE_TEXT_PREPARED_SHA256, the script or the record step's flip without a failure
-check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 deployed and v12 PREPARED, NOT deployed; section 3's '2026-11-27 - the close summary as text' says why, the change (offersClosedLine, the text summary, detail.rollcall_summary), the order (the client first), the deploy script and what it checks (the live copy = the deployed v11's bytes; not from :50 to :05; DEPLOY; --no-verify-jwt --use-api), the proof (the dry run's OWN pg_net row, the secret from Vault, never typed; never a curl.exe -d body from PowerShell 5.1) and the rollback; section 5's sample and warning and section 7's rollback name it; ASCII", () => {
+// RETRY_DEPLOYED_SHA256 / CLOSE_TEXT_DEPLOYED_SHA256, the script or the record step's flip without a failure - pins moved
+// deliberately 11/28 (the deploy's record step): Status DEPLOYED, the observed paragraph, the row's and section 7's v12
+check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 and v12 deployed (v12 2026-11-28 15:41:28 UTC); section 3's '2026-11-27 - the close summary as text' (Status DEPLOYED, the observed paragraph from the log) says why, the change (offersClosedLine, the text summary, detail.rollcall_summary), the order (the client first), the deploy script and what it checks (the live copy = the deployed v11's bytes; not from :50 to :05; DEPLOY; --no-verify-jwt --use-api), the proof (the dry run's OWN pg_net row, the secret from Vault, never typed; never a curl.exe -d body from PowerShell 5.1) and the rollback; section 5's sample and warning and section 7's rollback name it; ASCII", () => {
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### 2026-11-27 - the close summary as text (daily-reminder v12; Prompt 38)");
   assert.ok(i > 0 && i > s3.indexOf("### 2026-11-11 - the East week lists"), "the subsection follows the East lists'");
   const j = s3.indexOf("\n### ", i + 10);
   const rec = s3.slice(i, j < 0 ? undefined : j), flat = rec.replace(/\s+/g, " ");
-  assert.ok(flat.includes("*Status: PREPARED, NOT deployed - `daily-reminder` v12 on base v11.") && !/Status: DEPLOYED/.test(flat), "Status: PREPARED, NOT deployed");
+  // the record step (11/28): DEPLOYED, the versions, the observed paragraph from the log
+  assert.ok(flat.includes("*Status: DEPLOYED 2026-11-28 15:41:28 UTC by Faraz (`deploy-close-summary.sh`, log `deploy-close-summary-20261128T154103Z.log`, DEPLOYED AND VERIFIED): `daily-reminder` v11 -> v12.") && !/Status: PREPARED/.test(flat), "Status: DEPLOYED 2026-11-28 15:41:28 UTC, v11 -> v12");
+  assert.ok(flat.includes("merged as main `7f65a7b`, `e16a305` and `9fbdacb` (the client live as 2026.11.28a, build `f4de34e`)"), "the Status line names the merge and the live client");
+  const obAt = flat.indexOf("**Observed** (deploy, 2026-11-28");
+  assert.ok(obAt > 0, "the observed paragraph");
+  const ob = flat.slice(obAt);
+  ["started 15:41:03Z from the main clone at `f4de34e`", "the repo file the pinned hash (`" + CLOSE_TEXT_DEPLOYED_SHA256.slice(0, 12) + "...`)", "`daily-reminder` ACTIVE, `verify_jwt` false, v11",
+    "`backup-close-summary-20261128T154103Z` folder, the deployed v11 byte for byte (`" + RETRY_DEPLOYED_SHA256["daily-reminder"].slice(0, 12) + "...`", "the clock 15:41 UTC, 15:41 after DEPLOY was typed",
+    "ACTIVE, one version up, `verify_jwt` false - v12 (`functions list` read again by Claude Code through the Supabase API afterwards: updated 15:41:28 UTC",
+    "Claude Code hashed the workdir's re-downloaded copy afterwards: `" + CLOSE_TEXT_DEPLOYED_SHA256.slice(0, 12) + "...`, the repo file's", "the unauthenticated POST 401 (`function_edge_logs`: 15:41:33Z, version 12)"].forEach((s) => assert.ok(ob.includes(s), "observed: " + s));
+  // the first scheduled run on v12 (16:00 UTC, read-only): the cron's {} body passes reminderBody - and what is still not observed
+  assert.ok(ob.includes("`daily-reminder` v12's hourly run at 16:00 UTC answered 200 (`net._http_response` id 1759: `dry_run` false, `sent` 0, `failed` 0, `skipped_wrong_hour` 2; `function_edge_logs` POST 200 on version 12 in 3388 ms, pg_net's call) - the cron's `{}` body passes `reminderBody`."), "observed: v12's first hourly run, 200 on version 12");
+  {
+    const nA = ob.indexOf("Not observed yet: the offers dry-run proof");
+    assert.ok(nA > ob.indexOf("v12's hourly run at 16:00 UTC answered 200") && ob.indexOf("v12's hourly run at 16:00 UTC answered 200") > 0, "the not-observed sentence follows the first run");
+    ["the offers dry-run proof (Faraz's - the statements above)", "v12's first `offers` run (`silvis-offers-daily`, 13:00 UTC)", "first `open-shifts` run (Monday 2026-11-30 12:00 UTC)", "the first close's text summary (the next period's close)"].forEach((s) => assert.ok(ob.slice(nA).includes(s), "not observed yet: " + s));
+  }
+  assert.ok(ob.includes("The source's own header still reads `v12 on base v11 - prepared, NOT deployed` (pinned in `test/edge-functions.test.js`) on purpose: the repo copy stays byte-identical to the deployed v12") && ob.includes("that wording flips, with its pin, at the next source change"), "the flip rule");
   ["`offersClosedLine(words)`", "`detail.rollcall_summary`", "The order: the client first", "`deploy-close-summary.sh`", "`--no-verify-jwt --use-api`", "DEPLOY in capital letters", "not from :50 to :05", "`" + RETRY_DEPLOYED_SHA256["daily-reminder"].slice(0, 12) + "...`", "The 11/23 row stays as it is"].forEach((s) => assert.ok(flat.includes(s), "the record names " + s));
   assert.ok(flat.includes("body := '{\"mode\":\"offers\",\"dryRun\":true}'::jsonb") && flat.includes("vault.decrypted_secrets where name = 'silvis_cron_secret'") && flat.includes("like '{\"mode\":\"offers\",\"dry_run\":true,%'"), "the proof: the offers dry run through pg_net, the secret from Vault, read back by the dry run's OWN row");
   assert.ok(!/like '\{"mode":"offers"%'/.test(rec), "never the old read-back that also matches the live 13:00 run's answer");
   assert.ok(flat.includes("never a `curl.exe -d` body from PowerShell 5.1"), "the PowerShell 5.1 warning");
   const row = readme.split("\n").find((l) => l.startsWith("| `daily-reminder` |")) || "";
-  assert.ok(row.includes("v11 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:19 UTC") && row.includes("v12 (the close summary as text - Prompt 38, section 3's \"2026-11-27 - the close summary as text\") PREPARED, NOT deployed"), "the slug row: v11 deployed, v12 prepared");
+  assert.ok(row.includes("v11 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:19 UTC") && row.includes("v12 (the close summary as text - Prompt 38, section 3's \"2026-11-27 - the close summary as text\") deployed 2026-11-28 15:41:28 UTC") && !/NOT deployed/.test(row), "the slug row: v11 and v12 deployed (v12 2026-11-28 15:41:28 UTC) - no NOT deployed left");
   const s5 = readme.slice(readme.indexOf("### daily-reminder\n```powershell"), readme.indexOf("### east-feed-refresh (Prompt 31 Part A"));
   assert.ok(s5.includes("\"rollcall_summary\":{\"painted\":[\"s?\"],\"added_vacations\":[\"s?\"],\"following_rules\":[\"s?\"]}") && s5.includes("!! WINDOWS POWERSHELL 5.1"), "section 5: the sample's rollcall_summary and the PowerShell warning at the block's top");
   assert.ok(!s5.includes("(or the curl above)") && !s5.includes("(or the\ncurl above)"), "no 'or the curl above' left without the warning");
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.includes("The close summary as text (section 3, \"2026-11-27 - the close summary as text\"; `daily-reminder` v12)") && s7.includes("backup-close-summary-<UTC stamp>\\daily-reminder\\index.ts") && s7.includes("The backup is the deployed v11 (the retry stays)"), "section 7: the rollback of the v12 deploy");
+  assert.ok(s7.includes("Since 2026-11-28 15:41:28 UTC the live `daily-reminder` is v12 (section 3's record): that deploy's backup is the workdir's") && s7.includes("`backup-close-summary-20261128T154103Z` folder (the deployed v11, `" + RETRY_DEPLOYED_SHA256["daily-reminder"].slice(0, 12) + "...`)") && s7.includes("(`deploy-close-summary-20261128T154103Z.log`) holds its two rollback lines"), "section 7: the deployed v12's own backup folder and log (11/28 record step)");
+  assert.ok(s5.includes("v11 (live until the v12 deploy, 2026-11-28 15:41:28 UTC) read a body it could not parse as {}") && !s5.includes("v11 (live until the v12 deploy) reads"), "section 5's warning: v11 in the past since the deploy");
+  {
+    const s5i = readme.slice(readme.indexOf("## 5. Verification"), readme.indexOf("## 6. Invocations"));
+    assert.ok(s5i.includes("secret must never get one: office-notifications reads a broken body as `{}` - a") && s5i.includes("LIVE send, as daily-reminder v11 did (v12, live since 2026-11-28, answers it 400) -") && !s5i.includes("daily-reminder v11 and office-notifications read a broken"), "section 5's intro: office-notifications still reads a broken body as {}, daily-reminder v11 did");
+  }
   // review 2 (11/28): section 5 sends no JSON body past a gate as curl.exe -d '<json>' - Windows PowerShell 5.1 strips its inner
   // quotes and v11 daily-reminder / office-notifications read the broken body as {} (a LIVE send); those lines use
   // Invoke-RestMethod / Invoke-WebRequest (or east-feed-refresh's stdin)
@@ -4940,11 +4967,12 @@ check("revision z (4) source pins - daily-reminder: the push fan-out sits AFTER 
   // pin kept deliberately 10/27 (the deploy's record step): v11 is deployed (2026-10-27 03:30:19 UTC), the header kept as deployed
   assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - deployed 2026-10-22 23:18:10 UTC; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the PHONE PUSH item records v10 as deployed 2026-10-22 23:18:10 UTC, the record named");
   // pins moved deliberately 11/27 (Prompt 38, the next source change): the TOKEN RACE RETRY paragraph records v11 as deployed
-  // (2026-10-27 03:30:19 UTC), as the flip rule said; THE CLOSE SUMMARY AS TEXT paragraph is the pending v12 on base v11; the
-  // source is the PREPARED v12 (CLOSE_TEXT_PREPARED_SHA256) - RETRY_DEPLOYED_SHA256 keeps v11's bytes as the record
+  // (2026-10-27 03:30:19 UTC), as the flip rule said; THE CLOSE SUMMARY AS TEXT paragraph is the pending v12 on base v11 - pin
+  // kept deliberately 11/28 (the deploy's record step): v12 is deployed (2026-11-28 15:41:28 UTC), the header kept as deployed;
+  // the source is the deployed v12 (CLOSE_TEXT_DEPLOYED_SHA256) - RETRY_DEPLOYED_SHA256 keeps v11's bytes as the record
   assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz; edge-functions\/README\.md$/m.test(head), "the retry paragraph records v11 as deployed 2026-10-27 03:30:19 UTC (the flip at this source change)");
   assert.ok(/^\/\/ THE CLOSE SUMMARY AS TEXT \(Prompt 38, Faraz 2026-11-27; v12 on base v11 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(head), "the new paragraph: v12 on base v11 - prepared, NOT deployed");
-  assert.strictEqual(sha256Of("edge-functions/daily-reminder/index.ts"), CLOSE_TEXT_PREPARED_SHA256, "edge-functions/daily-reminder/index.ts is the prepared v12 (the close summary as text) - the file the deploy script stages; any source change moves this pin and that script's hash together");
+  assert.strictEqual(sha256Of("edge-functions/daily-reminder/index.ts"), CLOSE_TEXT_DEPLOYED_SHA256, "edge-functions/daily-reminder/index.ts must stay byte-identical to the deployed v12 (the close summary as text, deployed 2026-11-28 15:41:28 UTC - the staged file and the re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
   assert.ok(!/OneSignal push \(send-push/.test(head) && /shift_reminders_push/.test(head) && /VAPID_PUBLIC_KEY,\n\/\/ VAPID_PRIVATE_KEY, VAPID_SUBJECT/.test(head), "the header no longer says push was dropped; it names the switch and the three secrets");
   assert.ok(/^\/\/ Deploy: supabase functions deploy daily-reminder --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api$/m.test(head), "the deploy line");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(drSrc), "the source is ASCII");
@@ -5208,15 +5236,16 @@ check("10/26 retry: no PostgREST call of this project bypasses rest() - each fun
     assert.strictEqual(s.split("restFetchWithRetry(").length - 1, 2, n + ": restFetchWithRetry defined once, called once (by rest())");
   });
 });
-check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 11/11 and daily-reminder 11/27): the three untouched functions (calendar-sync v8 on v7, office-notifications v7 on v6, send-notification v13 on v12 - deployed 2026-10-27 03:30 UTC) keep the as-deployed 'prepared, NOT deployed' wording and are the deployed files RETRY_DEPLOYED_SHA256 pins (raw bytes); east-feed-refresh and daily-reminder (FLIPPED) record the retry as deployed and are their prepared next version (PREPARED)", () => {
+check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 11/11 and daily-reminder 11/27): the three untouched functions (calendar-sync v8 on v7, office-notifications v7 on v6, send-notification v13 on v12 - deployed 2026-10-27 03:30 UTC) keep the as-deployed 'prepared, NOT deployed' wording and are the deployed files RETRY_DEPLOYED_SHA256 pins (raw bytes); east-feed-refresh and daily-reminder (FLIPPED) record the retry as deployed and are their next version (NEXT: east-feed-refresh's prepared v3, daily-reminder's deployed v12)", () => {
   const V = { "calendar-sync": [8, 7], "daily-reminder": [11, 10], "east-feed-refresh": [2, 1], "office-notifications": [7, 6], "send-notification": [13, 12] };
   // pin moved deliberately 11/11 (Prompt 34): east-feed-refresh met its next source change (the East week lists, v3 prepared), so
   // ITS header flipped to the deployed wording and its source is the prepared v3 (EAST_LISTS_PREPARED_SHA256); the other four are
   // untouched - still their deployed bytes, still the as-deployed wording
   // pin moved deliberately 11/27 (Prompt 38): daily-reminder met its next source change too (the close summary as text, v12
-  // prepared) - its header flipped the same way and its source is the prepared v12 (CLOSE_TEXT_PREPARED_SHA256)
+  // prepared) - its header flipped the same way and its source was the prepared v12; pin kept deliberately 11/28 (the deploy's
+  // record step): that v12 is deployed (2026-11-28 15:41:28 UTC) - CLOSE_TEXT_DEPLOYED_SHA256
   const FLIPPED = { "east-feed-refresh": "TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz;", "daily-reminder": "TOKEN RACE RETRY (2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz;" };
-  const PREPARED = { "east-feed-refresh": EAST_LISTS_PREPARED_SHA256, "daily-reminder": CLOSE_TEXT_PREPARED_SHA256 };
+  const NEXT = { "east-feed-refresh": EAST_LISTS_PREPARED_SHA256, "daily-reminder": CLOSE_TEXT_DEPLOYED_SHA256 };
   Object.entries(RETRY_FNS).forEach(([n, s]) => {
     const head = s.slice(0, s.indexOf("\nimport "));
     const [v, base] = V[n];
@@ -5225,7 +5254,7 @@ check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 
     if (FLIPPED[n]) {
       assert.strictEqual(head.split(FLIPPED[n]).length - 1, 1, n + ": the header records the retry (v" + v + ") as deployed - once");
       assert.strictEqual(head.split(pending).length - 1, 0, n + ": the as-deployed 'prepared, NOT deployed' wording for the retry is gone (the flip)");
-      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), PREPARED[n], n + ": the source is its prepared next version (east-feed-refresh v3, the East week lists; daily-reminder v12, the close summary as text) - RETRY_DEPLOYED_SHA256 keeps the deployed bytes as the record");
+      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), NEXT[n], n + ": the source is its next version (east-feed-refresh v3, the East week lists - prepared; daily-reminder v12, the close summary as text - deployed 2026-11-28 15:41:28 UTC) - RETRY_DEPLOYED_SHA256 keeps the retry's deployed bytes as the record");
       return;
     }
     assert.strictEqual(head.split(pending).length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");
