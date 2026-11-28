@@ -72,7 +72,10 @@
 // offersClosedLine(words), the close e-mail's own words (offersClosedText's lead and sections) in one line - and the three
 // roster-id lists under rollcall_summary; the run's answer the same. v11 wrote the lists as an OBJECT summary, which the
 // app's Activity log rendered as a React child (minified error #31): Settings crashed for the scheduler from the 11/23
-// close on. That row stays as it is (the app words it from its lists since Prompt 38).
+// close on. That row stays as it is (the app words it from its lists since Prompt 38). And the body fails closed (review 2,
+// 11/28 - reminderBody): only an object with mode / dryRun is a request; text that does not parse (a curl.exe -d body from
+// Windows PowerShell 5.1 arrives without its inner quotes), an unknown key or a non-object is a 400 before any read, never
+// the live hourly reminder v11 ran on such a body. The crons' bodies ({}, {"mode":"offers"}, {"mode":"open-shifts"}) pass.
 //
 // Dropped from Davenport on purpose: OneSignal (send-push does not exist in
 // the Silvis project - the reminder's phone push is Silvis's own Web Push, 6.
@@ -1729,13 +1732,15 @@ function offersClosedText(p, summary, nameOf) {
 }
 // The close's ONE line for its period.close audit row (Prompt 38, Faraz 11/27): the close e-mail's own words -
 // offersClosedText's lead, then each section's heading and items - as plain TEXT, which the app's Activity log shows as it
-// is ("-" for an empty section, the e-mail's own mark). w = offersClosedText(...); never anything but a string.
+// is ("-" for an empty section, the e-mail's own mark). w = offersClosedText(...); never anything but a string. A finite
+// number is printed as text, as the e-mail prints it (a roster name that is a number); anything else that is not text is left
+// out - never String() of an object (review 2, 11/28).
 function offersClosedLine(w) {
   const o = w && typeof w === "object" ? w : {};
-  const text = function (v) { return typeof v === "string" ? v : ""; };
+  const text = function (v) { return typeof v === "string" ? v : (typeof v === "number" && isFinite(v) ? String(v) : ""); };
   const secs = Array.isArray(o.sections) ? o.sections : [];
   const parts = secs.map(function (s) {
-    const items = s && Array.isArray(s.items) ? s.items.filter(function (x) { return typeof x === "string" && x !== ""; }) : [];
+    const items = s && Array.isArray(s.items) ? s.items.map(text).filter(function (x) { return x !== ""; }) : [];
     return text(s && s.heading) + ": " + (items.length ? items.join("; ") : "-");
   });
   return (text(o.lead) || "Offers closed") + (parts.length ? ". " + parts.join(". ") : "") + ".";
@@ -1969,6 +1974,25 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
   return json(200, { mode: "offers", dry_run: dryRun, today, periods: list.length, reminded, closed, sent, failed, skipped_pref_off: prefOff, skipped_no_email: noEmail, results });
 }
 
+// The request body, read as TEXT and failing closed (Prompt 38 review 2, Faraz 11/28 - east-feed-refresh's refreshBody, the same
+// rule). An object whose keys are mode and dryRun only is a request: {} (the hourly cron's body - the reminder), {"mode":
+// "offers"} / {"mode":"open-shifts"} (the two other crons'), each with "dryRun" beside it. Anything else - text that does not
+// parse (Windows PowerShell 5.1 strips the inner quotes of curl.exe -d '{"mode":"offers","dryRun":true}', so the function
+// receives {mode:offers,dryRun:true}), an empty body, null, an array, a string, a number, a boolean, an unknown key (a typo of
+// dryRun) - is answered 400 before any read: a dry run that arrived mangled must never run the LIVE hourly reminder, which a
+// parse failure read as {} did (v11). One leading byte-order mark and white space around the JSON are accepted (PowerShell's
+// pipe adds both). The mode and dryRun values are judged after this, as before.
+function reminderBody(text: unknown): { body: any; error: string | null } {
+  const no = (why: string) => ({ body: null, error: "the body must be a JSON object with mode and dryRun only (" + why + "); nothing was read or sent" });
+  if (typeof text !== "string") return no("it could not be read");
+  let body: any;
+  try { body = JSON.parse(text.replace(/^\uFEFF/, "")); } catch (_e) { return no("it is not JSON"); }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return no("got " + (body === null ? "null" : Array.isArray(body) ? "an array" : typeof body));
+  const other = Object.keys(body).filter((k) => k !== "mode" && k !== "dryRun");
+  if (other.length) return no("unknown key " + JSON.stringify(other[0]).slice(0, 40));
+  return { body, error: null };
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -1988,7 +2012,11 @@ serve(async (req) => {
     if (!RESEND_API_KEY) return json(500, { error: "RESEND_API_KEY not configured" });
     if (!FROM_EMAIL) return json(500, { error: "NOTIFICATION_FROM_EMAIL not configured" });
 
-    const body = await req.json().catch(() => ({}));
+    // the body as text, failing closed (reminderBody): never req.json() with a {} fallback - a body that does not parse must
+    // be a 400, not the live hourly reminder
+    const parsed = reminderBody(await req.text().catch(() => null));
+    if (parsed.error) return json(400, { error: parsed.error });
+    const body = parsed.body;
     if (body && "dryRun" in body && typeof body.dryRun !== "boolean") {
       return json(400, { error: "dryRun must be a boolean; nothing was sent" });
     }

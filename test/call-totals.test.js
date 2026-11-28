@@ -744,7 +744,7 @@ check("T10 refusals: a person with no roster entry, a roster entry with no code,
   const inp = callA("callTotalsInputs", shapeArgs({ roster: SH.roster.map(r => (r.id === "s1" ? Object.assign({}, r, { code: "fak" }) : r)) }));
   assert.deepStrictEqual([inp.ok, inp.code, inp.counter.roster[0].name], [true, "FAK", "FAK"], "a lower-case roster code is counted upper-cased");
 });
-check("T10 crash-safe: malformed rows, maps, rosters and id maps never throw (the card renders inside the app; the only error boundary is the whole app's) - and a read that throws comes back ok:false 'the totals could not be computed (...)'", () => {
+check("T10 crash-safe: malformed rows, maps, rosters and id maps never throw (the card renders inside the app; the only error boundary above it is the whole app's - Prompt 38's CardGuards sit below the call) - and a read that throws comes back ok:false 'the totals could not be computed (...)'", () => {
   const bad = [];
   const weird = [
     { feedRows: [null, 5, "x", { week_monday: "2026-10-12", data: { dayCall: "s6", holidayCoverage: "nope", nights: 7, dayCallOverrides: 3, isBackup: "yes" } }, { week_monday: "2026-10-19", data: { dayCall: { id: "s6" }, holidayCoverage: { "2026-10-20": null, "2026-10-21": 5 }, nights: { mon: ["s6"] } } }] },

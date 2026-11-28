@@ -156,8 +156,13 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   (`GuardedRow`), and every `Collapsible` body under one: a render error there - an object child, a helper throwing on a row -
   costs that row or card. What still runs in CallSchedule's own render reaches the app-wide boundary - the memos over all rows
   (`auditGiveTradeIds`, `notifVisibleTo`), a `Collapsible`'s children built by its parent, the row keys - so those must stay
-  total. `daily-reminder` v12 (the close's summary as text, the ids under `rollcall_summary`) is prepared, NOT deployed -
-  Faraz's `deploy-close-summary.sh` (`edge-functions/README.md` section 3).
+  total. The Activity log says "No activity recorded yet" only after a read that worked (`auditState`; a failure is never
+  empty), and its reads skip a signed-out / session-expired page (and wait for that account's profile) and drop an answer or
+  failure for another account or from an older read.
+  `daily-reminder` v12 (the close's summary as text, the ids under `rollcall_summary`; a body that does not parse answers 400
+  instead of running the live hourly reminder) is prepared, NOT deployed - Faraz's `deploy-close-summary.sh`
+  (`edge-functions/README.md` section 3). From PowerShell 5.1 a JSON body past a gate goes through `Invoke-RestMethod`, never
+  `curl.exe -d` (README section 5).
 - East feed (`east-feed.js`) reads the Davenport project's `schedule_weeks` **read-only** with its public anon key and
   caches into `east_feed`. Fetch failure keeps the cache and warns — never "no East call". Its Davenport `time_off` read is
   guarded the same way (`eastVacationReadGuard`: a failed or suspiciously empty read keeps the cached ranges and resets no

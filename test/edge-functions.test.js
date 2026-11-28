@@ -59,8 +59,9 @@ const EAST_LISTS_PREPARED_SHA256 = "0291ed8628defb4abc666b8093cdbf0705a6c3ef0011
 // quotes it, and the deploy script's backup must equal it). Its header's retry wording flipped to deployed, as the flip rule says,
 // and the new paragraph reads "v12 on base v11 - prepared, NOT deployed". This is the PREPARED v12, raw bytes: the file the deploy
 // script stages (its NEW hash) - a source change moves this pin and that script's hash together. It becomes the deployed pin at
-// the deploy's record step.
-const CLOSE_TEXT_PREPARED_SHA256 = "2d95d090145d6c22d8a39eae499420e010b4e423ea5cc8c82d8c8096424cc8ca";
+// the deploy's record step. Review 2 (11/28): v12 also reads its body failing closed (reminderBody) and prints a finite number
+// in the close line as text - the pin moved with that source (2d95d090... was the first v12).
+const CLOSE_TEXT_PREPARED_SHA256 = "44039dc61c49a10deb8b0418c50ccc8da292a04e655130e4bf9a8aa29f780239";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -1921,7 +1922,8 @@ check("Prompt 38: offersClosedLine(words) - the period.close row's summary is th
     assert.doesNotThrow(() => { line = OFM.offersClosedLine(v); }, "input " + i + " must not throw");
     assert.ok(typeof line === "string" && !line.includes("[object Object]"), "input " + i + " -> text: " + line);
   });
-  assert.strictEqual(OFM.offersClosedLine({ lead: "L", sections: [null, { heading: BAD(), items: [BAD(), 7, "ok"] }, { heading: "H", items: "nope" }] }), "L. : -. : ok. H: -.", "only string headings and items are printed");
+  assert.strictEqual(OFM.offersClosedLine({ lead: "L", sections: [null, { heading: BAD(), items: [BAD(), 7, "ok"] }, { heading: "H", items: "nope" }] }), "L. : -. : 7; ok. H: -.", "text and finite numbers are printed (a roster name that is a number reads as the e-mail prints it - review 2, 11/28); an object never");
+  assert.strictEqual(OFM.offersClosedLine({ lead: 12, sections: [{ heading: 3, items: [NaN, Infinity, true, null, [], 0, "a"] }] }), "12. 3: 0; a.", "NaN / Infinity / booleans / null / arrays are left out; 0 is a number");
   assert.strictEqual(OFM.offersClosedLine(null), "Offers closed.", "no words -> a plain line, never empty");
 });
 
@@ -3870,6 +3872,15 @@ check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 depl
   assert.ok(!s5.includes("(or the curl above)") && !s5.includes("(or the\ncurl above)"), "no 'or the curl above' left without the warning");
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.includes("The close summary as text (section 3, \"2026-11-27 - the close summary as text\"; `daily-reminder` v12)") && s7.includes("backup-close-summary-<UTC stamp>\\daily-reminder\\index.ts") && s7.includes("The backup is the deployed v11 (the retry stays)"), "section 7: the rollback of the v12 deploy");
+  // review 2 (11/28): section 5 sends no JSON body past a gate as curl.exe -d '<json>' - Windows PowerShell 5.1 strips its inner
+  // quotes and v11 daily-reminder / office-notifications read the broken body as {} (a LIVE send); those lines use
+  // Invoke-RestMethod / Invoke-WebRequest (or east-feed-refresh's stdin)
+  const s5all = readme.slice(readme.indexOf("## 5. Verification"), readme.indexOf("## 6. Invocations"));
+  const risky = s5all.split("\n").filter((l) => /^curl\.exe /.test(l) && l.includes("-H \"x-cron-secret: $SECRET\"") && / -d \x27/.test(l));
+  assert.deepStrictEqual(risky, [], "section 5: no curl.exe -d body past a gate: " + risky.join(" | ").slice(0, 300));
+  ["'{\"dryRun\":true}'", "'{\"mode\":\"open-shifts\",\"dryRun\":true}'", "'{\"mode\":\"offers\",\"dryRun\":true}'", "'{\"mode\":\"digest\",\"dryRun\":true}'", "'{\"mode\":\"rebaseline\"}'"].forEach((b) => assert.ok(s5all.split("\n").some((l) => l.startsWith("Invoke-RestMethod -Method Post -Uri \"$URL/") && l.includes("-Headers @{ \"x-cron-secret\" = $SECRET } -ContentType \"application/json\" -Body " + b)), "section 5: " + b + " goes through Invoke-RestMethod"));
+  ["'{\"mode\":\"nope\"}'", "'{\"mode\":\"publish\"}'"].forEach((b) => assert.ok(s5all.split("\n").some((l) => l.startsWith("try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri \"$URL/") && l.includes("-Body " + b + ").StatusCode } catch { [int]$_.Exception.Response.StatusCode }")), "section 5: " + b + " reads only the status, through Invoke-WebRequest"));
+  assert.ok(s5all.split("!! WINDOWS POWERSHELL 5.1").length - 1 === 2 && s5all.includes("v12 answers it 400 (it fails closed - section 3)"), "the warning at the top of both blocks (daily-reminder and office-notifications)");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
 });
 acheck("A2 handler (critic A7): Davenport answers NO vacation for FAK while the cache holds his ranges in the window (an RLS-blocked read looks the same) - the cache keeps every list (the in-app plan would have cleared them), no review is reset, the weeks and the extra leg still refresh, ok:false names FAK; a cached range only BEFORE the window is a real 'none' (trusted, the reset runs)", async () => {
@@ -4601,10 +4612,13 @@ async function zEnv(over) {
   return { v, env: Object.assign({ SUPABASE_URL: Z_URL, SUPABASE_SERVICE_ROLE_KEY: "service-role-key-for-tests", RESEND_API_KEY: "resend-key-for-tests", NOTIFICATION_FROM_EMAIL: "Silvis Test <sender@example.org>", CRON_SECRET: Z_SECRET,
     VAPID_PUBLIC_KEY: v.publicB64u, VAPID_PRIVATE_KEY: v.privateB64u, VAPID_SUBJECT: "https://fkhan628.github.io/Silvis-Call-Schedule/" }, over || {}) };
 }
+// body: an object (sent as its JSON, what pg_net sends) or a STRING sent as it is (Prompt 38 review 2: the raw text the function
+// reads since it fails closed - a mangled PowerShell body, a byte-order mark). json() stays for a reader of the older shape.
 async function zCall(handler, body, secret) {
   const headers = new Headers({ "content-type": "application/json" });
   if (secret !== null) headers.set("x-cron-secret", secret === undefined ? Z_SECRET : secret);
-  const res = await handler({ method: "POST", url: Z_URL + "/functions/v1/daily-reminder", headers, json: async () => body });
+  const raw = typeof body === "string" ? body : JSON.stringify(body);
+  const res = await handler({ method: "POST", url: Z_URL + "/functions/v1/daily-reminder", headers, text: async () => raw, json: async () => JSON.parse(raw) });
   const text = await res.text();
   let parsed = null;
   try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
@@ -4695,12 +4709,18 @@ acheck("Prompt 38: the REAL daily-reminder handler, mode offers on the freeze da
   assert.ok(e1 && e1.action === "close", "the period closes today: " + r1.text.slice(0, 400));
   assert.strictEqual(typeof e1.summary, "string", "the close entry's summary is TEXT: " + JSON.stringify(e1.summary));
   assert.deepStrictEqual(e1.rollcall_summary, LISTS, "the three id lists ride under rollcall_summary");
-  assert.ok(e1.summary.startsWith("Jan 2027 - Apr 2027 (Mon 1/4 to Sun 4/4) froze on Mon 11/23. Painted days: Burchett - 1 day; Acton - 2 days. Added vacations: Acton - ") && e1.summary.endsWith(". Following their rules: Khan; Philip; Fierce; Sarkar."), "the close e-mail's words in one line: " + e1.summary);
+  assert.strictEqual(e1.summary, "Jan 2027 - Apr 2027 (Mon 1/4 to Sun 4/4) froze on Mon 11/23. Painted days: Burchett - 1 day; Acton - 2 days. Added vacations: Acton - 2/10-2/12. Following their rules: Khan; Philip; Fierce; Sarkar.", "the close e-mail's words in one line, whole (review 2, 11/28)");
+  // review 2 (11/28): the README's pg_net proof reads the dry run's OWN answer - like '{"mode":"offers","dry_run":true,%' - so the
+  // answer must start with exactly those keys in that order (a key added in front would make the proof read "no row")
+  const OFFERS_DRY_LIKE = "{\"mode\":\"offers\",\"dry_run\":true,%";
+  assert.ok(zLike(OFFERS_DRY_LIKE, r1.text), "the dry run's answer matches the README's pg_net pattern: " + r1.text.slice(0, 80));
+  assert.ok(readme.includes("like '" + OFFERS_DRY_LIKE + "'"), "the README's proof uses this same pattern");
   assert.deepStrictEqual([w1.periodPatches.length, w1.auditPosts.length, w1.mails.length], [0, 0, 0], "a dry run writes and sends nothing");
   // the live run
   const w2 = mk();
   const r2 = await zCall(zHandler(env, w2, NOW), { mode: "offers" });
   assert.strictEqual(r2.status, 200, r2.text);
+  assert.ok(!zLike(OFFERS_DRY_LIKE, r2.text) && r2.text.startsWith("{\"mode\":\"offers\",\"dry_run\":false,"), "the live run's answer never matches the dry-run pattern: " + r2.text.slice(0, 80));
   assert.strictEqual(w2.periodPatches.length, 1, "ONE compare-and-swap PATCH: " + JSON.stringify(w2.periodPatches));
   assert.ok(/id=eq\.p38-period-id/.test(w2.periodPatches[0].query) && /status=eq\.upcoming/.test(w2.periodPatches[0].query) && w2.periodPatches[0].body.status === "closed", "the CAS on id + status upcoming -> closed");
   assert.strictEqual(w2.auditPosts.length, 1, "ONE audit_log row");
@@ -4714,6 +4734,33 @@ acheck("Prompt 38: the REAL daily-reminder handler, mode offers on the freeze da
   // the app reads that row's summary as it is
   const HP = require(path.join(ROOT, "helpers.js"));
   assert.deepStrictEqual(HP.auditEntryText({ action: a.action, actor_id: a.actor_id, detail: a.detail }, [], (id) => Z_NAMES[id] || id), { summary: a.detail.summary, action: "period.close", give: false }, "the Activity log prints v12's row as it is");
+});
+acheck("Prompt 38 review 2: the REAL daily-reminder handler fails closed on its body - text that does not parse (a curl.exe -d body from Windows PowerShell 5.1 arrives as {mode:offers,dryRun:true}), an empty body, null, an array, a scalar, an unknown key (a typo: dryrun) answers 400 before ANY read or send (v11 ran the LIVE hourly reminder on such a body); one byte-order mark and CRLF around the JSON (PowerShell's pipe) are accepted; the crons' bodies in jsonb's text form pass", async () => {
+  const { env } = await zEnv();
+  const BOM = String.fromCharCode(0xfeff);
+  const bad = ["{mode:offers,dryRun:true}", "{dryRun:true}", "", " ", "null", "[]", "\"x\"", "5", "true", "{\"dryrun\":true}", "{\"mode\":\"offers\",\"dryRun\":true,\"x\":1}", BOM + BOM + "{}"];
+  for (const b of bad) {
+    const w = zWorld();
+    const r = await zCall(zHandler(env, w, Z_AT17), b);
+    assert.strictEqual(r.status, 400, JSON.stringify(b) + " -> " + r.status + " " + r.text.slice(0, 200));
+    assert.ok(r.body && /^the body must be a JSON object with mode and dryRun only \(.+\); nothing was read or sent$/.test(r.body.error), JSON.stringify(b) + ": " + r.text);
+    assert.deepStrictEqual([w.calls.length, w.mails.length], [0, 0], JSON.stringify(b) + ": nothing read, nothing sent - " + JSON.stringify(w.calls).slice(0, 200));
+  }
+  // the reasons name what was wrong
+  const why = async (b) => (await zCall(zHandler(env, zWorld(), Z_AT17), b)).body.error;
+  assert.ok(/\(it is not JSON\)/.test(await why("{mode:offers,dryRun:true}")) && /\(got null\)/.test(await why("null")) && /\(got an array\)/.test(await why("[]")) && /\(unknown key \"dryrun\"\)/.test(await why("{\"dryrun\":true}")), "the 400 says why");
+  // PowerShell's pipe: one byte-order mark and CRLF around a good body - accepted (the dry run runs and sends nothing)
+  const w1 = zWorld();
+  const r1 = await zCall(zHandler(env, w1, Z_AT17), BOM + "{\"dryRun\":true}\r\n");
+  assert.strictEqual(r1.status, 200, r1.text.slice(0, 200));
+  assert.ok(r1.body && r1.body.dry_run === true && w1.mails.length === 0, "the dry run ran: " + r1.text.slice(0, 200));
+  // jsonb's text form (what pg_net sends: a space after the colon) passes; the offers dry run with no period answers periods 0
+  const w2 = zWorld({ periods: [], offerRows: [], timeOff: [] });
+  const r2 = await zCall(zHandler(env, w2, "2026-11-23T13:00:05Z"), "{\"mode\": \"offers\", \"dryRun\": true}");
+  assert.strictEqual(r2.status, 200, r2.text.slice(0, 200));
+  assert.ok(r2.body && r2.body.mode === "offers" && r2.body.dry_run === true && r2.body.periods === 0, r2.text.slice(0, 200));
+  // a wrong secret is still the 401 first, whatever the body
+  assert.strictEqual((await zCall(zHandler(env, zWorld(), Z_AT17), "{mode:offers}", "wrong")).status, 401);
 });
 acheck("revision z (3) handler: a live hourly run at 17:00 Central - the e-mail part of the answer and the e-mails sent equal the pre-z logic; the pushes: s2 (e-mail off, push on) on both his accounts, s1 (push off, e-mail on) not pushed, f1 / f2 at their hour (f2: no address, e-mail off - pushed, one notice per surgeon he follows), f3 (20:00) and f4 (push off) not; 201 sent, 410 deleted, 500 fail_count + 1; the decrypted payloads; a valid VAPID token; redirect manual; the answer's push lists; no endpoint / key / address / words out", async () => {
   if (!FOL) throw new Error("followers block did not load");

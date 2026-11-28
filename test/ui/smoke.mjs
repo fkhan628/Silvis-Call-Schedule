@@ -587,9 +587,9 @@ const P31A_CRON_ROW = { id: "harness-east-refresh-cron", actor_id: "cron", actor
 // throws: it reads as its action.
 const P38_CLOSE_ROW = { id: "harness-p38-close-1123", actor_id: "cron", actor_name: "daily-reminder (offers)", action: "period.close", created_at: "2026-11-23T13:00:05.939506+00:00",
   detail: { label: "Jan 2027 - Jun 2027", today: "2026-11-23", offers_close_at: "2026-11-23", period_id: "harness-p38-period",
-    summary: { painted: ["s3", "s5"], added_vacations: ["s4"], following_rules: ["s1", "s2", "s4", "s6"] },
+    summary: { painted: ["s3", "s5"], added_vacations: ["s4"], following_rules: ["s1", "s2", "s6"] },
     rollcall: [{ id: "s1", status: "not_started", offered: 0 }, { id: "s2", status: "rules_only", offered: 0 }, { id: "s3", status: "submitted", offered: 3 }, { id: "s4", status: "not_started", offered: 0 }, { id: "s5", status: "submitted", offered: 2 }, { id: "s6", status: "not_started", offered: 0 }] } };
-const P38_CLOSE_SENTENCE = "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: Acton, Fierce; added vacations: Philip; following their rules: Khan, Burchett, Philip, Sarkar";
+const P38_CLOSE_SENTENCE = "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: Acton, Fierce; added vacations: Philip; following their rules: Khan, Burchett, Sarkar";
 const P38_COORD_ROW = { id: "harness-p38-coord-object", actor_id: COORD_UID, actor_name: "Office (harness)", action: "timeoff.add", created_at: new Date(Date.now() - 2 * 3600000).toISOString(), detail: { summary: { toString: "x" }, person_id: "s3" } };
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 // The tokens minted here, at the start, live 4 h (review of the merge of main into fix/do-first-6-9, 10/2): with 1 h a run
@@ -2207,9 +2207,10 @@ const routeSupabase = async (route, scope, asProfile) => {
     return json(200, gone.map(g => ({ person_id: g.person_id, start_date: g.start, end_date: g.end, decision: g.decision, reason: cur.some(c => c.start <= g.end && c.end >= g.start) ? "changed" : "removed" })));
   }
   // Prompt 31 Part A (A3): Setup > East feed's last-refresh read (audit_log, action east.refresh - the scheduler's audit_read):
-  // the in-app east.refresh rows this run wrote (newest first) and the harness's server row, never the live table's
+  // the in-app east.refresh rows this run wrote (newest first) and the harness's server row, never the live table's - and, as
+  // the Activity log's read below (Prompt 38 review 2), never a write the table did not take (forced401 / public)
   if (method === "GET" && url.pathname === "/rest/v1/audit_log" && (url.searchParams.get("action") || "") === "eq.east.refresh") {
-    const rows = writes.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/audit_log"))
+    const rows = writes.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/audit_log") && !w.forced401 && !w.public)
       .map(w => { let b = null; try { b = JSON.parse(w.body); } catch (e) { b = null; } return b && b.action === "east.refresh" ? { id: "harness-east-refresh-" + w.at, actor_id: b.actor_id, actor_name: b.actor_name, action: b.action, detail: b.detail, created_at: new Date(w.at || Date.now()).toISOString() } : null; })
       .filter(Boolean).concat([P31A_CRON_ROW])
       .sort((a, b) => a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0);
@@ -2867,7 +2868,11 @@ try {
   // too - THROWS (the row's own computation, in GuardedRow's render one fiber below its guard). Each of the two costs its own
   // row's line ('This entry could not be shown.' with the error's words); the ordinary row and the 11/23 sentence render; the app
   // stays (the tab bar, no app-wide error card, the Calendar opens); no page error; the page's console holds only CardGuard's line
-  // per caught row (one names #31, one the throw) and React's own lines for the same two errors.
+  // per caught row (one names #31, one the throw) and React's own lines for the same two errors. Review 2 (11/28): the Alerts
+  // rows too - the guard page's feed is served three rows (an ordinary alert, one whose title the patched displayText turns into
+  // an OBJECT, one whose title makes it THROW - both inside the alert row's own render, one fiber below its guard): each of the
+  // two costs its own line ('This notification could not be shown.'); and a crash (an error that reached the app-wide card) is
+  // judged as soon as the Activity log is read - a page with no tab bar is never clicked (it used to time out after 30 s).
   {
     const G = "Prompt 38 (guard step, real React)";
     const GROWS = [
@@ -2876,6 +2881,12 @@ try {
       { id: "p38-guard-throw", actor_id: "s1", actor_name: "Khan", action: "schedule.day_edit", created_at: new Date(Date.now() - 3 * 3600000).toISOString(), detail: { summary: "Guard step: never shown" } },
       P38_CLOSE_ROW,
     ];
+    const GNOTIFS = [
+      { id: "p38-guard-alert-ok", type: "manual_edit", title: "Guard step: an ordinary alert", message: "Guard step: its message", data: {}, created_at: new Date(Date.now() - 60000).toISOString() },
+      { id: "p38-guard-alert-object", type: "manual_edit", title: "P38-GUARD-ALERT-OBJECT", message: "never shown", data: {}, created_at: new Date(Date.now() - 120000).toISOString() },
+      { id: "p38-guard-alert-throw", type: "manual_edit", title: "P38-GUARD-ALERT-THROW", message: "never shown", data: {}, created_at: new Date(Date.now() - 180000).toISOString() },
+    ];
+    const ROW_THROW = "p38-guard: this row's own computation threw on purpose", ALERT_THROW = "p38-guard: this alert's own computation threw on purpose";
     const gMark = p38Mark(), gc0 = p38GuardConsole.length;
     let gCtx = null, gp = null, settleG = null;
     try {
@@ -2889,58 +2900,92 @@ try {
       await gp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
       await gp.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
         const req = route.request(), url = new URL(req.url());
-        if (req.method() === "GET" && url.pathname === "/rest/v1/audit_log" && !url.searchParams.get("action")) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(GROWS) });
+        const fulfil = (rows) => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(rows) });
+        if (req.method() === "GET" && url.pathname === "/rest/v1/audit_log" && !url.searchParams.get("action")) return fulfil(GROWS);
+        if (req.method() === "GET" && url.pathname === "/rest/v1/notifications") return fulfil(GNOTIFS);
         return routeSupabase(route);
       });
       await loadWithRetry(gp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "Prompt 38 guard page");
       await gp.waitForSelector("text=Synced", { timeout: 30000 });
-      const patched = await gp.evaluate(() => {
+      const patched = await gp.evaluate(([rowThrow, alertThrow]) => {
         if (typeof window.displayText !== "function" || typeof window.auditEntryText !== "function") return "helpers.js's displayText / auditEntryText are not globals";
         const dt = window.displayText, aet = window.auditEntryText;
-        window.__p38g = { object: 0, thrown: 0 };
-        window.displayText = function (v) { if (v === "P38-GUARD-OBJECT") { window.__p38g.object++; return { boom: 1 }; } return dt.apply(this, arguments); };
-        window.auditEntryText = function (en) { if (en && en.id === "p38-guard-throw") { window.__p38g.thrown++; throw new Error("p38-guard: this row's own computation threw on purpose"); } return aet.apply(this, arguments); };
+        window.__p38g = { object: 0, thrown: 0, alertObject: 0, alertThrown: 0 };
+        window.displayText = function (v) {
+          if (v === "P38-GUARD-OBJECT") { window.__p38g.object++; return { boom: 1 }; }
+          if (v === "P38-GUARD-ALERT-OBJECT") { window.__p38g.alertObject++; return { boom: 1 }; }
+          if (v === "P38-GUARD-ALERT-THROW") { window.__p38g.alertThrown++; throw new Error(alertThrow); }
+          return dt.apply(this, arguments);
+        };
+        window.auditEntryText = function (en) { if (en && en.id === "p38-guard-throw") { window.__p38g.thrown++; throw new Error(rowThrow); } return aet.apply(this, arguments); };
         // a free reference - what the app's compiled block makes - must reach the patched global
         const seen = typeof displayText("P38-GUARD-OBJECT") === "object";
         window.__p38g.object = 0;
         return seen ? "ok" : "a free reference does not reach the patched displayText";
-      });
+      }, [ROW_THROW, ALERT_THROW]);
       if (patched !== "ok") throw new Error("the guard page's helpers could not be patched: " + patched);
+      const crashedNow = () => gp.evaluate(() => ({ crashed: /The app hit an unexpected error and stopped rendering/.test(document.body.innerText || ""), tabs: document.querySelectorAll("button[data-tab]").length }));
+      // (1) the Activity log
       await clickTab(gp, "settings");
       if (await gp.$("[data-testid=card-settings_audit][data-open='0']")) await gp.click("[data-testid=card-toggle-settings_audit]");
-      await gp.waitForSelector("[data-testid=card-error-settings_audit_row]", { timeout: 10000 }).catch(() => {});
+      await gp.waitForSelector("[data-testid=card-error-settings_audit_row], [data-testid=audit-row]", { timeout: 10000 }).catch(() => {});
       await gp.waitForTimeout(500);
       const g = await gp.evaluate(() => ({
         rows: Array.from(document.querySelectorAll("[data-testid=audit-row]")).map(r => ({ action: r.getAttribute("data-action"), summary: ((r.querySelector("[data-testid=audit-summary]") || {}).textContent || "").trim() })),
         errs: Array.from(document.querySelectorAll("[data-testid=card-error-settings_audit_row]")).map(e => (e.textContent || "").trim()),
         otherErrs: Array.from(document.querySelectorAll("[data-testid^=card-error-]")).map(e => e.getAttribute("data-testid")).filter(t => t !== "card-error-settings_audit_row"),
-        crashed: /The app hit an unexpected error and stopped rendering/.test(document.body.innerText || ""),
-        tabs: document.querySelectorAll("button[data-tab]").length,
-        counts: window.__p38g,
       }));
+      const c1 = await crashedNow();
       await gp.screenshot({ path: path.join(OUT, "p38-guard-activity-log.png"), fullPage: true });
-      const e31 = g.errs.filter(t => t.startsWith("This entry could not be shown.") && /Minified React error #31[\s\S]*boom/.test(t));
-      const eThrow = g.errs.filter(t => t.startsWith("This entry could not be shown.") && t.includes("p38-guard: this row's own computation threw on purpose"));
-      const rowsOk = g.rows.length === 2 && ["Guard step: an ordinary row", P38_CLOSE_SENTENCE].every(w => g.rows.some(r => r.summary === w));
-      // the app stays: the Calendar opens on the same page
-      await clickTab(gp, "calendar");
-      const calOk = await gp.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 }).then(() => true).catch(() => false);
-      const alive = await gp.evaluate(() => !/The app hit an unexpected error and stopped rendering/.test(document.body.innerText || ""));
-      await settleG();
-      const lines = p38GuardConsole.slice(gc0).filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
-      const guardLines = lines.filter(t => t.startsWith("Silvis: a card could not be shown (settings_audit_row):"));
-      const stray = lines.filter(t => !/Minified React error #31[\s\S]*boom/.test(t) && !t.includes("p38-guard: this row's own computation threw on purpose"));
-      const pErr = p38NewErrs(gMark, "p38-guard"); // its page errors (its console lines are p38GuardConsole's)
-      if (g.crashed || !alive || !g.tabs) fail(`${G}: the app-wide error card replaced the app - a row's error was not caught by its own guard: ` + lines.join(" | ").slice(0, 300));
-      else if (g.errs.length !== 2 || e31.length !== 1 || eThrow.length !== 1) fail(`${G}: expected two row lines 'This entry could not be shown.' - one with React's #31 for the object summary, one with the thrown error: ` + JSON.stringify(g.errs).slice(0, 400));
-      else if (g.otherErrs.length) fail(`${G}: another guard caught something: ` + g.otherErrs.join(", "));
-      else if (!rowsOk) fail(`${G}: the ordinary row and the 11/23 sentence should render beside the two lines: ` + JSON.stringify(g.rows).slice(0, 400));
-      else if (!g.counts || g.counts.object < 1 || g.counts.thrown < 1) fail(`${G}: the rows' render never reached the patched helpers: ` + JSON.stringify(g.counts));
-      else if (!calOk) fail(`${G}: the Calendar did not open after the caught errors`);
-      else if (pErr.length) fail(`${G}: page errors on the guard page: ` + pErr.join(" | ").slice(0, 300));
-      else if (stray.length) fail(`${G}: console lines other than the two caught errors' own: ` + stray.join(" | ").slice(0, 300));
-      else if (guardLines.length < 2 || !guardLines.some(t => /Minified React error #31/.test(t)) || !guardLines.some(t => t.includes("threw on purpose"))) fail(`${G}: CardGuard's console line (settings_audit_row) should name each caught error: ` + lines.join(" | ").slice(0, 400));
-      else ok(`${G}: an object summary (React's #31) and a throwing row computation each cost their own row's line ('This entry could not be shown.' x2) beside the ordinary row and the 11/23 sentence; the tab bar stays, the Calendar opens, no page error; console: ${guardLines.length} CardGuard line(s) + ${lines.length - guardLines.length} of React's own, nothing else - screenshot test/ui/out/p38-guard-activity-log.png`);
+      const lines = () => p38GuardConsole.slice(gc0).filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
+      if (c1.crashed || !c1.tabs) {
+        fail(`${G}: the app-wide error card replaced the app when the Activity log rendered - a row's error was not caught by its own guard: ` + lines().join(" | ").slice(0, 300));
+      } else {
+        // (2) the Alerts rows (the wide nav's Alerts button opens the panel over the page)
+        await gp.click(ALERTS_BTN);
+        await gp.waitForSelector("[data-testid=notif-panel]", { timeout: 8000 });
+        await gp.waitForSelector("[data-testid=card-error-alerts_row], [data-testid=notif-row]", { timeout: 8000 }).catch(() => {});
+        await gp.waitForTimeout(400);
+        const n = await gp.evaluate(() => ({
+          titles: Array.from(document.querySelectorAll("[data-testid=notif-panel] [data-testid=notif-row]")).map(r => (r.textContent || "").trim()),
+          errs: Array.from(document.querySelectorAll("[data-testid=notif-panel] [data-testid=card-error-alerts_row]")).map(e => (e.textContent || "").trim()),
+          otherErrs: Array.from(document.querySelectorAll("[data-testid^=card-error-]")).map(e => e.getAttribute("data-testid")).filter(t => t !== "card-error-settings_audit_row" && t !== "card-error-alerts_row"),
+          counts: window.__p38g,
+        }));
+        const c2 = await crashedNow();
+        await gp.screenshot({ path: path.join(OUT, "p38-guard-alerts.png"), fullPage: false });
+        if (!c2.crashed && c2.tabs) { await gp.keyboard.press("Escape").catch(() => {}); await gp.click('button[aria-label="Close notifications"]', { timeout: 2000 }).catch(() => {}); }
+        // (3) the app stays: the Calendar opens on the same page (a short wait - a crashed page has no tab to click)
+        const calOk = !c2.crashed && c2.tabs ? await clickNav(gp, 'button[data-tab="calendar"]').then(() => gp.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 })).then(() => true).catch(() => false) : false;
+        const c3 = await crashedNow();
+        await settleG();
+        const all = lines();
+        const known = (t) => /Minified React error #31[\s\S]*boom/.test(t) || t.includes(ROW_THROW) || t.includes(ALERT_THROW);
+        const stray = all.filter(t => !known(t));
+        const gl = (ck) => all.filter(t => t.startsWith("Silvis: a card could not be shown (" + ck + "):"));
+        const glA = gl("settings_audit_row"), glN = gl("alerts_row");
+        const e31 = g.errs.filter(t => t.startsWith("This entry could not be shown.") && /Minified React error #31[\s\S]*boom/.test(t));
+        const eThrow = g.errs.filter(t => t.startsWith("This entry could not be shown.") && t.includes(ROW_THROW));
+        const n31 = n.errs.filter(t => t.startsWith("This notification could not be shown.") && /Minified React error #31[\s\S]*boom/.test(t));
+        const nThrow = n.errs.filter(t => t.startsWith("This notification could not be shown.") && t.includes(ALERT_THROW));
+        const rowsOk = g.rows.length === 2 && ["Guard step: an ordinary row", P38_CLOSE_SENTENCE].every(w => g.rows.some(r => r.summary === w));
+        const alertOk = n.titles.length === 1 && n.titles[0].includes("Guard step: an ordinary alert") && n.titles[0].includes("Guard step: its message");
+        const pErr = p38NewErrs(gMark, "p38-guard"); // its page errors (its console lines are p38GuardConsole's)
+        const cnt = n.counts || {};
+        if (c2.crashed || !c2.tabs || c3.crashed) fail(`${G}: the app-wide error card replaced the app when the Alerts rows rendered - an alert's error was not caught by its own guard: ` + all.join(" | ").slice(0, 300));
+        else if (g.errs.length !== 2 || e31.length !== 1 || eThrow.length !== 1) fail(`${G}: expected two Activity log lines 'This entry could not be shown.' - one with React's #31 for the object summary, one with the thrown error: ` + JSON.stringify(g.errs).slice(0, 400));
+        else if (n.errs.length !== 2 || n31.length !== 1 || nThrow.length !== 1) fail(`${G}: expected two Alerts lines 'This notification could not be shown.' - one with React's #31 for the object title, one with the thrown error: ` + JSON.stringify(n.errs).slice(0, 400));
+        else if (g.otherErrs.length || n.otherErrs.length) fail(`${G}: another guard caught something: ` + g.otherErrs.concat(n.otherErrs).join(", "));
+        else if (!rowsOk) fail(`${G}: the ordinary row and the 11/23 sentence should render beside the two lines: ` + JSON.stringify(g.rows).slice(0, 400));
+        else if (!alertOk) fail(`${G}: the ordinary alert should render (title and message) beside the two lines: ` + JSON.stringify(n.titles).slice(0, 400));
+        else if (!(cnt.object >= 1 && cnt.thrown >= 1 && cnt.alertObject >= 1 && cnt.alertThrown >= 1)) fail(`${G}: the rows' render never reached the patched helpers: ` + JSON.stringify(cnt));
+        else if (!calOk) fail(`${G}: the Calendar did not open after the caught errors`);
+        else if (pErr.length) fail(`${G}: page errors on the guard page: ` + pErr.join(" | ").slice(0, 300));
+        else if (stray.length) fail(`${G}: console lines other than the four caught errors' own: ` + stray.join(" | ").slice(0, 300));
+        else if (glA.length < 2 || !glA.some(t => /Minified React error #31/.test(t)) || !glA.some(t => t.includes(ROW_THROW))) fail(`${G}: CardGuard's console line (settings_audit_row) should name each caught error: ` + all.join(" | ").slice(0, 400));
+        else if (glN.length < 2 || !glN.some(t => /Minified React error #31/.test(t)) || !glN.some(t => t.includes(ALERT_THROW))) fail(`${G}: CardGuard's console line (alerts_row) should name each caught error: ` + all.join(" | ").slice(0, 400));
+        else ok(`${G}: in the Activity log an object summary (React's #31) and a throwing row computation, in Alerts an object title and a throwing title, each cost their own row's line ('This entry could not be shown.' x2, 'This notification could not be shown.' x2) beside the ordinary row, the 11/23 sentence and the ordinary alert; the tab bar stays, the Calendar opens, no page error; console: ${glA.length + glN.length} CardGuard line(s) + ${all.length - glA.length - glN.length} of React's own, nothing else - screenshots test/ui/out/p38-guard-activity-log.png, p38-guard-alerts.png`);
+      }
     } catch (e) { fail(`${G}: the step threw: ` + String((e && e.message) || e).split("\n")[0].replace(/\u001b\[[0-9;]*m/g, "").slice(0, 300)); try { if (gp) await gp.screenshot({ path: path.join(OUT, "failure-p38-guard.png"), fullPage: true }); } catch (e2) {} }
     try { if (settleG) await settleG(); } catch (e) {}
     try { if (gCtx) await gCtx.close(); } catch (e) {}

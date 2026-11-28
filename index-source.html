@@ -589,7 +589,11 @@ function CallSchedule() {
   const [eastRefreshAudit, setEastRefreshAudit] = useState({ state: "unread", rows: [] });
 
   const [auditEntries, setAuditEntries] = useState([]); // Activity log rows (scheduler/admin viewer)
+  // Prompt 38 (review 2, 11/28): what the last Activity log read did - "unread" | "ok" | "failed" | "skipped" (no fresh token):
+  // the empty log says "No activity recorded yet" only after a read that worked (a failure is never "no activity")
+  const [auditState, setAuditState] = useState("unread");
   const [auditLoading, setAuditLoading] = useState(false);
+  const auditReadSeqRef = useRef(0); // Prompt 38 (review 2): only the NEWEST Activity log read lands and clears "Loading" (an older one answering late is dropped)
   const [showPastVacations, setShowPastVacations] = useState(false);
 
   // --- Theme: Light / Dark / Auto (item 5, Faraz 11/1) ---
@@ -1235,7 +1239,7 @@ function CallSchedule() {
       // review of Do first 8 (10/2): the previous account's Recent errors go too (names, override reasons, HTTP bodies) -
       // the in-place card is a sign-in without a sign-out
       setErrorLog([]); setShowErrorLog(false);
-      setAuditEntries([]); setEastRefreshAudit({ state: "unread", rows: [] }); // Prompt 38: and its Activity log / East refresh rows
+      setAuditEntries([]); setEastRefreshAudit({ state: "unread", rows: [] }); setAuditState("unread"); // Prompt 38: and its Activity log / East refresh rows
       // Prompt 30: the previous account's phone notifications on this device stop - its subscription is unsubscribed locally
       // (its token is dead, so its row cannot be deleted; the server drops it on the next 404 / 410) and other accounts'
       // flags go. Fire and forget; the re-arm for the new account runs on its own.
@@ -1423,7 +1427,7 @@ function CallSchedule() {
     setIsScheduler(false);
     setErrorLog([]); setShowErrorLog(false); // review 9/27 Do first 8: the next person on this device never reads this one's errors
     // Prompt 38 (review, 11/27): nor this account's Activity log rows / East refresh rows (only a load set them before)
-    setAuditEntries([]); setEastRefreshAudit({ state: "unread", rows: [] });
+    setAuditEntries([]); setEastRefreshAudit({ state: "unread", rows: [] }); setAuditState("unread");
     dismissToast(); // review of Do first 8 (10/2): an error toast (up to 22 s now) does not stay over the sign-in card
     setSessionUnreached(""); // review of Do first 7 (10/2): a stale "Still couldn't reach" notice does not greet the next sign-in
   };
@@ -1842,20 +1846,27 @@ function CallSchedule() {
   // db.query's anon fallback would answer 200 + [] and show "No activity recorded yet" for a failed read.
   const loadAudit = async () => {
     // Prompt 38 (review, 11/27): sign-out and the account switch empty the list, so an answer for the account that was
-    // signed in when the read started is dropped once another one (or nobody) is (refreshOwnProfile's rule)
-    const uid = authUserRef.current && authUserRef.current.id;
+    // signed in when the read started is dropped once another one (or nobody) is (refreshOwnProfile's rule). Review 2
+    // (11/28): that account is THIS render's authUser - not the ref the mirror effect sets, so the order of the effects never
+    // matters - and a failure for another account is dropped the same way; auditState keeps what the read did.
+    const uid = authUser && authUser.id;
+    const sameAccount = () => !!authUserRef.current && authUserRef.current.id === uid;
+    // and only the NEWEST read lands: an older one answering late (two Refreshes, a re-read on a new account) is dropped and
+    // leaves "Loading" to the newest
+    const seq = ++auditReadSeqRef.current;
+    const newest = () => seq === auditReadSeqRef.current;
     setAuditLoading(true);
     try {
       const rows = await readAuthOnlyTable("audit_log", { order: "created_at.desc", limit: 150 });
-      if (!authUserRef.current || authUserRef.current.id !== uid) { /* the account changed while the read ran: not its rows */ }
-      else if (rows === null) showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");
-      else setAuditEntries(rows);
-    } catch (e) { console.warn("audit load failed", e); showToast("Couldn't load the activity log - check your connection.", "error"); }
-    setAuditLoading(false);
+      if (!sameAccount() || !newest()) { /* the account changed while the read ran, or a newer read started: not this one's to show */ }
+      else if (rows === null) { setAuditState(s => (s === "ok" ? "ok" : "skipped")); showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error"); }
+      else { setAuditEntries(rows); setAuditState("ok"); }
+    } catch (e) { console.warn("audit load failed", e); if (sameAccount() && newest()) { setAuditState("failed"); showToast("Couldn't load the activity log - check your connection.", "error"); } }
+    if (newest()) setAuditLoading(false);
   };
   const fmtAuditTime = (iso) => {
     try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
-    catch (e) { console.warn("fmtAuditTime: could not format", iso, e); return iso; }
+    catch (e) { console.warn("fmtAuditTime: could not format", iso, e); return typeof iso === "string" ? iso : ""; } // Prompt 38 (review 2): only text comes back
   };
   // Load client-version heartbeats (scheduler/admin only). dbAuthHeaders, NOT
   // the expiry-aware read headers: authenticated users read all rows while
@@ -1907,15 +1918,20 @@ function CallSchedule() {
   };
   // Prompt 38 (review, 11/27): also when the account or its role changes - sign-out empties the Activity log, and signing back
   // in on Settings (the view stays) must read it again, never show "No activity recorded yet" for a list nobody read
+  // Review 2 (11/28): nothing is read signed out or on the session-expired card (the profile stays there - a dead token would only
+  // answer 401), nor before the profile is THIS account's and isScheduler (set by an effect, one render after the profile) agrees
+  // with its role - an in-place switch adopts the new user before its profile, and the gate would still be the previous account's.
   useEffect(() => {
+    if (!authUser || !userProfile || userProfile.id !== authUser.id || (userProfile.role === "scheduler" || userProfile.role === "admin") !== isScheduler) return;
     if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }
-  }, [view, isScheduler, authUser && authUser.id]);
+  }, [view, isScheduler, authUser && authUser.id, userProfile && userProfile.id]);
   // Prompt 16 A7: a coordinator's Activity log = its own vacation / offer / availability rows (RLS audit_read_coord);
   // nothing else of the scheduler's Settings loads for it (no snapshots, no client versions - those reads would be a
   // silent 200 + [] under RLS).
   useEffect(() => {
+    if (!authUser || !userProfile || userProfile.id !== authUser.id) return; // Prompt 38 (review 2): as above (isCoordinator reads the profile itself)
     if (view === "settings" && isCoordinator) loadAudit();
-  }, [view, isCoordinator, authUser && authUser.id]); // Prompt 38 (review): the account too (see the scheduler's effect above)
+  }, [view, isCoordinator, authUser && authUser.id, userProfile && userProfile.id]); // Prompt 38 (review): the account too (see the scheduler's effect above)
 
   // --- Toast (non-blocking notifications) ---
   // Review 9/27 Do first 8: ONE visible slot and the newest shows at once (helpers.toastNext - an identical repeat of
@@ -2176,15 +2192,18 @@ function CallSchedule() {
   // readAuthOnlyTable: null (no fresh token) keeps what was read; a failure is marked, never an empty list.
   const loadEastRefreshAudit = async () => {
     if (!isScheduler || isPublicMode) return;
-    const uid = authUserRef.current && authUserRef.current.id; // Prompt 38 (review): a late answer for another account is dropped
+    // Prompt 38 (review): a late answer for another account is dropped - review 2 (11/28): the account is this render's
+    // authUser (effect order never matters), and a late FAILURE is dropped too (it would mark the new account's line failed)
+    const uid = authUser && authUser.id;
+    const sameAccount = () => !!authUserRef.current && authUserRef.current.id === uid;
     try {
       const rows = await readAuthOnlyTable("audit_log", { eq: { action: "east.refresh" }, order: "created_at.desc", limit: 10 });
-      if (!authUserRef.current || authUserRef.current.id !== uid) return;
+      if (!sameAccount()) return;
       if (rows === null) { setEastRefreshAudit(s => ({ ...s, state: s.state === "ok" ? "ok" : "skipped" })); return; }
       setEastRefreshAudit({ state: "ok", rows });
     } catch (e) {
       console.warn("east.refresh audit read failed", e);
-      setEastRefreshAudit(s => ({ ...s, state: "failed" }));
+      if (sameAccount()) setEastRefreshAudit(s => ({ ...s, state: "failed" }));
     }
   };
 
@@ -9422,7 +9441,8 @@ function CallSchedule() {
               {auditLoading ? (
                 <div style={{fontSize:12,color:"#8a94a0",padding:"6px 0"}}>Loading</div>
               ) : auditEntries.length === 0 ? (
-                <div style={{fontSize:12,color:"#8a94a0",padding:"6px 0"}}>No activity recorded yet.</div>
+                // Prompt 38 (review 2): "No activity recorded yet" only after a read that worked - the Alerts panel's rule
+                <div data-testid="audit-empty" data-read={auditState} style={{fontSize:12,color:"#8a94a0",padding:"6px 0"}}>{auditState === "ok" ? "No activity recorded yet." : auditState === "failed" ? "Couldn't load the activity log - press Refresh to try again." : "Activity log not loaded yet - press Refresh."}</div>
               ) : (
                 <div style={{maxHeight:420,overflowY:"auto"}}>
                   {auditEntries.map(en => (
@@ -9930,7 +9950,10 @@ function OfferPainterSheet({ css, dk, person, asScheduler, relayWord, isSchedule
   const period = React.useMemo(() => preferred || offerNextPeriod(periods, today), [preferred, periods, today]);
   const periodOpen = !!period && (isScheduler || offerPeriodOpen(period, today));
   const periodStatus = period ? offerStatus(period, offers, pid) : null;
-  const savedMode = period ? ((period.offer_modes && typeof period.offer_modes === "object" ? period.offer_modes[pid] : null) || "preferred") : "preferred";
+  // Prompt 38 (review 2, 11/28): a stored mode is used only when it is TEXT - it reaches data-mode, which React writes with ""+value
+  // (a jsonb object carrying its own toString would throw there, outside any card guard); anything else reads as the default
+  const savedModeRaw = period && period.offer_modes && typeof period.offer_modes === "object" ? period.offer_modes[pid] : null;
+  const savedMode = typeof savedModeRaw === "string" && savedModeRaw !== "" ? savedModeRaw : "preferred";
   const shownMode = modeDraft || savedMode;
   const modeDirty = !!modeDraft && modeDraft !== savedMode;
   const periodLabel = period ? String(period.label || (period.start_day + " - " + period.end_day)) : "";

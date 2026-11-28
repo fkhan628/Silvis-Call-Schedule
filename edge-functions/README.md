@@ -999,8 +999,8 @@ app says so - nothing else to undo).
 
 ### 2026-11-27 - the close summary as text (daily-reminder v12; Prompt 38)
 
-*Status: PREPARED, NOT deployed - `daily-reminder` v12 on base v11. Prepared 2026-11-27 by Claude Code on branch
-`fix/audit-summary` (Faraz 11/27, Prompt 38: Settings crashed for the scheduler on every open). The paragraphs below are the plan
+*Status: PREPARED, NOT deployed - `daily-reminder` v12 on base v11. Prepared 2026-11-27/28 by Claude Code on branch
+`fix/p38-audit-text` (Faraz 11/27, Prompt 38: Settings crashed for the scheduler on every open). The paragraphs below are the plan
 as prepared; the observed paragraph is added at the deploy's record step. "v12" is the next version after the v11 listed on 11/27:
 a `supabase secrets set` before the deploy re-versions every function (the Prompt 30 record above), so the record step takes the
 number the script observes.*
@@ -1018,8 +1018,13 @@ the plain-JS `@offersMail` block: the close e-mail's own words (`offersClosedTex
 `-` for an empty section) in one line - its form "<label> (<Dy M/D> to <Dy M/D>) froze on <Dy M/D>. Painted days: <name> - <N>
 days; .... Added vacations: <name> - <M/D-M/D>; .... Following their rules: <name>; ...." (every pool surgeon lands in at least one
 of the three) - and the three id lists under `detail.rollcall_summary`. The run's answer carries the same two keys (`results[].summary` is that line, `results[].rollcall_summary`
-the lists). Nothing else moves: the e-mail, the compare-and-swap, the reminder days, the hourly reminder and the open-shifts mode
-are as in v11; no new secret, table, RPC or cron change. The 11/23 row stays as it is (the audit log is history).
+the lists). And the body fails closed (review 2, 11/28 - `reminderBody`, east-feed-refresh's rule): only a JSON object whose keys
+are `mode` / `dryRun` is a request - the crons' `{}`, `{"mode":"offers"}` and `{"mode":"open-shifts"}` pass, one byte-order mark and
+white space around the JSON are accepted - while text that does not parse (a `curl.exe -d` body from Windows PowerShell 5.1 arrives
+without its inner quotes), an empty body, a non-object or an unknown key (a typo of `dryRun`) answers 400 before any read; v11 read
+such a body as `{}` and ran the LIVE hourly reminder. A finite number in the close line's words prints as text, as the e-mail prints
+it. Nothing else moves: the e-mail, the compare-and-swap, the reminder days, the hourly reminder and the open-shifts mode are as in
+v11; no new secret, table, RPC or cron change. The 11/23 row stays as it is (the audit log is history).
 
 The order: the client first (it is what ends the crash), this deploy any day after it. Until v12 runs, a close writes the object
 form again - harmless once the client fix is live - and the next close is the next period's (none is upcoming on 11/27).
@@ -1036,7 +1041,7 @@ DEPLOY in capital letters at the terminal, reads the clock again, deploys the on
 that an unauthenticated POST still answers 401. Then its PASTE THIS BACK block, for the record step.
 
 The proof after it (Faraz, the SQL editor - the secret is read from Vault, never typed; never a `curl.exe -d` body from PowerShell
-5.1, which drops the quotes, so the function reads `{}` and runs the LIVE hourly reminder): the offers dry run -
+5.1, which drops the quotes - v11 read such a body as `{}` and ran the LIVE hourly reminder, v12 answers it 400): the offers dry run -
 ```sql
 select net.http_post(
   url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
@@ -1051,7 +1056,8 @@ from net._http_response where content::text like '{"mode":"offers","dry_run":tru
 ```
 [`200`, a `created` of a minute ago, and `periods` the number of upcoming periods - `0` while none is upcoming; on a close day
 `results[].summary` is the one line and `results[].rollcall_summary` the lists. No row, or an old `created`: the dry run did not
-answer 200 - read `select status_code, created, content from net._http_response order by created desc limit 3;`.] The first live
+answer 200 - read `select status_code, timed_out, error_msg, created, content from net._http_response order by created desc limit 3;`
+(a timeout or a connection error shows in `timed_out` / `error_msg`).] The first live
 text summary is the next close's; read it in Settings > Activity log that day.
 
 Rollback: section 7 (the backup the script took is the deployed v11; with v11 back a close writes the object form again, which the
@@ -1197,7 +1203,12 @@ Placeholders: `$URL = "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1"`,
 `$SECRET` = the CRON_SECRET value (from your password manager, never from a file
 in this repo), `$JWT` = a signed-in SCHEDULER session token (in the app,
 DevTools -> Application -> Local Storage -> `silvis-auth-token`). Use `curl.exe`
-in PowerShell (the `curl` alias is Invoke-WebRequest).
+in PowerShell (the `curl` alias is Invoke-WebRequest). A JSON body that passes a
+function's gate never goes as `curl.exe -d '<json>'`: Windows PowerShell 5.1 strips
+the inner double quotes of a native argument, so the function receives broken JSON
+(review of Prompt 38, 11/28) - such lines use `Invoke-RestMethod -Body '<json>'`
+(or `Invoke-WebRequest` when only the status is read), which passes the body as
+written; east-feed-refresh's lines pipe it through curl.exe's stdin.
 
 ### calendar-sync (unauthenticated GET)
 ```powershell
@@ -1238,23 +1249,27 @@ name only, no reason, exactly what the office calendar needs; the plain `?surgeo
 
 ### office-notifications
 ```powershell
+# !! WINDOWS POWERSHELL 5.1 (review of Prompt 38, 11/28): a curl.exe -d '<json>' body arrives with its inner quotes stripped
+# !! ({mode:digest,dryRun:true}), and office-notifications reads a body it cannot parse as {} - mode digest, LIVE: a real digest
+# !! e-mail to the office contacts. Every line below that passes the gate sends its body with Invoke-RestMethod /
+# !! Invoke-WebRequest (passed as written); the two 401 lines stay curl.exe (the gate refuses before any body is read).
 # no gate -> 401 (nothing read, nothing sent)
 curl.exe -s -i -X POST "$URL/office-notifications" -H "Content-Type: application/json" -d '{"mode":"rebaseline"}' | Select-Object -First 1
 # rebaseline: writes the baseline row, sends NOTHING
-curl.exe -s -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"rebaseline"}'
+Invoke-RestMethod -Method Post -Uri "$URL/office-notifications" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"rebaseline"}' | ConvertTo-Json -Depth 12 -Compress
 #   -> {"mode":"rebaseline","snapshot_updated":true,"days":N,"vacation_person_keys":N,"window":{...},"sent":0}
 #   -> snapshot_updated:false with a 5xx if the office_notification_state table is missing (check the function log;
 #      the digest path names the missing table explicitly)
 # digest dry run: composes, sends nothing, writes nothing
-curl.exe -s -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"digest","dryRun":true}'
+Invoke-RestMethod -Method Post -Uri "$URL/office-notifications" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"digest","dryRun":true}' | ConvertTo-Json -Depth 12 -Compress
 #   -> {"dryRun":true,"would_send":<active contacts>,"sent":0,...} plus a rendered "sample" when there are changes
 #   Item D (2026-09-24): every digest answer also carries "east":{"people":[{"name":"Khan","code":"FAK","lines":["Mon Oct 5 - Sat Oct 10: Davenport service week",...]}],"lines":N,"html":"<div ...>","errors":[]}
 #   (the "<Name> at Davenport this week" section, next 14 days from east_feed + east_vacation_reviews; "errors" names a failed
 #   read - the mail then carries one "could not be read" line); on a quiet week the dryRun adds "sample_east_section" (the
 #   rendered mail body with the section + the combined-feed footer link calendar-sync?surgeon=FAK&east=1) so it can be proven
 #   without a diff. The send trigger is unchanged: a live digest still goes out only when the schedule / vacation diff is non-empty.
-# publish is refused on the cron path (must be a scheduler session)
-curl.exe -s -i -X POST "$URL/office-notifications" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"publish"}' | Select-Object -First 1   # 403
+# publish is refused on the cron path (must be a scheduler session) - the status only
+try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$URL/office-notifications" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"publish"}').StatusCode } catch { [int]$_.Exception.Response.StatusCode }   # 403
 # a WRONG secret -> the same 401 as no secret (Prompt 16 B5: constant-time compare - a near miss costs what a miss costs; nothing read, nothing sent)
 curl.exe -s -i -X POST "$URL/office-notifications" -H "x-cron-secret: wrong-value" -H "Content-Type: application/json" -d '{"mode":"digest","dryRun":true}' | Select-Object -First 1   # 401
 ```
@@ -1328,16 +1343,17 @@ is one real e-mail to himself - it is listed in section 6 as the live proof of t
 
 ### daily-reminder
 ```powershell
-# !! WINDOWS POWERSHELL 5.1 (review of Prompt 38, 11/27): a curl.exe -d '<json>' body arrives with its inner quotes stripped
-# !! ({mode:offers,dryRun:true}); daily-reminder reads a body it cannot parse as {} - the LIVE hourly reminder, a real send at a
-# !! matching hour, and the 'nope' line below runs it too instead of answering 400. Run these lines from Git Bash only; from
-# !! PowerShell use the pg_net dry run in the SQL editor (section 3's records) instead.
+# !! WINDOWS POWERSHELL 5.1 (review of Prompt 38, 11/27-28): a curl.exe -d '<json>' body arrives with its inner quotes stripped
+# !! ({mode:offers,dryRun:true}). v11 (live until the v12 deploy) reads a body it cannot parse as {} - the LIVE hourly reminder,
+# !! a real send at a matching hour; v12 answers it 400 (it fails closed - section 3). So every line below that passes the gate
+# !! sends its body with Invoke-RestMethod / Invoke-WebRequest (passed as written); the two 401 lines stay curl.exe (the gate
+# !! refuses before any body is read).
 # no secret -> 401 before any work
 curl.exe -s -i -X POST "$URL/daily-reminder" -H "Content-Type: application/json" -d '{}' | Select-Object -First 1
 # a WRONG secret -> the same 401 (Prompt 16 B5: constant-time compare, SHA-256 both sides - a near miss costs what a miss costs; nothing read, nothing sent)
 curl.exe -s -i -X POST "$URL/daily-reminder" -H "x-cron-secret: wrong-value" -H "Content-Type: application/json" -d '{"dryRun":true}' | Select-Object -First 1
 # dry run: reads tomorrow's row, composes, sends NOTHING
-curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"dryRun":true}'
+Invoke-RestMethod -Method Post -Uri "$URL/daily-reminder" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"dryRun":true}' | ConvertTo-Json -Depth 12 -Compress
 #   -> {"date_tomorrow":"...","current_hour":H,"dry_run":true,"on_call":2,"sent":0,...,"results":[{"person_id":"s?","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed"...}],
 #       "followers":{"accounts":N,"planned":M,"sent":0,"failed":0,"skipped_wrong_hour":K,"skipped_off":0,"skipped_no_email":0,
 #                    "results":[{"follower":"<id8>","surgeon":"s2","role":"primary","status":"skipped_wrong_hour"|"dry_run_composed",...}],
@@ -1350,7 +1366,7 @@ curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Conten
 #   ("error":"push not configured" without the VAPID secrets; a live run's "push" is send-notification's shape - sent, failed, removed,
 #   skipped_no_device, skipped_pref_off, devices, error - plus the role on each results / followers entry and the tags)
 # mode open-shifts dry run (Prompt 13 part 5c): reads schedule_days for today..today+30, composes the Monday notice, sends NOTHING, writes NO feed row
-curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"open-shifts","dryRun":true}'
+Invoke-RestMethod -Method Post -Uri "$URL/daily-reminder" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"open-shifts","dryRun":true}' | ConvertTo-Json -Depth 12 -Compress
 #   -> {"mode":"open-shifts","dry_run":true,"open":N,"through":"YYYY-MM-DD","published_through":"YYYY-MM-DD"|null,"window_end":"YYYY-MM-DD","sent":0,"failed":0,"skipped_pref_off":0,"skipped_no_email":0,"feed_row":"skipped_dry_run","results":[{"person_id":"s?","status":"dry_run_composed"}...]}
 #   -> {"mode":"open-shifts","dry_run":true,"open":0,"through":...,"published_through":...,"window_end":"YYYY-MM-DD","sent":0} when nothing in the window is open
 #   open = the board's list over the rows in the window: the block of rows that starts today (published_through = its end; null when
@@ -1358,7 +1374,7 @@ curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Conten
 #   announced - it is not published and claim_open_slot refuses it. through = the later of published_through and the last listed slot.
 # mode offers dry run (Prompt 14 part 4): reads the upcoming call_periods + their call_offers + the blob, runs the
 # timeline maths for today (Central), composes, sends NOTHING, writes NOTHING (no status flip, no audit row)
-curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"offers","dryRun":true}'
+Invoke-RestMethod -Method Post -Uri "$URL/daily-reminder" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"offers","dryRun":true}' | ConvertTo-Json -Depth 12 -Compress
 #   -> {"mode":"offers","dry_run":true,"today":"YYYY-MM-DD","periods":N,"reminded":0|1,"closed":0,"sent":0,"failed":0,"skipped_pref_off":0,"skipped_no_email":0,
 #       "results":[{"period":"Nov 2026 - Jan 2027","id":"<uuid>","action":"none"|"remind"|"close","reason":"no-trigger"|"remind:14"|"remind:3"|"close:today"|"close:overdue",
 #                   "days_to_close":N,"offers_close_at":"YYYY-MM-DD", ...on a remind/close day also "rollcall":[{"id":"s?","status":"submitted"|"rules_only"|"not_started","offered":N}],
@@ -1370,8 +1386,8 @@ curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Conten
 #   (Prompt 26: the rollcall statuses are the offer_status() keys, unchanged - not_started is what a person reads as
 #   "following his rules"; the reminder recipients are every pool surgeon whatever the status, plus the coordinators on
 #   the first reminder.)
-# an unknown mode -> 400, nothing read or sent
-curl.exe -s -i -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Content-Type: application/json" -d '{"mode":"nope"}' | Select-Object -First 1
+# an unknown mode -> 400, nothing read or sent (the status only)
+try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$URL/daily-reminder" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"nope"}').StatusCode } catch { [int]$_.Exception.Response.StatusCode }   # 400
 ```
 A LIVE call (`-d '{}'`) sends nothing only when no on-call person's reminder hour
 equals the current Central hour. The default hour is 17 (5 pm the evening
@@ -1380,16 +1396,16 @@ Central IS a real send. Use `dryRun` for verification. A LIVE
 `{"mode":"open-shifts"}` call IS a real send to every opted-in linked surgeon
 whenever `open` is non-zero, and it inserts the `notifications` row the board's
 "last announced" column reads - the Monday cron in section 4 is the intended caller.
-Proof after deploying: one dryRun POST through pg_net from the SQL editor (the curl
-above from Git Bash only - see the warning at its top) and quote the 200 body.
+Proof after deploying: one dryRun POST through pg_net from the SQL editor (or the
+Invoke-RestMethod line above - see the warning at its top) and quote the 200 body.
 A LIVE
 `{"mode":"offers"}` call IS a real send on a reminder day (the heads-up to every
 pool surgeon with `schedule_updates_email` on, whatever his offer status, and on the
 first reminder to the office coordinators) and on the close day (it flips the
 period to `closed`, writes the `period.close` audit row and mails the scheduler /
 admin accounts); on any other day it reads and answers `sent: 0`. Proof after
-deploying: one dryRun POST through pg_net from the SQL editor (the curl above from Git
-Bash only) and quote the 200 body in the deploy record (section 3).
+deploying: one dryRun POST through pg_net from the SQL editor (or the Invoke-RestMethod
+line above) and quote the 200 body in the deploy record (section 3).
 
 ### east-feed-refresh (Prompt 31 Part A - v1, deployed 2026-10-20 01:42:59 UTC)
 ```powershell

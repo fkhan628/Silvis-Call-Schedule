@@ -2254,20 +2254,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     id: "p38-close-row", actor_id: "cron", actor_name: "daily-reminder (offers)", action: "period.close", created_at: "2026-11-23 13:00:05.939506+00",
     detail: {
       label: "Jan 2027 - Jun 2027", today: "2026-11-23", offers_close_at: "2026-11-23", period_id: "p38-period",
-      summary: { painted: ["s3", "s5"], added_vacations: ["s4"], following_rules: ["s1", "s2", "s4", "s6"] },
+      summary: { painted: ["s3", "s5"], added_vacations: ["s4"], following_rules: ["s1", "s2", "s6"] },
       rollcall: [{ id: "s1", status: "not_started", offered: 0 }, { id: "s2", status: "rules_only", offered: 0 }, { id: "s3", status: "submitted", offered: 3 }, { id: "s4", status: "not_started", offered: 0 }, { id: "s5", status: "submitted", offered: 2 }, { id: "s6", status: "not_started", offered: 0 }],
     },
   };
-  const P38_SENTENCE = "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: Acton, Fierce; added vacations: Philip; following their rules: Khan, Burchett, Philip, Sarkar";
-  check("Prompt 38: helpers.auditEntryText reads detail.summary only when it is a non-empty string - a period.close row in the morning run's 11/23 form (an OBJECT summary of roster-id lists; made-up lists here) reads 'Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: Acton, Fierce; added vacations: Philip; following their rules: Khan, Burchett, Philip, Sarkar' (display names; the ids without a lookup); the in-app close's string is kept; any other non-string summary reads as the action", () => {
+  const P38_SENTENCE = "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: Acton, Fierce; added vacations: Philip; following their rules: Khan, Burchett, Sarkar";
+  check("Prompt 38: helpers.auditEntryText reads detail.summary only when it is a non-empty string - a period.close row in the morning run's 11/23 form (an OBJECT summary of roster-id lists; made-up lists here) reads 'Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: Acton, Fierce; added vacations: Philip; following their rules: Khan, Burchett, Sarkar' (display names; the ids without a lookup); the in-app close's string is kept; any other non-string summary reads as the action", () => {
     assert.strictEqual(typeof H.auditEntryText, "function", "helpers.auditEntryText is exported");
     const before = JSON.stringify(P38_CLOSE_1123);
     const at = H.auditEntryText(P38_CLOSE_1123, [], nameOf);
     assert.strictEqual(typeof at.summary, "string", "the 11/23 row's summary must reach the view as TEXT - an object is React error #31");
     assert.deepStrictEqual(at, { summary: P38_SENTENCE, action: "period.close", give: false }, "the 11/23 row reads as the morning run's sentence, with display names");
     assert.strictEqual(JSON.stringify(P38_CLOSE_1123), before, "the row itself is not changed (the audit log is history)");
-    assert.strictEqual(H.auditEntryText(P38_CLOSE_1123, []).summary, "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: s3, s5; added vacations: s4; following their rules: s1, s2, s4, s6", "no name lookup -> the roster ids");
-    assert.strictEqual(H.auditEntryText(P38_CLOSE_1123, [], (id) => id === "s2" ? "Burchett" : undefined).summary, "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: s3, s5; added vacations: s4; following their rules: s1, Burchett, s4, s6", "a lookup without a name for an id -> that id");
+    assert.strictEqual(H.auditEntryText(P38_CLOSE_1123, []).summary, "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: s3, s5; added vacations: s4; following their rules: s1, s2, s6", "no name lookup -> the roster ids");
+    assert.strictEqual(H.auditEntryText(P38_CLOSE_1123, [], (id) => id === "s2" ? "Burchett" : undefined).summary, "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: s3, s5; added vacations: s4; following their rules: s1, Burchett, s6", "a lookup without a name for an id -> that id");
     const inApp = { action: "period.close", actor_id: "s1", detail: { label: "Jan 2027 - Jun 2027", summary: "Offers for Jan 2027 - Jun 2027 closed now by the scheduler (Khan: following their rules; Burchett: painted 3 days)" } };
     assert.deepStrictEqual(H.auditEntryText(inApp, [], nameOf), { summary: inApp.detail.summary, action: "period.close", give: false }, "the in-app close writes a sentence: kept as it is");
     assert.strictEqual(H.auditEntryText({ action: "period.close", detail: { summary: { painted: [], added_vacations: [], following_rules: ["s1"] } } }, [], nameOf).summary, "Offers for the period closed by the morning run - painted: none; added vacations: none; following their rules: Khan", "an empty list reads 'none'; no label -> 'the period'");
@@ -2403,7 +2403,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     const CardGuard = vm.runInContext("CardGuard", box); // a top-level class is no property of the realm's global
     const GuardedRow = vm.runInContext("GuardedRow", box);
     // the renderer: a function component is called, a class instantiated and rendered; a class with getDerivedStateFromError
-    // catches what rendering its subtree throws and renders again in its error state (what React does for a boundary)
+    // catches what rendering its SUBTREE throws and renders again in its error state (what React does for a boundary). Its
+    // own render() runs outside that catch (review 2, 11/28): React sends a boundary's own throw to the boundary above, so
+    // only a throw one fiber down or deeper - GuardedRow's - is the guard's
     const caught = [];
     const expand = (n) => {
       if (Array.isArray(n)) return n.map(expand);
@@ -2411,7 +2413,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const T = n.type, props = Object.assign({}, n.props, { children: n.children.length === 1 ? n.children[0] : n.children });
       if (typeof T === "function" && T.prototype && typeof T.prototype.render === "function") {
         const inst = new T(props);
-        try { return expand(inst.render()); }
+        const own = inst.render(); // a throw here is not this boundary's
+        try { return expand(own); }
         catch (err) {
           if (typeof T.getDerivedStateFromError !== "function") throw err;
           caught.push({ ck: props.ck, message: err && err.message });
@@ -2456,6 +2459,16 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.throws(() => box.React.createElement("div", null, { painted: [] }), /Objects are not valid as a React child \(found: object with keys \{painted\}\)/, "an object child is refused");
     assert.throws(() => box.React.createElement("div", null, ["ok", [{ x: 1 }]]), /Objects are not valid as a React child/, "an array holding an object is refused");
     assert.doesNotThrow(() => box.React.createElement("div", null, "text", 5, null, undefined, false, ["a", 1]), "strings, numbers, arrays of them and empty children are fine");
+    // review 2 (11/28): the stand-in renderer is React's about WHOSE throw a boundary catches - its subtree's, never its own render's
+    // (React sends that to the boundary above): a boundary whose own render throws is not caught by itself
+    const OwnThrow = class extends box.React.Component { static getDerivedStateFromError() { return { failed: true }; } render() { if (this.state && this.state.failed) return "caught by itself"; throw new Error("its own render"); } };
+    caught.length = 0;
+    assert.throws(() => expand(box.React.createElement(OwnThrow, null)), /its own render/, "a boundary's own render throw goes up");
+    assert.deepStrictEqual(caught, [], "and it caught nothing itself");
+    const Child = () => { throw new Error("one fiber down"); };
+    const CatchesChild = class extends box.React.Component { static getDerivedStateFromError() { return { failed: true }; } render() { return this.state && this.state.failed ? "caught" : box.React.createElement(Child, null); } };
+    assert.strictEqual(expand(box.React.createElement(CatchesChild, null)), "caught", "a throw one fiber down IS caught");
+    caught.length = 0;
     // the structure: each row is a CardGuard (ck settings_audit_row) whose ONE child is a GuardedRow (the row's own
     // computation runs in GuardedRow's render, one fiber below the guard); rendered, each GuardedRow is the row's div
     const rows = A.el.children[0];
@@ -2478,12 +2491,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(bad.length === 1 && textOf(bad[0]).includes("This entry could not be shown.") && textOf(bad[0]).includes("the name lookup failed on s4"), "that row shows its own line, with the error's words: " + textOf(bRows));
     assert.strictEqual(bRows.filter(x => x && x.props && x.props["data-testid"] === "audit-row").length, entries.length - 1, "every other row renders as before");
     // the guard itself: an error -> its own line, never the children
-    const guard = new CardGuard({ ck: "x_row", line: "This entry could not be shown.", children: "kids", css: { errBox: { fontSize: 12, color: "#8a3030" } } });
+    const guard = new CardGuard({ ck: "x_row", line: "This entry could not be shown.", children: "kids", css: { errBox: { fontSize: 12, color: "#123456" } } }); // review 2: a colour of its own - the fallback box is #8a3030
     assert.strictEqual(guard.render(), "kids", "no error: the children as they are");
     guard.state = CardGuard.getDerivedStateFromError(new Error("boom"));
     const shown = guard.render();
     assert.ok(shown && shown.props["data-testid"] === "card-error-x_row" && shown.children.includes("This entry could not be shown."), "an error: the row's own line in its place");
-    assert.ok(shown.props.style && shown.props.style.color === "#8a3030", "in the app's errBox (both themes)");
+    assert.ok(shown.props.style && shown.props.style.color === "#123456", "in the app's errBox (both themes) - not the fallback box");
+    const bare = new CardGuard({ ck: "b_row", children: "kids" }); bare.state = CardGuard.getDerivedStateFromError(new Error("boom"));
+    assert.strictEqual(bare.render().props.style.color, "#8a3030", "without css the guard falls back to its own box");
     const thrownObj = new CardGuard({ ck: "y" }); thrownObj.state = CardGuard.getDerivedStateFromError(JSON.parse('{"toString":"x"}'));
     assert.doesNotThrow(() => thrownObj.render(), "a thrown non-Error (even one String() cannot convert) is never coerced");
     const falsy = new CardGuard({ ck: "z", children: "kids" }); falsy.state = CardGuard.getDerivedStateFromError(undefined);
@@ -2503,11 +2518,26 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     assert.ok(nfSlice.indexOf("<GuardedRow render={() => {") > 0 && nfSlice.indexOf("const giveT = notifGiveTrade(n);") > nfSlice.indexOf("<GuardedRow render={() => {") && nfSlice.indexOf("const tabMap = {") > nfSlice.indexOf("<GuardedRow render={() => {"), "the Alerts row's computation sits inside its GuardedRow");
     // review (11/27): sign-out empties the log, so the Settings reads also run when the account / role changes, and an
     // answer for another account is dropped
-    assert.ok(src.includes("  }, [view, isScheduler, authUser && authUser.id]);") && src.includes("  }, [view, isCoordinator, authUser && authUser.id]);") && src.includes("loadEastRefreshAudit(); }, [view, isScheduler, isPublicMode, authUser && authUser.id]);"), "the Settings / Setup reads re-run for a new account or role");
+    assert.ok(src.includes("  }, [view, isScheduler, authUser && authUser.id, userProfile && userProfile.id]);") && src.includes("  }, [view, isCoordinator, authUser && authUser.id, userProfile && userProfile.id]);") && src.includes("loadEastRefreshAudit(); }, [view, isScheduler, isPublicMode, authUser && authUser.id]);"), "the Settings / Setup reads re-run for a new account or role");
+    // review 2 (11/28): the account a read is for is THE RENDER'S authUser (the order of the effects never matters), compared
+    // with the ref when the answer - or the failure - lands; the two Settings effects read nothing signed out or on the
+    // session-expired card (the profile stays there: a dead token would only answer 401); the gate lines verify-rls greps stay
+    const SAME = "const sameAccount = () => !!authUserRef.current && authUserRef.current.id === uid;";
     const la = src.slice(src.indexOf("  const loadAudit = async () => {"), src.indexOf("  const fmtAuditTime = (iso) => {"));
-    assert.ok(la.includes("const uid = authUserRef.current && authUserRef.current.id;") && la.indexOf("if (!authUserRef.current || authUserRef.current.id !== uid) {") < la.indexOf("else setAuditEntries(rows);"), "loadAudit drops a late answer for another account");
-    const le = src.slice(src.indexOf("  const loadEastRefreshAudit = async () => {"), src.indexOf("setEastRefreshAudit({ state: \"ok\", rows });"));
-    assert.ok(le.includes("const uid = authUserRef.current && authUserRef.current.id;") && le.includes("if (!authUserRef.current || authUserRef.current.id !== uid) return;"), "loadEastRefreshAudit drops one too");
+    assert.ok(la.includes("const uid = authUser && authUser.id;") && la.includes(SAME) && la.includes("if (!sameAccount() || !newest()) {") && la.indexOf("if (!sameAccount() || !newest()) {") < la.indexOf("else { setAuditEntries(rows); setAuditState(\"ok\"); }"), "loadAudit drops a late answer for another account - and one a newer read overtook");
+    assert.ok(src.includes("const auditReadSeqRef = useRef(0);") && la.includes("const seq = ++auditReadSeqRef.current;") && la.includes("const newest = () => seq === auditReadSeqRef.current;") && la.includes("if (newest()) setAuditLoading(false);"), "only the newest read lands and clears Loading");
+    assert.ok(la.includes('} catch (e) { console.warn("audit load failed", e); if (sameAccount() && newest()) { setAuditState("failed"); showToast('), "and a late failure (no toast, no state for another account)");
+    assert.ok(!la.includes("const uid = authUserRef"), "loadAudit no longer takes its account from the ref");
+    const le =src.slice(src.indexOf("  const loadEastRefreshAudit = async () => {"), src.indexOf("  // Days in [start, end] where the person is published"));
+    assert.ok(le.includes("const uid = authUser && authUser.id;") && le.includes(SAME) && le.includes("if (!sameAccount()) return;") && le.includes('if (sameAccount()) setEastRefreshAudit(s => ({ ...s, state: "failed" }));'), "loadEastRefreshAudit drops one too - answer and failure");
+    assert.ok(src.includes('  useEffect(() => {\n    if (!authUser || !userProfile || userProfile.id !== authUser.id || (userProfile.role === "scheduler" || userProfile.role === "admin") !== isScheduler) return;\n    if (view === "settings" && isScheduler) {') && src.includes('    if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }\n  }, [view, isScheduler, authUser && authUser.id, userProfile && userProfile.id]);'), "the scheduler's Settings effect reads nothing without a user; its gate line is unchanged");
+    assert.ok(src.includes('    if (!authUser || !userProfile || userProfile.id !== authUser.id) return; // Prompt 38 (review 2): as above (isCoordinator reads the profile itself)\n    if (view === "settings" && isCoordinator) loadAudit();'), "the coordinator's too");
+    assert.ok(src.includes('const [auditState, setAuditState] = useState("unread");') && src.includes('<div data-testid="audit-empty" data-read={auditState} style={{fontSize:12,color:"#8a94a0",padding:"6px 0"}}>{auditState === "ok" ? "No activity recorded yet." : auditState === "failed" ? "Couldn\'t load the activity log - press Refresh to try again." : "Activity log not loaded yet - press Refresh."}</div>'), "the empty log says 'No activity recorded yet' only after a read that worked");
+    assert.strictEqual(src.split('setAuditEntries([]); setEastRefreshAudit({ state: "unread", rows: [] }); setAuditState("unread");').length - 1, 2, "sign-out and the account switch reset the log's read state too");
+    // review 2 (11/28): two more jsonb values that reached an attribute / a child untyped - the painter's stored offer mode (data-mode,
+    // written with ""+value outside any card guard) and fmtAuditTime's fallback (it handed back what it could not format)
+    assert.ok(src.includes('const savedMode = typeof savedModeRaw === "string" && savedModeRaw !== "" ? savedModeRaw : "preferred";') && !src.includes('period.offer_modes[pid] : null) || "preferred")'), "the painter's saved mode is text or the default");
+    assert.ok(src.includes('catch (e) { console.warn("fmtAuditTime: could not format", iso, e); return typeof iso === "string" ? iso : ""; }'), "fmtAuditTime hands back only text");
     assert.ok(src.includes('<div data-testid={"card-error-" + String(this.props.ck || "")} role="alert"'), "its line is findable (card-error-<ck>)");
     assert.strictEqual(src.split("{open && <CardGuard ck={ck} css={css}><div style={{ marginTop: 12 }}>{children}</div></CardGuard>}").length - 1, 1, "Collapsible's body is guarded, one element down");
     assert.ok(!src.includes("{open && <div style={{ marginTop: 12 }}>{children}</div>}"), "no unguarded card body left");
@@ -7145,8 +7175,8 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.ok(src.includes('{isCoordinator ? "- your entries (vacations, offers)" : "- who changed what"}'), "the log title says whose entries the office sees");
       // pin moved deliberately 11/27 (Prompt 38 review): the effect also re-reads for a new account / role (sign-out empties the
       // Activity log); its gate line - what verify-rls 10b greps - is unchanged
-      assert.ok(src.includes('    if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }\n  }, [view, isScheduler, authUser && authUser.id]);'), "A1's scheduler effect keeps its gate (verify-rls 10b pins the gate line)");
-      assert.ok(src.includes('    if (view === "settings" && isCoordinator) loadAudit();\n  }, [view, isCoordinator, authUser && authUser.id]);'), "the coordinator's own effect loads the audit log only (no snapshots, no client versions) - pin moved deliberately 11/27: and for a new account");
+      assert.ok(src.includes('    if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }\n  }, [view, isScheduler, authUser && authUser.id, userProfile && userProfile.id]);'), "A1's scheduler effect keeps its gate (verify-rls 10b pins the gate line)");
+      assert.ok(src.includes('    if (view === "settings" && isCoordinator) loadAudit();\n  }, [view, isCoordinator, authUser && authUser.id, userProfile && userProfile.id]);'), "the coordinator's own effect loads the audit log only (no snapshots, no client versions) - pin moved deliberately 11/27: and for a new account");
       assert.ok(!/if \(view === "settings" && isCoordinator\) \{[^}]*loadSnapshots/.test(src), "no snapshot load for a coordinator");
     });
     check("A7: the vacation write paths - addVac / toRemove / toEdit admit the office for anyone, addVac refuses a note on the SU_NOTE_DENYLIST, created_by stays person_id || profile id, the office entry's feed row names the office and no e-mail is attempted", () => {
@@ -7216,7 +7246,9 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const la = src.slice(src.indexOf("  const loadAudit = async () => {"), src.indexOf("  const fmtAuditTime = (iso) => {"));
       assert.ok(la.includes('const rows = await readAuthOnlyTable("audit_log", { order: "created_at.desc", limit: 150 });'), "audit_log is read through readAuthOnlyTable");
       assert.ok(!/db\.query\("audit_log"/.test(la), "no db.query on audit_log (dbReadHeaders falls back to anon: audit_read / audit_read_coord are 'to authenticated', so the read would be 200 + [])");
-      assert.ok(la.includes('if (rows === null) showToast("Couldn\'t load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");\n      else setAuditEntries(rows);'), "null = not read -> toast, the current entries kept; an array is adopted");
+      // pin moved deliberately 11/28 (Prompt 38 review 2): the read's outcome is also kept in auditState (a failure never reads
+      // "No activity recorded yet"); the null branch still toasts and keeps the entries
+      assert.ok(la.includes('else if (rows === null) { setAuditState(s => (s === "ok" ? "ok" : "skipped")); showToast("Couldn\'t load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error"); }\n      else { setAuditEntries(rows); setAuditState("ok"); }'), "null = not read -> toast, the current entries kept; an array is adopted");
     });
     check("A7 review: the Time off copy speaks to the office (not 'your own vacations'), and the painter's tap hint / rules toggle name the relayed surgeon instead of 'yourself' / 'My rules' when relaying", () => {
       assert.ok(src.includes("<p style={sectionNote}>{isCoordinator ? \"Enter a surgeon's vacation - no approval, the group is notified. The entry is refused if that surgeon is already published as primary or backup on any of those days (or primary the day before): they trade those shifts first. A vacation that has started stays on record (as the office you can enter, edit or remove anyone's upcoming vacation - each entry is recorded under your account; a started or past one is the scheduler's to correct). Notes are operational and visible to the whole group.\" : <>Your vacations need no approval - the group is notified."), "the coordinator's Time off note");
@@ -11003,20 +11035,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
       assert.ok(i > 0 && j > i, "the switched branch");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", "setAuditEntries", "setEastRefreshAudit", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets) + Prompt 38's Activity log / East refresh rows
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", "setAuditEntries", "setEastRefreshAudit", "setAuditState", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets) + Prompt 38's Activity log / East refresh rows
       const TABLE = { "2026-11-15": { primary: "s2", backup: "s4" } };
       const run = (prevUid, uid, persisted) => {
-        const st = { set: [], chained: 0, errLog: [], showErr: [], dropped: [], pushResets: 0, audit: [], eastAudit: [], refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
+        const st = { set: [], chained: 0, errLog: [], showErr: [], dropped: [], pushResets: 0, audit: [], eastAudit: [], auditState: [], refs: { switchedUserRef: ref(false), pendingSaveRef: ref({ schedule: A_MAP }), lastSyncRef: ref(persisted), scheduleRef: ref(A_MAP) } };
         const pushStub = { dropForeign: (uid) => { st.dropped.push(uid); return Promise.resolve({ action: "unsubscribed" }); } };
         // review 2 (10/1): an idle day-sync queue (nothing in flight) - the switch must not wait on it
         // review of the merge (10/2): the Recent-errors setters record, so Do first 8's clear on a switch is run, not only pinned
         fn(ref(prevUid), { id: uid }, st.refs.switchedUserRef, st.refs.pendingSaveRef, () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, (m) => st.set.push(m), () => {}, () => {},
-          ref(0), ref({ then: () => { st.chained++; } }), (v) => st.errLog.push(v), (v) => st.showErr.push(v), pushStub, () => { st.pushResets++; }, () => {}, () => {}, (v) => st.audit.push(v), (v) => st.eastAudit.push(v));
+          ref(0), ref({ then: () => { st.chained++; } }), (v) => st.errLog.push(v), (v) => st.showErr.push(v), pushStub, () => { st.pushResets++; }, () => {}, () => {}, (v) => st.audit.push(v), (v) => st.eastAudit.push(v), (v) => st.auditState.push(v));
         return st;
       };
       const sw = run("uA", "uB", TABLE);
       // Prompt 38 (review, 11/27): the switch also drops the previous account's Activity log / East refresh rows; the same account keeps them
-      assert.deepStrictEqual([sw.audit, sw.eastAudit], [[[]], [{ state: "unread", rows: [] }]], "the switch empties the Activity log rows and the East refresh rows");
+      assert.deepStrictEqual([sw.audit, sw.eastAudit, sw.auditState], [[[]], [{ state: "unread", rows: [] }], ["unread"]], "the switch empties the Activity log rows and the East refresh rows (and the log's read state - Prompt 38 review 2)");
       assert.deepStrictEqual(sw.refs.scheduleRef.current, TABLE, "the map is the last persisted one");
       assert.ok(sw.refs.scheduleRef.current !== TABLE && sw.set.length === 1 && sw.set[0] === sw.refs.scheduleRef.current, "a copy, set as the state");
       assert.ok(sw.refs.switchedUserRef.current === true && sw.refs.pendingSaveRef.current === null, "the flag and the dropped payload as before");
@@ -11037,14 +11069,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     await acheckD("DF4 review 2 (10/1): a day write of the previous account still IN FLIGHT at the switch (lifted switched branch) - once its queue drains, the map follows lastSyncRef (the landed value), so a later merge cannot keep the old value as a local edit and write it back under the new JWT; a map replaced meanwhile (the re-run's adoption, a merge, an edit) is left alone", async () => {
       const adopt = between("  const adoptSignedInUser = async (user) => {", "  // --- Auth: Check session on mount ---");
       const i = adopt.indexOf("    if (lastAuthUidRef.current && user && lastAuthUidRef.current !== user.id) {"), j = adopt.indexOf("    if (user) lastAuthUidRef.current = user.id;");
-      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", "setAuditEntries", "setEastRefreshAudit", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets) + Prompt 38's Activity log / East refresh rows
+      const fn = new Function("lastAuthUidRef", "user", "switchedUserRef", "pendingSaveRef", "resetWriteRetryState", "blobLoadedRef", "blobTsRef", "lastSyncRef", "scheduleRef", "setSchedule", "setNotifsRead", "showToast", "daySyncBusyRef", "daySyncChainRef", "setErrorLog", "setShowErrorLog", "pushDevice", "setPushInfo", "setPushMsg", "setPushNeedsTap", "setAuditEntries", "setEastRefreshAudit", "setAuditState", adopt.slice(i, j)); // + the Recent-errors setters (Do first 8 review, 10/2) + Prompt 30's push stop (pushDevice.dropForeign and the card resets) + Prompt 38's Activity log / East refresh rows
       const BEFORE = { "2026-11-15": { primary: "s2", backup: "s4" } }, LANDED = { "2026-11-15": { primary: "s1", backup: "s3" } };
       const go = () => {
         let release; const chain = new Promise(r => { release = r; });
         const st = { cur: A_MAP, sets: 0, release, errLog: [], showErr: [], refs: { lastSyncRef: ref(BEFORE), scheduleRef: ref(A_MAP) } };
         // setSchedule as React runs it: a value, or an updater handed the latest state
         const setSchedule = (m) => { st.cur = typeof m === "function" ? m(st.cur) : m; st.sets++; };
-        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), (v) => st.errLog.push(v), (v) => st.showErr.push(v), { dropForeign: () => Promise.resolve({}) }, () => {}, () => {}, () => {}, () => {}, () => {});
+        fn(ref("uA"), { id: "uB" }, ref(false), ref(null), () => {}, ref(true), ref("t"), st.refs.lastSyncRef, st.refs.scheduleRef, setSchedule, () => {}, () => {}, ref(1), ref(chain), (v) => st.errLog.push(v), (v) => st.showErr.push(v), { dropForeign: () => Promise.resolve({}) }, () => {}, () => {}, () => {}, () => {}, () => {}, () => {});
         return st;
       };
       const a = go();
@@ -16264,12 +16296,14 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
     });
     await acheckA("P31A3 loadEastRefreshAudit (lifted): the scheduler's read of the newest east.refresh audit rows through readAuthOnlyTable (eq action, newest first, 10); null (no fresh token) keeps what was read; a failure is marked, never an empty list; nobody else reads", async () => {
       const body = liftA("  const loadEastRefreshAudit = async () => {", "\n  };\n");
-      // Prompt 38 (review, 11/27): authUserRef - an answer that lands after the account changed is dropped (switchTo)
+      // Prompt 38 (review, 11/27): authUserRef - an answer that lands after the account changed is dropped (switchTo). Review 2
+      // (11/28): the account is the render's authUser (u1, the loader's own closure), compared with the ref when the answer
+      // lands; a late failure is dropped too
       const make = (sched, pub, answer, switchTo) => {
         const st = { v: { state: "unread", rows: [] }, reads: [] };
         const ref = { current: { id: "u1" } };
-        const fn = new Function("isScheduler", "isPublicMode", "readAuthOnlyTable", "setEastRefreshAudit", "console", "authUserRef", body + "\nreturn loadEastRefreshAudit;")(
-          sched, pub, async (t, o) => { st.reads.push([t, o]); if (switchTo !== undefined) ref.current = switchTo; if (answer instanceof Error) throw answer; return answer; }, (v) => { st.v = typeof v === "function" ? v(st.v) : v; }, { warn: () => {} }, ref);
+        const fn = new Function("isScheduler", "isPublicMode", "readAuthOnlyTable", "setEastRefreshAudit", "console", "authUserRef", "authUser", body + "\nreturn loadEastRefreshAudit;")(
+          sched, pub, async (t, o) => { st.reads.push([t, o]); if (switchTo !== undefined) ref.current = switchTo; if (answer instanceof Error) throw answer; return answer; }, (v) => { st.v = typeof v === "function" ? v(st.v) : v; }, { warn: () => {} }, ref, { id: "u1" });
         return { st, fn };
       };
       const ROW = [{ action: "east.refresh", created_at: "2026-10-16T10:30:05Z", actor_id: "cron", detail: { ok: true } }];
@@ -16285,7 +16319,55 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(plainA(m.st.v), { state: "skipped", rows: [] });
       m = make(true, false, new Error("HTTP 500")); await m.fn();
       assert.strictEqual(m.st.v.state, "failed");
+      m = make(true, false, new Error("HTTP 500"), { id: "u2" }); await m.fn();
+      assert.deepStrictEqual(plainA(m.st.v), { state: "unread", rows: [] }, "Prompt 38 review 2: a failure that lands after the account changed is dropped (never the new account's line marked failed)");
+      m = make(true, false, ROW, { id: "u1" }); await m.fn();
+      assert.deepStrictEqual(plainA(m.st.v), { state: "ok", rows: ROW }, "the same account re-read as a new object (same id) keeps its answer");
       for (const [sc, pb] of [[false, false], [true, true]]) { m = make(sc, pb, ROW); await m.fn(); assert.strictEqual(m.st.reads.length, 0, "no read for " + (sc ? "?public=1" : "a non-scheduler")); }
+    });
+    await acheckA("Prompt 38 review 2 loadAudit (lifted): the Activity log read through readAuthOnlyTable - an answer is adopted with auditState 'ok'; null (no fresh token) keeps the entries, toasts and marks 'skipped' (an 'ok' stays 'ok'); a failure toasts and marks 'failed' (never 'No activity recorded yet'); an answer OR a failure that lands after the account changed (or signed out) is dropped - no entries, no state, no toast; the account is the render's authUser", async () => {
+      const body = liftA("  const loadAudit = async () => {", "\n  };\n");
+      const make = (answer, switchTo, start) => {
+        const st = { entries: "untouched", state: start || "unread", loading: [], toasts: [], reads: [] };
+        const ref = { current: { id: "u1" } };
+        const fn = new Function("authUser", "authUserRef", "readAuthOnlyTable", "setAuditLoading", "setAuditEntries", "setAuditState", "showToast", "console", "auditReadSeqRef", body + "\nreturn loadAudit;")(
+          { id: "u1" }, ref,
+          async (t, o) => { st.reads.push([t, o]); if (switchTo !== undefined) ref.current = switchTo; if (answer instanceof Error) throw answer; return answer; },
+          (v) => st.loading.push(v), (v) => { st.entries = v; }, (v) => { st.state = typeof v === "function" ? v(st.state) : v; }, (msg, kind) => st.toasts.push([msg, kind]), { warn: () => {} }, { current: 0 });
+        return { st, fn };
+      };
+      const ROWS = [{ id: "a1", action: "east.refresh", detail: { summary: "x" } }];
+      let m = make(ROWS); await m.fn();
+      assert.deepStrictEqual(plainA(m.st.reads), [["audit_log", { order: "created_at.desc", limit: 150 }]]);
+      assert.deepStrictEqual([m.st.entries, m.st.state, m.st.toasts.length, m.st.loading], [ROWS, "ok", 0, [true, false]], "an answer: adopted, 'ok', no toast, loading on then off");
+      m = make([]); await m.fn();
+      assert.deepStrictEqual([m.st.entries, m.st.state], [[], "ok"], "an EMPTY answer that worked: 'ok' - the only state that reads 'No activity recorded yet'");
+      m = make(null); await m.fn();
+      assert.deepStrictEqual([m.st.entries, m.st.state, m.st.toasts.length, m.st.toasts[0][1]], ["untouched", "skipped", 1, "error"], "no fresh token: the entries kept, 'skipped', one error toast");
+      m = make(null, undefined, "ok"); await m.fn();
+      assert.strictEqual(m.st.state, "ok", "an earlier 'ok' stays 'ok' when a later read is skipped");
+      m = make(new Error("HTTP 500")); await m.fn();
+      assert.deepStrictEqual([m.st.entries, m.st.state, m.st.toasts.length], ["untouched", "failed", 1], "a failure: 'failed' and one toast, the entries kept");
+      for (const sw of [{ id: "u2" }, null]) {
+        for (const ans of [ROWS, null, new Error("HTTP 500")]) {
+          m = make(ans, sw); await m.fn();
+          assert.deepStrictEqual([m.st.entries, m.st.state, m.st.toasts.length, m.st.loading], ["untouched", "unread", 0, [true, false]], "the account changed (" + JSON.stringify(sw) + ") while the read ran (" + (ans instanceof Error ? "failure" : JSON.stringify(ans)) + "): dropped - no entries, no state, no toast");
+        }
+      }
+      m = make(ROWS, { id: "u1" }); await m.fn();
+      assert.deepStrictEqual([m.st.entries, m.st.state], [ROWS, "ok"], "the same account as a new object (same id): kept");
+      // overlapping reads (two Refreshes): only the NEWEST lands and clears Loading - an older answer, or an older failure, landing last is dropped
+      for (const late of [[{ id: "old" }], new Error("HTTP 500")]) {
+        const st = { entries: "untouched", state: "unread", loading: [], toasts: [] };
+        const pending = [];
+        const fn = new Function("authUser", "authUserRef", "readAuthOnlyTable", "setAuditLoading", "setAuditEntries", "setAuditState", "showToast", "console", "auditReadSeqRef", body + "\nreturn loadAudit;")(
+          { id: "u1" }, { current: { id: "u1" } }, () => new Promise((res, rej) => pending.push({ res, rej })), (v) => st.loading.push(v), (v) => { st.entries = v; }, (v) => { st.state = typeof v === "function" ? v(st.state) : v; }, (msg, kind) => st.toasts.push([msg, kind]), { warn: () => {} }, { current: 0 });
+        const p1 = fn(), p2 = fn();
+        pending[1].res([{ id: "new" }]); await p2;
+        if (late instanceof Error) pending[0].rej(late); else pending[0].res(late);
+        await p1;
+        assert.deepStrictEqual([st.entries, st.state, st.loading, st.toasts.length], [[{ id: "new" }], "ok", [true, true, false], 0], "the newer read stays; the older " + (late instanceof Error ? "failure" : "answer") + " landing last is dropped; Loading cleared once, by the newest");
+      }
     });
     check("P31A3 pins: the read - state + loader, the mount load and the 60 s poll call it, ?public=1 never; never a plain db.query of the function", () => {
       assert.ok(src.includes('const [derivedVacRows, setDerivedVacRows] = useState([]);') && src.includes('const [derivedVacState, setDerivedVacState] = useState("unread");') && src.includes("const derivedVacSigRef = useRef(null);"), "the state");
