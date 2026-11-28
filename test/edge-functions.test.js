@@ -3900,11 +3900,12 @@ check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 and 
     assert.ok(s5i.includes("secret must never get one: office-notifications reads a broken body as `{}` - a") && s5i.includes("LIVE send, as daily-reminder v11 did (v12, live since 2026-11-28, answers it 400) -") && !s5i.includes("daily-reminder v11 and office-notifications read a broken"), "section 5's intro: office-notifications still reads a broken body as {}, daily-reminder v11 did");
   }
   // review 2 (11/28): section 5 sends no JSON body past a gate as curl.exe -d '<json>' - Windows PowerShell 5.1 strips its inner
-  // quotes and v11 daily-reminder / office-notifications read the broken body as {} (a LIVE send); those lines use
-  // Invoke-RestMethod / Invoke-WebRequest (or east-feed-refresh's stdin)
+  // quotes, and office-notifications (like daily-reminder v11, live until 2026-11-28 15:41:28 UTC) reads the broken body as {}
+  // (a LIVE send); those lines use Invoke-RestMethod / Invoke-WebRequest (or east-feed-refresh's stdin)
   const s5all = readme.slice(readme.indexOf("## 5. Verification"), readme.indexOf("## 6. Invocations"));
-  // daily-reminder v11 and office-notifications read a broken body as {} (a LIVE send): no curl.exe -d line reaches either past a
-  // gate - the cron secret or a JWT (fix-check of review 2); send-notification refuses a broken body (400) and keeps its lines
+  // office-notifications reads a broken body as {} (a LIVE send), as daily-reminder v11 did (v12 answers it 400): no curl.exe -d
+  // line reaches either past a gate - the cron secret or a JWT (fix-check of review 2); send-notification refuses a broken body
+  // (400) and keeps its lines
   const risky = s5all.split("\n").filter((l) => /^curl\.exe /.test(l) && /\$URL\/(daily-reminder|office-notifications)\b/.test(l) && / -d \x27/.test(l) && (l.includes("-H \"x-cron-secret: $SECRET\"") || l.includes("Authorization: Bearer")));
   assert.deepStrictEqual(risky, [], "section 5: no curl.exe -d body past a gate to daily-reminder / office-notifications: " + risky.join(" | ").slice(0, 300));
   assert.ok(s5all.includes("send-notification answers a broken body 400 (\"JSON body required\") and sends nothing") && s5all.includes("The functions behind the CRON"), "the intro scopes the rule to the cron-gated functions and says what send-notification does");
@@ -3912,6 +3913,34 @@ check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 and 
   ["'{\"mode\":\"nope\"}'", "'{\"mode\":\"publish\"}'"].forEach((b) => assert.ok(s5all.split("\n").some((l) => l.startsWith("try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri \"$URL/") && l.includes("-Body " + b + ").StatusCode } catch { [int]$_.Exception.Response.StatusCode }")), "section 5: " + b + " reads only the status, through Invoke-WebRequest"));
   assert.ok(s5all.split("!! WINDOWS POWERSHELL 5.1").length - 1 === 2 && s5all.includes("v12 answers it 400 (it fails closed - section 3)"), "the warning at the top of both blocks (daily-reminder and office-notifications)");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
+});
+// Prompt 38 record (11/28): the record step's fact-check found a sentence the step had missed (the build guide's offers-mode
+// paragraph still said "from v12 - Prompt 38, prepared"), so CLAUDE.md and every tracked doc are swept: no mention of
+// daily-reminder v12 / the close summary as text / rollcall_summary / deploy-close-summary.sh there still says prepared or not
+// deployed. Windowed around each mention - P31A5's sweep by block (data-layer) would read CLAUDE.md's milestone bullet as one
+// block, and that bullet also holds east-feed-refresh's prepared v3. The README's record has its own pins (the check above).
+check("Prompt 38 record (11/28): CLAUDE.md and the tracked docs name daily-reminder v12 deployed 2026-11-28 (CLAUDE.md's two lines, the build guide's Text-only bullet and offers-mode paragraph, SCHEMA-REVIEW's audit_log row), and no mention of v12 / the close summary as text / rollcall_summary / deploy-close-summary.sh there still says prepared, NOT deployed or waits for its deploy", () => {
+  const docs = ["CLAUDE.md"].concat(fs.readdirSync(path.join(ROOT, "docs")).filter((f) => f.endsWith(".md")).map((f) => "docs/" + f));
+  assert.ok(docs.includes("docs/SILVIS-BUILD-GUIDE.md") && docs.includes("docs/SCHEMA-REVIEW.md") && docs.includes("docs/SILVIS-CALL-RULES.md"), "the sweep reads CLAUDE.md and the docs: " + docs.join(", "));
+  const flatOf = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8").replace(/\s+/g, " ");
+  const NAMES = /daily-reminder`? v12|v12 - Prompt 38|v12 \(the close|close summary as text|rollcall_summary|deploy-close-summary/g;
+  const OLD = /prepared, NOT deployed|NOT deployed|not deployed|is prepared|waits for it|Prompt 38, prepared|Faraz's own step after it is/;
+  const hits = [];
+  let seen = 0;
+  docs.forEach((rel) => {
+    const t = flatOf(rel);
+    for (const m of t.matchAll(NAMES)) {
+      seen++;
+      const w = t.slice(Math.max(0, m.index - 220), m.index + 260);
+      if (OLD.test(w)) hits.push(rel + ": ..." + w.slice(0, 220) + "...");
+    }
+  });
+  assert.ok(seen >= 6, "the sweep met the v12 mentions (" + seen + ")");
+  assert.deepStrictEqual(hits, [], "no mention of daily-reminder v12 in CLAUDE.md or the docs still says it is prepared / not deployed");
+  const cm = flatOf("CLAUDE.md"), guide = flatOf("docs/SILVIS-BUILD-GUIDE.md"), sr = flatOf("docs/SCHEMA-REVIEW.md");
+  assert.ok(cm.includes("instead of running the live hourly reminder) is deployed - 2026-11-28 15:41:28 UTC, Faraz's `deploy-close-summary.sh`") && cm.includes("`daily-reminder` v12 was deployed after it (2026-11-28 15:41:28 UTC, Faraz's `deploy-close-summary.sh`;"), "CLAUDE.md: v12 deployed 2026-11-28 15:41:28 UTC, in both lines");
+  assert.ok(guide.includes("- deployed 2026-11-28 15:41:28 UTC by Faraz (`deploy-close-summary.sh`; `edge-functions/README.md`") && guide.includes("(and, from v12 - Prompt 38, deployed 2026-11-28 - the close's one line of e-mail words"), "the build guide: v12 deployed, in both places");
+  assert.ok(sr.includes("in v12 (deployed 2026-11-28 15:41:28 UTC - `edge-functions/README.md` section 3) as text"), "SCHEMA-REVIEW's audit_log row: v12 deployed");
 });
 acheck("A2 handler (critic A7): Davenport answers NO vacation for FAK while the cache holds his ranges in the window (an RLS-blocked read looks the same) - the cache keeps every list (the in-app plan would have cleared them), no review is reset, the weeks and the extra leg still refresh, ok:false names FAK; a cached range only BEFORE the window is a real 'none' (trusted, the reset runs)", async () => {
   const w = erWorld({ fail: { "dav:time_off": "empty" } }), exp = await erClientExpect(w);

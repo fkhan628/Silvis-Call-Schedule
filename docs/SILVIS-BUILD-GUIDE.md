@@ -1948,7 +1948,7 @@ who submitted how many days, who is rules-only, who never answered (the reminder
 the roll call is unconditional — an operational notice to whoever runs the period, so a period never closes with
 nobody told; the reminder's footer names the effective offsets, never a literal). It never generates or publishes, never writes
 `call_offers`, and a dry run composes without writing or sending; responses carry person ids and counts (and, from v12 - Prompt 38,
-prepared - the close's one line of e-mail words with roster names and vacation ranges), never an address. **The date maths lives once:** `helpers.offerCronPlan(period, today, rules)` (remind / close / none with the
+deployed 2026-11-28 - the close's one line of e-mail words with roster names and vacation ranges), never an address. **The date maths lives once:** `helpers.offerCronPlan(period, today, rules)` (remind / close / none with the
 reason and `days_to_close`; close beats a 0-day reminder; any status but `upcoming` is `none`), `offerRollcall(period,
 offers, ids)` (status per `offerStatus` + distinct offered days inside the period) and `offerPoolIds(roster)` (active,
 non-external), built on `offerTimeline`; the edge function carries a plain-JavaScript mirror between the
