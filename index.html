@@ -9,7 +9,7 @@
        props) + Google Fonts; fonts: gstatic; connect: this Supabase project (REST, Auth, Functions,
        Realtime over wss) and the Davenport project's read-only East feed. frame-ancestors is not here
        because a <meta> policy cannot carry it (browsers ignore it and warn). -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-7DV7Sm44nV5LsXYzDB7wXxkOuHQOPUc5Y0Mx1DScOps=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-JZ84SfxyASjIsSd77NtENW56cavo4odzYYDx02Fa7Gc=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-4jpyv3DdnkQPFEY788cUml843e/1JjP3hXgjTtj+8gg=' 'sha256-f9q5WpGoydLzSkL/5S/UapGl7hBzw0Q88FVADciiB7Q=' 'sha256-RF97Zqqu7SYfXYqUAiEyMV1Htz9YWyqYhaIbtr6VjIY=' 'sha256-nrWhnoVRaW/Hijv6mrXIi9J7RY8HEpakfFrcMDj8e+s='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' https://bzhsroegtagqhutbnsrp.supabase.co wss://bzhsroegtagqhutbnsrp.supabase.co https://xqongyahdnkozqunpwmu.supabase.co; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -266,7 +266,7 @@
     // SINGLE SOURCE OF TRUTH for the app version. CI (bump-version.js) bumps it
     // on every push to main; never edit it by hand. The cache-bust loader below
     // reads APP_VERSION directly - do not duplicate.
-    var APP_VERSION = "2026.11.23a";
+    var APP_VERSION = "2026.11.28a";
     (function() {
       // The key carries the documented silvis- prefix; the underscore spelling was inherited from Davenport
       // (dsg_app_version) and is read through here so the rename deploy still sees the previous version and runs
@@ -493,7 +493,9 @@ function CallSchedule() {
     rows: []
   });
   const [auditEntries, setAuditEntries] = useState([]);
+  const [auditState, setAuditState] = useState("unread");
   const [auditLoading, setAuditLoading] = useState(false);
+  const auditReadSeqRef = useRef(0);
   const [showPastVacations, setShowPastVacations] = useState(false);
   const [themePref, setThemePref] = useState(() => {
     try {
@@ -1001,6 +1003,12 @@ function CallSchedule() {
       setNotifsRead("unread");
       setErrorLog([]);
       setShowErrorLog(false);
+      setAuditEntries([]);
+      setEastRefreshAudit({
+        state: "unread",
+        rows: []
+      });
+      setAuditState("unread");
       pushDevice.dropForeign(user.id).catch(e => console.warn("push: dropping the previous account's subscription failed:", e));
       setPushInfo(null);
       setPushMsg("");
@@ -1211,6 +1219,12 @@ function CallSchedule() {
     setIsScheduler(false);
     setErrorLog([]);
     setShowErrorLog(false);
+    setAuditEntries([]);
+    setEastRefreshAudit({
+      state: "unread",
+      rows: []
+    });
+    setAuditState("unread");
     dismissToast();
     setSessionUnreached("");
   };
@@ -1342,9 +1356,9 @@ function CallSchedule() {
           actor_id: (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id) || (authUser === null || authUser === void 0 ? void 0 : authUser.id) || null,
           actor_name: (userProfile === null || userProfile === void 0 ? void 0 : userProfile.display_name) || ((_surgeons$find3 = surgeons.find(s => s.id === (userProfile === null || userProfile === void 0 ? void 0 : userProfile.person_id))) === null || _surgeons$find3 === void 0 ? void 0 : _surgeons$find3.name) || "Unknown",
           action: action,
-          detail: _objectSpread({
-            summary: summary
-          }, details || {})
+          detail: _objectSpread(_objectSpread({}, details || {}), {}, {
+            summary: typeof summary === "string" ? summary : ""
+          })
         }, {
           returning: "minimal"
         });
@@ -1802,18 +1816,31 @@ function CallSchedule() {
     }
   };
   const loadAudit = async () => {
+    const uid = authUser && authUser.id;
+    const sameAccount = () => !!authUserRef.current && authUserRef.current.id === uid;
+    const seq = ++auditReadSeqRef.current;
+    const newest = () => seq === auditReadSeqRef.current;
     setAuditLoading(true);
     try {
       const rows = await readAuthOnlyTable("audit_log", {
         order: "created_at.desc",
         limit: 150
       });
-      if (rows === null) showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");else setAuditEntries(rows);
+      if (!sameAccount() || !newest()) {} else if (rows === null) {
+        setAuditState(s => s === "ok" ? "ok" : "skipped");
+        showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");
+      } else {
+        setAuditEntries(rows);
+        setAuditState("ok");
+      }
     } catch (e) {
       console.warn("audit load failed", e);
-      showToast("Couldn't load the activity log - check your connection.", "error");
+      if (sameAccount() && newest()) {
+        setAuditState("failed");
+        showToast("Couldn't load the activity log - check your connection.", "error");
+      }
     }
-    setAuditLoading(false);
+    if (newest()) setAuditLoading(false);
   };
   const fmtAuditTime = iso => {
     try {
@@ -1825,7 +1852,7 @@ function CallSchedule() {
       });
     } catch (e) {
       console.warn("fmtAuditTime: could not format", iso, e);
-      return iso;
+      return typeof iso === "string" ? iso : "";
     }
   };
   const loadClientVersions = async () => {
@@ -1877,15 +1904,17 @@ function CallSchedule() {
     return "other";
   };
   useEffect(() => {
+    if (!authUser || !userProfile || userProfile.id !== authUser.id || (userProfile.role === "scheduler" || userProfile.role === "admin") !== isScheduler) return;
     if (view === "settings" && isScheduler) {
       loadAudit();
       loadSnapshots();
       loadClientVersions();
     }
-  }, [view]);
+  }, [view, isScheduler, authUser && authUser.id, userProfile && userProfile.id]);
   useEffect(() => {
+    if (!authUser || !userProfile || userProfile.id !== authUser.id) return;
     if (view === "settings" && isCoordinator) loadAudit();
-  }, [view, isCoordinator]);
+  }, [view, isCoordinator, authUser && authUser.id, userProfile && userProfile.id]);
   const [toast, setToast] = useState(null);
   const toastRef = useRef(null);
   const toastTimerRef = useRef(null);
@@ -2150,6 +2179,8 @@ function CallSchedule() {
   };
   const loadEastRefreshAudit = async () => {
     if (!isScheduler || isPublicMode) return;
+    const uid = authUser && authUser.id;
+    const sameAccount = () => !!authUserRef.current && authUserRef.current.id === uid;
     try {
       const rows = await readAuthOnlyTable("audit_log", {
         eq: {
@@ -2158,6 +2189,7 @@ function CallSchedule() {
         order: "created_at.desc",
         limit: 10
       });
+      if (!sameAccount()) return;
       if (rows === null) {
         setEastRefreshAudit(s => _objectSpread(_objectSpread({}, s), {}, {
           state: s.state === "ok" ? "ok" : "skipped"
@@ -2170,7 +2202,7 @@ function CallSchedule() {
       });
     } catch (e) {
       console.warn("east.refresh audit read failed", e);
-      setEastRefreshAudit(s => _objectSpread(_objectSpread({}, s), {}, {
+      if (sameAccount()) setEastRefreshAudit(s => _objectSpread(_objectSpread({}, s), {}, {
         state: "failed"
       }));
     }
@@ -8264,7 +8296,7 @@ function CallSchedule() {
   };
   useEffect(() => {
     if (view === "setup" && isScheduler && !isPublicMode) loadEastRefreshAudit();
-  }, [view, isScheduler, isPublicMode]);
+  }, [view, isScheduler, isPublicMode, authUser && authUser.id]);
   const scrollToCardRef = useRef(null);
   useEffect(() => {
     if (view !== "setup" || !scrollToCardRef.current) return;
@@ -11280,151 +11312,157 @@ function CallSchedule() {
       textAlign: "center",
       padding: 20
     }
-  }, notifsRead === "ok" ? "No notifications yet" : notifsRead === "failed" ? "Couldn't load the notifications - they are retried every minute." : "Notifications not loaded yet.") : myNotifications.map(n => {
-    const tabMap = {
-      schedule_published: "calendar",
-      schedule_changed: "calendar",
-      manual_edit: "calendar",
-      trade_submitted: "timeoff",
-      trade_proposed: "timeoff",
-      trade_accepted: "timeoff",
-      trade_declined: "timeoff",
-      trade_cancelled: "timeoff",
-      trade_applied: "timeoff",
-      vacation_logged: "timeoff",
-      shift_reminder: "myschedule",
-      open_shifts: "openshifts",
-      shift_claimed: "calendar"
-    };
-    const targetTab = tabMap[n.type] || null;
-    const giveT = notifGiveTrade(n);
-    const giveN = giveT ? tradeGroupOf(giveT).length : 0;
-    const tradeT = giveT ? null : notifTradeProposal(n);
-    const tradeN = tradeT ? tradeGroupOf(tradeT).length : 0;
-    return React.createElement("div", {
-      key: n.id,
-      "data-testid": "notif-row",
-      "data-type": n.type,
-      onClick: () => {
-        if (targetTab && setView(targetTab)) {
-          setShowNotifs(false);
-          markNotifsSeen();
-          if (tabBarShown) scrollTopNow();
+  }, notifsRead === "ok" ? "No notifications yet" : notifsRead === "failed" ? "Couldn't load the notifications - they are retried every minute." : "Notifications not loaded yet.") : myNotifications.map(n => React.createElement(CardGuard, {
+    key: n.id,
+    ck: "alerts_row",
+    css: css,
+    line: "This notification could not be shown."
+  }, React.createElement(GuardedRow, {
+    render: () => {
+      const tabMap = {
+        schedule_published: "calendar",
+        schedule_changed: "calendar",
+        manual_edit: "calendar",
+        trade_submitted: "timeoff",
+        trade_proposed: "timeoff",
+        trade_accepted: "timeoff",
+        trade_declined: "timeoff",
+        trade_cancelled: "timeoff",
+        trade_applied: "timeoff",
+        vacation_logged: "timeoff",
+        shift_reminder: "myschedule",
+        open_shifts: "openshifts",
+        shift_claimed: "calendar"
+      };
+      const targetTab = typeof n.type === "string" && Object.prototype.hasOwnProperty.call(tabMap, n.type) ? tabMap[n.type] : null;
+      const giveT = notifGiveTrade(n);
+      const giveN = giveT ? tradeGroupOf(giveT).length : 0;
+      const tradeT = giveT ? null : notifTradeProposal(n);
+      const tradeN = tradeT ? tradeGroupOf(tradeT).length : 0;
+      return React.createElement("div", {
+        "data-testid": "notif-row",
+        "data-type": n.type,
+        onClick: () => {
+          if (targetTab && setView(targetTab)) {
+            setShowNotifs(false);
+            markNotifsSeen();
+            if (tabBarShown) scrollTopNow();
+          }
+        },
+        style: {
+          padding: "8px 10px",
+          marginBottom: 6,
+          borderRadius: 6,
+          cursor: targetTab ? "pointer" : "default",
+          background: n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",
+          border: `1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`
         }
-      },
-      style: {
-        padding: "8px 10px",
-        marginBottom: 6,
-        borderRadius: 6,
-        cursor: targetTab ? "pointer" : "default",
-        background: n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",
-        border: `1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`
-      }
-    }, React.createElement("div", {
-      style: {
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center"
-      }
-    }, React.createElement("span", {
-      style: {
-        fontSize: 12,
-        fontWeight: 600,
-        color: "#1F2A3A"
-      }
-    }, n.title), React.createElement("span", {
-      style: {
-        fontSize: 10,
-        color: "#a0a8b0"
-      }
-    }, new Date(n.created_at).toLocaleDateString())), giveT ? React.createElement("p", {
-      "data-testid": "notif-give-line",
-      style: {
-        fontSize: 12,
-        color: "#5B6B82",
-        margin: "3px 0 0",
-        lineHeight: 1.4
-      }
-    }, tradeGiveLine(tradeNamed(giveT), tradeUnitTag(giveT), mySurgeon)) : React.createElement("p", {
-      style: {
-        fontSize: 12,
-        color: "#5B6B82",
-        margin: "3px 0 0",
-        lineHeight: 1.4
-      }
-    }, n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message), giveT && React.createElement("div", {
-      style: {
-        display: "flex",
-        gap: 6,
-        marginTop: 6,
-        flexWrap: "wrap"
-      }
-    }, React.createElement("button", {
-      "data-testid": "notif-give-accept",
-      disabled: !!tradeBusy,
-      onClick: e => {
-        e.stopPropagation();
-        acceptTrade(giveT);
-      },
-      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
-        padding: "6px 14px",
-        fontSize: 12,
-        minHeight: 36
-      })
-    }, tradeBusy === giveT.id ? "Working" : giveN > 1 ? `Accept (${giveN} days)` : "Accept"), React.createElement("button", {
-      "data-testid": "notif-give-decline",
-      disabled: !!tradeBusy,
-      onClick: e => {
-        e.stopPropagation();
-        declineTrade(giveT);
-      },
-      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-        padding: "6px 14px",
-        fontSize: 12,
-        minHeight: 36
-      })
-    }, giveN > 1 ? `Decline (${giveN} days)` : "Decline")), tradeT && React.createElement("div", {
-      "data-testid": "notif-trade-actions",
-      "data-trade-id": tradeT.id,
-      style: {
-        display: "flex",
-        gap: 6,
-        marginTop: 6,
-        flexWrap: "wrap"
-      }
-    }, React.createElement("button", {
-      "data-testid": "notif-trade-accept",
-      disabled: !!tradeBusy,
-      onClick: e => {
-        e.stopPropagation();
-        acceptTrade(tradeT);
-      },
-      style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
-        padding: "6px 14px",
-        fontSize: 12,
-        minHeight: 36
-      })
-    }, tradeBusy === tradeT.id ? "Working" : tradeN > 1 ? `Accept (${tradeN} days)` : "Accept"), React.createElement("button", {
-      "data-testid": "notif-trade-decline",
-      disabled: !!tradeBusy,
-      onClick: e => {
-        e.stopPropagation();
-        declineTrade(tradeT);
-      },
-      style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
-        padding: "6px 14px",
-        fontSize: 12,
-        minHeight: 36
-      })
-    }, tradeN > 1 ? `Decline (${tradeN} days)` : "Decline")), targetTab && React.createElement("span", {
-      style: {
-        fontSize: 10,
-        color: T.accentText,
-        marginTop: 3,
-        display: "inline-block"
-      }
-    }, "Tap to view"));
-  })), !isPublicMode && isUnlinked && !isCoordinator && !isViewer && React.createElement("div", {
+      }, React.createElement("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center"
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#1F2A3A"
+        }
+      }, displayText(n.title)), React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: "#a0a8b0"
+        }
+      }, new Date(n.created_at).toLocaleDateString())), giveT ? React.createElement("p", {
+        "data-testid": "notif-give-line",
+        style: {
+          fontSize: 12,
+          color: "#5B6B82",
+          margin: "3px 0 0",
+          lineHeight: 1.4
+        }
+      }, tradeGiveLine(tradeNamed(giveT), tradeUnitTag(giveT), mySurgeon)) : React.createElement("p", {
+        style: {
+          fontSize: 12,
+          color: "#5B6B82",
+          margin: "3px 0 0",
+          lineHeight: 1.4
+        }
+      }, displayText(n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message)), giveT && React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: 6,
+          marginTop: 6,
+          flexWrap: "wrap"
+        }
+      }, React.createElement("button", {
+        "data-testid": "notif-give-accept",
+        disabled: !!tradeBusy,
+        onClick: e => {
+          e.stopPropagation();
+          acceptTrade(giveT);
+        },
+        style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+          padding: "6px 14px",
+          fontSize: 12,
+          minHeight: 36
+        })
+      }, tradeBusy === giveT.id ? "Working" : giveN > 1 ? `Accept (${giveN} days)` : "Accept"), React.createElement("button", {
+        "data-testid": "notif-give-decline",
+        disabled: !!tradeBusy,
+        onClick: e => {
+          e.stopPropagation();
+          declineTrade(giveT);
+        },
+        style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+          padding: "6px 14px",
+          fontSize: 12,
+          minHeight: 36
+        })
+      }, giveN > 1 ? `Decline (${giveN} days)` : "Decline")), tradeT && React.createElement("div", {
+        "data-testid": "notif-trade-actions",
+        "data-trade-id": tradeT.id,
+        style: {
+          display: "flex",
+          gap: 6,
+          marginTop: 6,
+          flexWrap: "wrap"
+        }
+      }, React.createElement("button", {
+        "data-testid": "notif-trade-accept",
+        disabled: !!tradeBusy,
+        onClick: e => {
+          e.stopPropagation();
+          acceptTrade(tradeT);
+        },
+        style: _objectSpread(_objectSpread({}, css.btn(true)), {}, {
+          padding: "6px 14px",
+          fontSize: 12,
+          minHeight: 36
+        })
+      }, tradeBusy === tradeT.id ? "Working" : tradeN > 1 ? `Accept (${tradeN} days)` : "Accept"), React.createElement("button", {
+        "data-testid": "notif-trade-decline",
+        disabled: !!tradeBusy,
+        onClick: e => {
+          e.stopPropagation();
+          declineTrade(tradeT);
+        },
+        style: _objectSpread(_objectSpread({}, css.btn(false)), {}, {
+          padding: "6px 14px",
+          fontSize: 12,
+          minHeight: 36
+        })
+      }, tradeN > 1 ? `Decline (${tradeN} days)` : "Decline")), targetTab && React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: T.accentText,
+          marginTop: 3,
+          display: "inline-block"
+        }
+      }, "Tap to view"));
+    }
+  })))), !isPublicMode && isUnlinked && !isCoordinator && !isViewer && React.createElement("div", {
     "data-testid": "unlinked-banner",
     style: _objectSpread(_objectSpread({}, css.card), {}, {
       padding: "10px 14px",
@@ -15845,63 +15883,74 @@ function CallSchedule() {
       padding: "6px 0"
     }
   }, "Loading") : auditEntries.length === 0 ? React.createElement("div", {
+    "data-testid": "audit-empty",
+    "data-read": auditState,
     style: {
       fontSize: 12,
       color: "#8a94a0",
       padding: "6px 0"
     }
-  }, "No activity recorded yet.") : React.createElement("div", {
+  }, auditState === "ok" ? "No activity recorded yet." : auditState === "failed" ? "Couldn't load the activity log - press Refresh to try again." : "Activity log not loaded yet - press Refresh.") : React.createElement("div", {
     style: {
       maxHeight: 420,
       overflowY: "auto"
     }
-  }, auditEntries.map(en => {
-    const si = surgeons.findIndex(s => s.id === en.actor_id);
-    const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
-    const at = auditEntryText(en, auditGiveIds);
-    return React.createElement("div", {
-      key: en.id,
-      style: {
-        display: "flex",
-        gap: 8,
-        alignItems: "flex-start",
-        padding: "7px 2px",
-        borderBottom: "1px solid " + (dk ? "#243240" : "#eef1f4")
-      }
-    }, React.createElement("span", {
-      style: {
-        flexShrink: 0,
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: 0.4,
-        padding: "2px 7px",
-        borderRadius: 5,
-        background: c ? c.tg : dk ? "#243240" : "#eef1f4",
-        color: c ? c.tx : "#5B6B82",
-        border: `1px solid ${c ? c.bd : dk ? "#2a3a48" : "#DCE3EC"}`,
-        minWidth: 38,
-        textAlign: "center"
-      }
-    }, en.actor_name || "?"), React.createElement("div", {
-      style: {
-        flex: 1,
-        minWidth: 0
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 12.5,
-        color: dk ? "#c8d2dc" : "#3a4a58",
-        lineHeight: 1.35
-      }
-    }, at.summary), React.createElement("div", {
-      style: {
-        fontSize: 10,
-        color: "#9aa4ae",
-        marginTop: 1,
-        fontFamily: mono
-      }
-    }, fmtAuditTime(en.created_at), " - ", at.action)));
-  }))), isScheduler && React.createElement(Collapsible, {
+  }, auditEntries.map(en => React.createElement(CardGuard, {
+    key: en.id,
+    ck: "settings_audit_row",
+    css: css,
+    line: "This entry could not be shown."
+  }, React.createElement(GuardedRow, {
+    render: () => {
+      const si = surgeons.findIndex(s => s.id === en.actor_id);
+      const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
+      const at = auditEntryText(en, auditGiveIds, nameOf);
+      return React.createElement("div", {
+        "data-testid": "audit-row",
+        "data-action": at.action,
+        style: {
+          display: "flex",
+          gap: 8,
+          alignItems: "flex-start",
+          padding: "7px 2px",
+          borderBottom: "1px solid " + (dk ? "#243240" : "#eef1f4")
+        }
+      }, React.createElement("span", {
+        style: {
+          flexShrink: 0,
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 0.4,
+          padding: "2px 7px",
+          borderRadius: 5,
+          background: c ? c.tg : dk ? "#243240" : "#eef1f4",
+          color: c ? c.tx : "#5B6B82",
+          border: `1px solid ${c ? c.bd : dk ? "#2a3a48" : "#DCE3EC"}`,
+          minWidth: 38,
+          textAlign: "center"
+        }
+      }, displayText(en.actor_name) || "?"), React.createElement("div", {
+        style: {
+          flex: 1,
+          minWidth: 0
+        }
+      }, React.createElement("div", {
+        "data-testid": "audit-summary",
+        style: {
+          fontSize: 12.5,
+          color: dk ? "#c8d2dc" : "#3a4a58",
+          lineHeight: 1.35
+        }
+      }, displayText(at.summary, at.action)), React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: "#9aa4ae",
+          marginTop: 1,
+          fontFamily: mono
+        }
+      }, fmtAuditTime(en.created_at), " - ", displayText(at.action))));
+    }
+  }))))), isScheduler && React.createElement(Collapsible, {
     css: css,
     ck: "settings_client_versions",
     defaultOpen: false,
@@ -17124,7 +17173,8 @@ function OfferPainterSheet({
   const period = React.useMemo(() => preferred || offerNextPeriod(periods, today), [preferred, periods, today]);
   const periodOpen = !!period && (isScheduler || offerPeriodOpen(period, today));
   const periodStatus = period ? offerStatus(period, offers, pid) : null;
-  const savedMode = period ? (period.offer_modes && typeof period.offer_modes === "object" ? period.offer_modes[pid] : null) || "preferred" : "preferred";
+  const savedModeRaw = period && period.offer_modes && typeof period.offer_modes === "object" ? period.offer_modes[pid] : null;
+  const savedMode = typeof savedModeRaw === "string" && savedModeRaw !== "" ? savedModeRaw : "preferred";
   const shownMode = modeDraft || savedMode;
   const modeDirty = !!modeDraft && modeDraft !== savedMode;
   const periodLabel = period ? String(period.label || period.start_day + " - " + period.end_day) : "";
@@ -18420,11 +18470,71 @@ function Collapsible({
       marginTop: 4,
       paddingLeft: 18
     }
-  }, summary), open && React.createElement("div", {
+  }, summary), open && React.createElement(CardGuard, {
+    ck: ck,
+    css: css
+  }, React.createElement("div", {
     style: {
       marginTop: 12
     }
-  }, children));
+  }, children)));
+}
+const CARD_GUARD_BOX = {
+  fontSize: 12,
+  color: "#8a3030",
+  background: "#fdeaea",
+  border: "1px solid #e0a8a8",
+  borderRadius: 6,
+  padding: "8px 10px",
+  lineHeight: 1.5
+};
+class CardGuard extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      failed: false,
+      error: null
+    };
+  }
+  static getDerivedStateFromError(error) {
+    return {
+      failed: true,
+      error: error
+    };
+  }
+  componentDidCatch(error, info) {
+    try {
+      console.error("Silvis: a card could not be shown (" + String(this.props.ck || "") + "):", error, info);
+    } catch (e) {}
+  }
+  render() {
+    if (this.state.failed) {
+      const e = this.state.error;
+      const msg = e && typeof e.message === "string" ? e.message : typeof e === "string" && e ? e : "unexpected error";
+      const box = this.props.css && this.props.css.errBox ? this.props.css.errBox : CARD_GUARD_BOX;
+      return React.createElement("div", {
+        "data-testid": "card-error-" + String(this.props.ck || ""),
+        role: "alert",
+        style: _objectSpread(_objectSpread({}, box), {}, {
+          margin: "4px 0"
+        })
+      }, typeof this.props.line === "string" ? this.props.line : "This section could not be shown - it holds an entry of an unexpected shape. The rest of the app works; close this section and open it again to retry.", React.createElement("div", {
+        style: {
+          fontFamily: typeof mono !== "undefined" ? mono : "monospace",
+          fontSize: 10.5,
+          marginTop: 3,
+          wordBreak: "break-word",
+          opacity: 0.85
+        }
+      }, msg.slice(0, 240)));
+    }
+    return this.props.children;
+  }
+}
+function GuardedRow({
+  render
+}) {
+  return render();
 }
 function safeBuildContext(inputs) {
   try {
@@ -29543,11 +29653,13 @@ class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
     this.state = {
+      failed: false,
       error: null
     };
   }
   static getDerivedStateFromError(error) {
     return {
+      failed: true,
       error: error
     };
   }
@@ -29557,8 +29669,8 @@ class ErrorBoundary extends React.Component {
     } catch (e) {}
   }
   render() {
-    if (this.state.error) {
-      var msg = this.state.error && this.state.error.message ? this.state.error.message : String(this.state.error);
+    if (this.state.failed) {
+      var msg = this.state.error && typeof this.state.error.message === "string" && this.state.error.message ? this.state.error.message : typeof this.state.error === "string" && this.state.error ? this.state.error : "unexpected error";
       return React.createElement("div", {
         style: {
           minHeight: "100vh",
