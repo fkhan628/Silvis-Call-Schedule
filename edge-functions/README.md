@@ -8,7 +8,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | slug | source | caller | can it send mail? |
 |---|---|---|---|
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET); since Item D (2026-09-24) also `?surgeon=<CODE>&east=1`, the combined Silvis + Davenport feed for office staff (all-day Davenport events from `east_feed` + `east_vacation_reviews`, read with the service role) | never |
-| `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
+| `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`); v7 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:15 UTC; v8 (the body fails closed, section 3's "2026-11-28 - the body fails closed") PREPARED, NOT deployed | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
 | `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts. Revision z (v10, deployed 2026-10-22 23:18:10 UTC; its first live push not observed yet - section 3's "Deploy record - push reminders (revision z)"): v10 also pushes the day-before reminder to the same people's phones, and their followers', on `shift_reminders_push` (the hourly default mode only); v11 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:19 UTC; v12 (the close summary as text - Prompt 38, section 3's "2026-11-27 - the close summary as text") deployed 2026-11-28 15:41:28 UTC |
 | `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A"; v2 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:13 UTC (its first scheduled run 2026-10-27 10:30 UTC, its audit row `ok` `true`); v3 (the East week lists - Prompt 34, section 3's "2026-11-11 - the East week lists") PREPARED, NOT deployed | never |
@@ -1080,6 +1080,91 @@ passes `reminderBody`. Not observed yet: the offers dry-run proof (Faraz's - the
 Rollback: section 7 (the backup the script took is the deployed v11; with v11 back a close writes the object form again, which the
 app's Activity log words from its lists since Prompt 38 - nothing else to undo).
 
+### 2026-11-28 - the body fails closed (office-notifications v8)
+
+*Status: PREPARED, NOT deployed - `office-notifications` v8 on base v7. Prepared 2026-11-28 by Claude Code on branch
+`claude/infallible-elbakyan-b69b77` (the follow-up the Prompt 38 reviews named: daily-reminder's fail-closed body for the office
+function). The paragraphs below are the plan as prepared; the observed paragraph is added at the deploy's record step. "v8" is the
+next version after the v7 that the daily-reminder v12 deploy's `functions list` read on 2026-11-28: a `supabase secrets set` before
+the deploy re-versions every function (the Prompt 30 record above), so the record step takes the number the script observes.*
+
+Why: v7 reads its body with `req.json()` and a `{}` fallback, and a missing or non-string `mode` as `digest`. So a body it cannot
+parse runs the LIVE digest - a real e-mail to every active office contact and the baseline rewritten, whenever the schedule or a
+vacation changed since the last notice: a `curl.exe -d '{"mode":"digest","dryRun":true}'` from Windows PowerShell 5.1 (it arrives
+as `{mode:digest,dryRun:true}`, its inner quotes stripped), an empty body and `[]` - and also `{}`, `{"mode":1}` and a typo of
+`dryRun` (`{"mode":"digest","dryrun":true}`). `test/edge-functions.test.js` runs each against v7's reading (v7's two body lines put
+back over v8's): one mail per contact every time. Section 5's lines have sent their bodies with `Invoke-RestMethod` since Prompt
+38's review, so the documented path was safe; the function was not.
+
+The change, in `office-notifications` only (v7 -> v8): the body is read as text and fails closed (`officeBody`, the rule of
+east-feed-refresh's `refreshBody` and daily-reminder's `reminderBody`). A request is a JSON object with a string `mode` and that
+mode's keys only - `mode` and `dryRun` for `digest`, `rebaseline` and `test`; for `publish` also the app's four, `period_label`,
+`changes`, `change_lines` and `groups` (the app's publish sends all four; the function reads the first two, the other two ride
+along unread). One byte-order mark and white space around the JSON are accepted (PowerShell's pipe adds both). Anything else - text
+that does not parse, an empty body, `null`, an array, a scalar, no `mode` (`{}` included), a `mode` that is not a string, a key its
+mode does not take - answers 400 `{"error":"the body must be a JSON object with a mode and that mode's keys only (<why>); nothing
+was sent or written"}` before any read of the schedule, the baseline or the contacts and before any send. On the cron path nothing
+at all is read before it; on a scheduler session only the gate's own two reads (the GoTrue user, the `user_profiles` role) come
+first - the gate stays ahead of the body, so a caller without the secret or a scheduler session gets the 401 whatever it sends.
+After the body everything is as in v7: `dryRun` must be a boolean and goes with `digest` only (400), the cron secret takes `digest`
+and `rebaseline` only (403), an unknown mode is a 400, and the modes are unchanged. No new secret, table, RPC or cron change.
+
+The callers, each checked on 2026-11-28 (`test/edge-functions.test.js` runs every one of these bodies through the real handler):
+the weekly cron `silvis-office-digest-weekly` (section 4: `'{"mode":"digest"}'::jsonb`; pg_net sends jsonb's text form,
+`{"mode": "digest"}`); the app's Settings > "Test the weekly digest now" (`{ mode: "digest" }` - a live digest, as before); the
+app's publish dialog > Send (`{ mode: "publish", period_label, changes, change_lines, groups }`); `rebaseline` and `test` only
+from section 5's lines or by hand. Nothing else calls the function.
+
+The order: independent of every other function - `daily-reminder` v12 is deployed (2026-11-28 15:41:28 UTC, the record above) and
+its deploy left `office-notifications` at v7. Any day after the merge to `main`, but not on a Monday from 10:50 to 12:05 UTC (the
+weekly digest runs Monday 11:00 UTC - 12:00 UTC if the job was moved for standard time, section 4).
+
+The deploy: `deploy-office-body.sh` in the private apply-scripts folder (machine paths keep it out of this repo), run from a clean
+`main` that carries this change - `deploy-close-summary.sh` for `office-notifications`. `--dry-run` first: it checks the CLI and
+the `supa-silvis` link, reads `functions list` (`office-notifications` ACTIVE, `verify_jwt` false - pg_cron's call carries no
+JWT), downloads the live function into a fresh backup folder and stops unless it is the deployed v7 byte for byte
+(CRLF-normalised `fb37ea31885c...`, "2026-10-26 - the PGRST303 retry" above - anything else was deployed outside these records:
+stop), and stages the new file against the hash it pins (`test/edge-functions.test.js` pins the same bytes); nothing is deployed.
+The real run reads the clock (not on a Monday from 10:50 to 12:05 UTC), asks for DEPLOY in capital letters at the terminal, reads
+the clock again, deploys the one function (`--no-verify-jwt --use-api`), reads `functions list` again (one version up,
+`verify_jwt` still false), re-downloads it and compares it with the staged file, and checks that an unauthenticated POST still
+answers 401. Then its PASTE THIS BACK block, for the record step.
+
+The proof after it (Faraz, the SQL editor - the secret is read from Vault, never typed; never a `curl.exe -d` body from PowerShell
+5.1): a dry run with a key its mode does not take, which v8 refuses and v7 answers as a plain dry run (nothing sent and nothing
+written either way, so the statement is safe whichever version answers), then the plain dry run, which v8 takes in jsonb's text
+form -
+```sql
+select net.http_post(
+  url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/office-notifications',
+  headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+    coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+  body := '{"mode":"digest","dryRun":true,"proof":"v8"}'::jsonb,
+  timeout_milliseconds := 60000);
+select net.http_post(
+  url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/office-notifications',
+  headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+    coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+  body := '{"mode":"digest","dryRun":true}'::jsonb,
+  timeout_milliseconds := 60000);
+-- pg_net answers asynchronously: wait 20-30 s, then read the two answers (neither pattern matches a live digest's answer)
+select status_code, created, content from net._http_response
+where content::text like '{"error":"the body must be a JSON object with a mode%' order by created desc limit 1;
+select status_code, created, left(content, 160) as content from net._http_response
+where content::text like '{"mode":"digest","dryRun":true,%' order by created desc limit 2;
+```
+[The first: `400`, a `created` of a minute ago, `content` ending `(unknown key \"proof\" for mode \"digest\"); nothing was sent or
+written"}`. The second: `200`, a minute ago, `{"mode":"digest","dryRun":true,...` (`would_send` the active contacts when the
+schedule changed since the last notice, `0` on a quiet week; `sent` 0) - one row of a minute ago. No first row and TWO second rows
+of a minute ago: v7 answered the first body (as a dry run - nothing sent, nothing written), the deploy did not land - paste it back.
+No row, or an old `created`: read `select status_code, timed_out, error_msg, created, content from net._http_response order by
+created desc limit 3;` (a timeout or a connection error shows in `timed_out` / `error_msg`).] The first live v8 run is the next
+Monday digest (11:00 UTC): its `net._http_response` row answers 200 and the function log reads `[office-notifications]
+mode=digest dryRun=false via=cron`.
+
+Rollback: section 7 (the backup the script took is the deployed v7; with v7 back a body it cannot parse reads as `{}` again -
+section 5's lines keep their `Invoke-RestMethod` bodies either way; nothing else to undo).
+
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
 Both jobs were created 2026-09-22, AFTER the secret was set and the functions
@@ -1223,9 +1308,10 @@ DevTools -> Application -> Local Storage -> `silvis-auth-token`). Use `curl.exe`
 in PowerShell (the `curl` alias is Invoke-WebRequest). Windows PowerShell 5.1 strips
 the inner double quotes of a native argument, so a `curl.exe -d '<json>'` body
 arrives as broken JSON (review of Prompt 38, 11/28). The functions behind the CRON
-secret must never get one: office-notifications reads a broken body as `{}` - a
-LIVE send, as daily-reminder v11 did (v12, live since 2026-11-28, answers it 400) -
-so their lines past the gate use `Invoke-RestMethod
+secret must never get one: office-notifications v7 (live until the v8 deploy -
+section 3) reads a broken body as `{}` - a LIVE send, as daily-reminder v11 did;
+daily-reminder v12 (live since 2026-11-28) answers it 400, and so does
+office-notifications v8 - so their lines past the gate use `Invoke-RestMethod
 -Body '<json>'` (or `Invoke-WebRequest` when only the status is read), which passes
 the body as written, and east-feed-refresh's lines pipe it through curl.exe's stdin.
 send-notification answers a broken body 400 ("JSON body required") and sends nothing,
@@ -1273,9 +1359,10 @@ name only, no reason, exactly what the office calendar needs; the plain `?surgeo
 ### office-notifications
 ```powershell
 # !! WINDOWS POWERSHELL 5.1 (review of Prompt 38, 11/28): a curl.exe -d '<json>' body arrives with its inner quotes stripped
-# !! ({mode:digest,dryRun:true}), and office-notifications reads a body it cannot parse as {} - mode digest, LIVE: a real digest
-# !! e-mail to the office contacts. Every line below that passes the gate sends its body with Invoke-RestMethod /
-# !! Invoke-WebRequest (passed as written); the two 401 lines stay curl.exe (the gate refuses before any body is read).
+# !! ({mode:digest,dryRun:true}). v7 (live until the v8 deploy) reads a body it cannot parse as {} - mode digest, LIVE: a real
+# !! digest e-mail to the office contacts; v8 answers it 400 (it fails closed - section 3, "2026-11-28 - the body fails closed").
+# !! Every line below that passes the gate sends its body with Invoke-RestMethod / Invoke-WebRequest (passed as written); the
+# !! two 401 lines stay curl.exe (the gate refuses before any body is read).
 # no gate -> 401 (nothing read, nothing sent)
 curl.exe -s -i -X POST "$URL/office-notifications" -H "Content-Type: application/json" -d '{"mode":"rebaseline"}' | Select-Object -First 1
 # rebaseline: writes the baseline row, sends NOTHING
@@ -1293,6 +1380,9 @@ Invoke-RestMethod -Method Post -Uri "$URL/office-notifications" -Headers @{ "x-c
 #   without a diff. The send trigger is unchanged: a live digest still goes out only when the schedule / vacation diff is non-empty.
 # publish is refused on the cron path (must be a scheduler session) - the status only
 try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$URL/office-notifications" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"publish"}').StatusCode } catch { [int]$_.Exception.Response.StatusCode }   # 403
+# v8 (section 3, "2026-11-28 - the body fails closed"): a key its mode does not take beside a good dry run -> 400, nothing read
+# or sent; v7 answers the same body 200 as a plain dry run (nothing sent either), so the line is safe before and after the deploy
+try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$URL/office-notifications" -Headers @{ "x-cron-secret" = $SECRET } -ContentType "application/json" -Body '{"mode":"digest","dryRun":true,"proof":"v8"}').StatusCode } catch { [int]$_.Exception.Response.StatusCode }   # 400 (v7: 200)
 # a WRONG secret -> the same 401 as no secret (Prompt 16 B5: constant-time compare - a near miss costs what a miss costs; nothing read, nothing sent)
 curl.exe -s -i -X POST "$URL/office-notifications" -H "x-cron-secret: wrong-value" -H "Content-Type: application/json" -d '{"mode":"digest","dryRun":true}' | Select-Object -First 1   # 401
 ```
@@ -1551,6 +1641,13 @@ Since 2026-11-28 15:41:28 UTC the live `daily-reminder` is v12 (section 3's reco
 `backup-close-summary-20261128T154103Z` folder (the deployed v11, `ad3dbc5a5bae...`), and the script's log
 (`deploy-close-summary-20261128T154103Z.log`) holds its two rollback lines. The revision z rollback above (the v9 backup) would take
 v12's change away too.
+
+The body fails closed (section 3, "2026-11-28 - the body fails closed"; `office-notifications` v8): `deploy-office-body.sh`
+downloads the live function before it deploys, into `$env:USERPROFILE\projects\supa-silvis\backup-office-body-<UTC stamp>\office-notifications\index.ts`,
+and prints the rollback lines - copy that backup over the workdir's `supabase\functions\office-notifications\index.ts`, then the
+deploy line (`--no-verify-jwt --use-api`). The backup is the deployed v7 (the retry stays). With v7 back, a body it cannot parse
+reads as `{}` again - the live digest - so section 5's lines keep their `Invoke-RestMethod` bodies either way. No data and no
+database change is involved; the client needs no rollback.
 
 `east-feed-refresh` (Prompt 31 Part A), in this order. Stop the job first, in the SQL editor:
 `select cron.unschedule('silvis-east-feed-daily');`. Then leave the function (it is gated and nothing else calls it)

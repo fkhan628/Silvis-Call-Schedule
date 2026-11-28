@@ -162,7 +162,9 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   `daily-reminder` v12 (the close's summary as text, the ids under `rollcall_summary`; a body that does not parse answers 400
   instead of running the live hourly reminder) is deployed - 2026-11-28 15:41:28 UTC, Faraz's `deploy-close-summary.sh`
   (`edge-functions/README.md` section 3). From PowerShell 5.1 a JSON body past a gate goes through `Invoke-RestMethod`, never
-  `curl.exe -d` (README section 5).
+  `curl.exe -d` (README section 5). `office-notifications` v8 reads its body the same way (text that does not parse, no string
+  `mode` - `{}` included - or a key its mode does not take answers 400, where v7 sends the live digest); it goes live with Faraz's
+  `deploy-office-body.sh` (README section 3, "2026-11-28 - the body fails closed").
 - East feed (`east-feed.js`) reads the Davenport project's `schedule_weeks` **read-only** with its public anon key and
   caches into `east_feed`. Fetch failure keeps the cache and warns — never "no East call". Its Davenport `time_off` read is
   guarded the same way (`eastVacationReadGuard`: a failed or suspiciously empty read keeps the cached ranges and resets no
@@ -256,3 +258,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   Prompt 38 (the Activity log crash, Faraz 11/27): the client fix shipped first and ended the crash (2026.11.28a); `daily-reminder`
   v12 was deployed after it (2026-11-28 15:41:28 UTC, Faraz's `deploy-close-summary.sh`; recorded in `edge-functions/README.md` §3,
   "2026-11-27 - the close summary as text"). Faraz's own step left: its offers dry-run proof (the two statements of that section).
+  The office body (11/28, the follow-up Prompt 38's reviews named): `office-notifications` v8 reads its body failing closed like
+  daily-reminder's; Faraz's own steps: the merge to `main`, then `deploy-office-body.sh` (private apply-scripts) and its pg_net proof
+  (`edge-functions/README.md` §3, "2026-11-28 - the body fails closed") - until then v7 is live.

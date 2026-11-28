@@ -17,7 +17,9 @@
 //     CLIENT computed (the function never invents schedule facts; roster ids
 //     in from/to are resolved to names, unresolvable ids are never rendered).
 //     Then rewrites the digest baseline so the next digest reports only
-//     changes made AFTER this publish. Scheduler JWT only.
+//     changes made AFTER this publish. Scheduler JWT only. The app's body
+//     also carries change_lines and groups (read nowhere here; officeBody
+//     takes them, the publish keys being the app's).
 //
 //   { mode: "digest" }
 //     Weekly cron (or the app's "run digest now" button). Diffs the CURRENT
@@ -84,10 +86,18 @@
 // hardcoded fallback sender), CRON_SECRET; SUPABASE_URL and
 // SUPABASE_SERVICE_ROLE_KEY are injected by Supabase.
 //
-// TOKEN RACE RETRY (2026-10-26; v7 on base v6 - prepared, NOT deployed; edge-functions/README.md
+// TOKEN RACE RETRY (2026-10-26; v7 - deployed 2026-10-27 03:30:15 UTC by Faraz; edge-functions/README.md
 // section 3 "2026-10-26 - the PGRST303 retry"): rest() sends the same call again after 1 s, then 3 s, when
 // PostgREST answers 401 PGRST303 ("JWT issued at future" - the platform's token race) - the @restRetry block
 // above rest(); every other answer as before.
+//
+// THE BODY FAILS CLOSED (2026-11-28; v8 on base v7 - prepared, NOT deployed; edge-functions/README.md section 3
+// "2026-11-28 - the body fails closed"): the body is read as TEXT (officeBody, above the handler - the rule of
+// east-feed-refresh's refreshBody and daily-reminder's reminderBody). A request is a JSON object with a string mode and
+// that mode's keys only; anything else is a 400 before any read of the schedule, the baseline or the contacts and before
+// any send. v7 read a body it could not parse as {} - a curl.exe -d body from Windows PowerShell 5.1 arrives without its
+// inner quotes - and {} (or a mode that is not a string) as mode digest: the LIVE digest e-mail to every office contact.
+// The weekly cron's {"mode":"digest"} and the app's publish and digest bodies pass.
 //
 // Deploy: supabase functions deploy office-notifications --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt
 
@@ -964,6 +974,33 @@ async function broadcast(contacts: Contact[], compose: (c: Contact) => { subject
   return { sent, failed, results };
 }
 
+// The request body, read as TEXT and failing closed (2026-11-28, v8 - east-feed-refresh's refreshBody and daily-reminder's
+// reminderBody, the same rule). A request is a JSON object with a string mode and the keys of that mode only: mode and dryRun
+// for digest, rebaseline and test (the weekly cron's {"mode":"digest"}, the app's "Test the weekly digest now", the README's
+// lines), and for publish also the app's four - period_label, changes, change_lines and groups (index-source.html
+// triggerPublishNotify sends all four; the publish mode reads period_label and changes). dryRun stays a publish key so that
+// {"mode":"publish","dryRun":true} keeps v7's own 400 below. Anything else - text that does not parse (Windows PowerShell 5.1
+// strips the inner quotes of curl.exe -d '{"mode":"digest","dryRun":true}', so the function receives
+// {mode:digest,dryRun:true}), an empty body, null, an array, a string, a number, a boolean, no mode ({} included), a mode that
+// is not a string, a key its mode does not take (a typo of dryRun) - is answered 400 before any read of the schedule, the
+// baseline or the contacts and before any send: v7 read a parse failure as {} and {} as mode digest - the LIVE digest e-mail.
+// One leading byte-order mark and white space around the JSON are accepted (PowerShell's pipe adds both). The mode and dryRun
+// values are judged after this, as before.
+const OFFICE_BODY_KEYS = ["mode", "dryRun"];
+const OFFICE_PUBLISH_KEYS = ["mode", "dryRun", "period_label", "changes", "change_lines", "groups"];
+function officeBody(text: unknown): { body: any; error: string | null } {
+  const no = (why: string) => ({ body: null, error: "the body must be a JSON object with a mode and that mode's keys only (" + why + "); nothing was sent or written" });
+  if (typeof text !== "string") return no("it could not be read");
+  let body: any;
+  try { body = JSON.parse(text.replace(/^\uFEFF/, "")); } catch (_e) { return no("it is not JSON"); }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return no("got " + (body === null ? "null" : Array.isArray(body) ? "an array" : typeof body));
+  if (typeof body.mode !== "string") return no(!("mode" in body) ? "no mode" : "mode is " + (body.mode === null ? "null" : Array.isArray(body.mode) ? "an array" : typeof body.mode));
+  const keys = body.mode === "publish" ? OFFICE_PUBLISH_KEYS : OFFICE_BODY_KEYS;
+  const other = Object.keys(body).filter((k) => keys.indexOf(k) < 0);
+  if (other.length) return no("unknown key " + JSON.stringify(other[0]).slice(0, 40) + " for mode " + JSON.stringify(body.mode).slice(0, 24));
+  return { body, error: null };
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -980,8 +1017,12 @@ serve(async (req) => {
       return json(401, { error: "unauthorized" });
     }
 
-    const body = await req.json().catch(() => ({}));
-    const mode: string = typeof body?.mode === "string" ? body.mode : "digest";
+    // the body as text, failing closed (officeBody): never req.json() with a {} fallback - a body that does not parse, or one
+    // without a string mode, must be a 400, not the live digest
+    const parsed = officeBody(await req.text().catch(() => null));
+    if (parsed.error) return json(400, { error: parsed.error });
+    const body = parsed.body;
+    const mode: string = body.mode;
     if (body && "dryRun" in body && typeof body.dryRun !== "boolean") {
       return json(400, { error: `dryRun must be a boolean; nothing was sent or written` });
     }

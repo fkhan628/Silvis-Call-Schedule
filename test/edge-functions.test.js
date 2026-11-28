@@ -65,6 +65,13 @@ const EAST_LISTS_PREPARED_SHA256 = "0291ed8628defb4abc666b8093cdbf0705a6c3ef0011
 // CRLF-normalised; the workdir's re-downloaded copy hashed by Claude Code afterwards - the same). The header keeps the
 // as-deployed "prepared, NOT deployed" wording; that wording flips, with this pin, at the next source change.
 const CLOSE_TEXT_DEPLOYED_SHA256 = "44039dc61c49a10deb8b0418c50ccc8da292a04e655130e4bf9a8aa29f780239";
+// 2026-11-28 (the body fails closed - README section 3, "2026-11-28 - the body fails closed"): office-notifications' source
+// changed, so it is no longer the deployed v7 (RETRY_DEPLOYED_SHA256 above stays the record of v7's bytes - the README quotes it,
+// and the deploy script's backup must equal it). Its header's retry wording flipped to deployed, as the flip rule says, and the
+// new paragraph reads "v8 on base v7 - prepared, NOT deployed". This is the PREPARED v8, raw bytes: the file deploy-office-body.sh
+// stages (its NEW hash) - a source change moves this pin and that script's hash together. It becomes the deployed pin at the
+// deploy's record step.
+const OFFICE_BODY_PREPARED_SHA256 = "91a209cd55f5adba017abddac7f84b4175be4fd67d5c4203733695508daa3da2";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -3897,7 +3904,9 @@ check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 and 
   assert.ok(s5.includes("v11 (live until the v12 deploy, 2026-11-28 15:41:28 UTC) read a body it could not parse as {}") && !s5.includes("v11 (live until the v12 deploy) reads"), "section 5's warning: v11 in the past since the deploy");
   {
     const s5i = readme.slice(readme.indexOf("## 5. Verification"), readme.indexOf("## 6. Invocations"));
-    assert.ok(s5i.includes("secret must never get one: office-notifications reads a broken body as `{}` - a") && s5i.includes("LIVE send, as daily-reminder v11 did (v12, live since 2026-11-28, answers it 400) -") && !s5i.includes("daily-reminder v11 and office-notifications read a broken"), "section 5's intro: office-notifications still reads a broken body as {}, daily-reminder v11 did");
+    // pin moved deliberately 11/28 (the body fails closed): the sentence names office-notifications v7 live until the v8 deploy
+    // and v8 answering 400 - it moves again at v8's record step
+    assert.ok(s5i.includes("secret must never get one: office-notifications v7 (live until the v8 deploy -\nsection 3) reads a broken body as `{}` - a LIVE send, as daily-reminder v11 did;\ndaily-reminder v12 (live since 2026-11-28) answers it 400, and so does\noffice-notifications v8 - so their lines past the gate use `Invoke-RestMethod") && !s5i.includes("daily-reminder v11 and office-notifications read a broken") && !s5i.includes("office-notifications reads a broken body as `{}`"), "section 5's intro: office-notifications v7 reads a broken body as {} until the v8 deploy, as daily-reminder v11 did; v12 and v8 answer it 400");
   }
   // review 2 (11/28): section 5 sends no JSON body past a gate as curl.exe -d '<json>' - Windows PowerShell 5.1 strips its inner
   // quotes, and office-notifications (like daily-reminder v11, live until 2026-11-28 15:41:28 UTC) reads the broken body as {}
@@ -5265,7 +5274,7 @@ check("10/26 retry: no PostgREST call of this project bypasses rest() - each fun
     assert.strictEqual(s.split("restFetchWithRetry(").length - 1, 2, n + ": restFetchWithRetry defined once, called once (by rest())");
   });
 });
-check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 11/11 and daily-reminder 11/27): the three untouched functions (calendar-sync v8 on v7, office-notifications v7 on v6, send-notification v13 on v12 - deployed 2026-10-27 03:30 UTC) keep the as-deployed 'prepared, NOT deployed' wording and are the deployed files RETRY_DEPLOYED_SHA256 pins (raw bytes); east-feed-refresh and daily-reminder (FLIPPED) record the retry as deployed and are their next version (NEXT: east-feed-refresh's prepared v3, daily-reminder's deployed v12)", () => {
+check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 11/11, daily-reminder 11/27 and office-notifications 11/28): the two untouched functions (calendar-sync v8 on v7, send-notification v13 on v12 - deployed 2026-10-27 03:30 UTC) keep the as-deployed 'prepared, NOT deployed' wording and are the deployed files RETRY_DEPLOYED_SHA256 pins (raw bytes); east-feed-refresh, daily-reminder and office-notifications (FLIPPED) record the retry as deployed and are their next version (NEXT: east-feed-refresh's prepared v3, daily-reminder's deployed v12, office-notifications' prepared v8)", () => {
   const V = { "calendar-sync": [8, 7], "daily-reminder": [11, 10], "east-feed-refresh": [2, 1], "office-notifications": [7, 6], "send-notification": [13, 12] };
   // pin moved deliberately 11/11 (Prompt 34): east-feed-refresh met its next source change (the East week lists, v3 prepared), so
   // ITS header flipped to the deployed wording and its source is the prepared v3 (EAST_LISTS_PREPARED_SHA256); the other four are
@@ -5273,8 +5282,11 @@ check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 
   // pin moved deliberately 11/27 (Prompt 38): daily-reminder met its next source change too (the close summary as text, v12
   // prepared) - its header flipped the same way and its source was the prepared v12; pin kept deliberately 11/28 (the deploy's
   // record step): that v12 is deployed (2026-11-28 15:41:28 UTC) - CLOSE_TEXT_DEPLOYED_SHA256
-  const FLIPPED = { "east-feed-refresh": "TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz;", "daily-reminder": "TOKEN RACE RETRY (2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz;" };
-  const NEXT = { "east-feed-refresh": EAST_LISTS_PREPARED_SHA256, "daily-reminder": CLOSE_TEXT_DEPLOYED_SHA256 };
+  // pin moved deliberately 11/28 (the body fails closed): office-notifications met its next source change too (v8 prepared) - its
+  // header flipped the same way (v7 deployed 2026-10-27 03:30:15 UTC, the deploy's third) and its source is the prepared v8
+  // (OFFICE_BODY_PREPARED_SHA256)
+  const FLIPPED = { "east-feed-refresh": "TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz;", "daily-reminder": "TOKEN RACE RETRY (2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz;", "office-notifications": "TOKEN RACE RETRY (2026-10-26; v7 - deployed 2026-10-27 03:30:15 UTC by Faraz;" };
+  const NEXT = { "east-feed-refresh": EAST_LISTS_PREPARED_SHA256, "daily-reminder": CLOSE_TEXT_DEPLOYED_SHA256, "office-notifications": OFFICE_BODY_PREPARED_SHA256 };
   Object.entries(RETRY_FNS).forEach(([n, s]) => {
     const head = s.slice(0, s.indexOf("\nimport "));
     const [v, base] = V[n];
@@ -5283,7 +5295,7 @@ check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 
     if (FLIPPED[n]) {
       assert.strictEqual(head.split(FLIPPED[n]).length - 1, 1, n + ": the header records the retry (v" + v + ") as deployed - once");
       assert.strictEqual(head.split(pending).length - 1, 0, n + ": the as-deployed 'prepared, NOT deployed' wording for the retry is gone (the flip)");
-      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), NEXT[n], n + ": the source is its next version (east-feed-refresh v3, the East week lists - prepared; daily-reminder v12, the close summary as text - deployed 2026-11-28 15:41:28 UTC) - RETRY_DEPLOYED_SHA256 keeps the retry's deployed bytes as the record");
+      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), NEXT[n], n + ": the source is its next version (east-feed-refresh v3, the East week lists - prepared; daily-reminder v12, the close summary as text - deployed 2026-11-28 15:41:28 UTC; office-notifications v8, the body fails closed - prepared) - RETRY_DEPLOYED_SHA256 keeps the retry's deployed bytes as the record");
       return;
     }
     assert.strictEqual(head.split(pending).length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");
@@ -5359,6 +5371,321 @@ check("10/26 retry: the README carries the deploy record - section 3's '2026-10-
   assert.ok(gateRow.includes("v2 (the PGRST303 retry - the gate unchanged) since 2026-10-27 03:30:13 UTC"), "the gate table's east-feed-refresh row names v2");
   assert.ok(s7.replace(/\s+/g, " ").includes("(the `@restRetry` block and `rest()` sending through it, as in `d318cd9`)"), "section 7: keeping the retry means the block and rest() through it");
   assert.ok(!flat.includes("`attempt 3 of 3` lines show") && flat.includes("never as an `attempt 3 of 3` line"), "no 'attempt 3 of 3' line is promised (the block warns only before a wait)");
+});
+
+/* ---- 2026-11-28 (the body fails closed - README section 3, "2026-11-28 - the body fails closed"; office-notifications v8 on
+   base v7): the REAL office-notifications handler, types stripped, against a fake Silvis project (PostgREST + GoTrue) and a fake
+   Resend. v7 read its body with req.json() and a {} fallback, and a missing or non-string mode as digest, so a body it could not
+   parse (a curl.exe -d body from Windows PowerShell 5.1 arrives without its inner quotes), an empty body, [], {}, {"mode":1} or a
+   typo of dryRun ran the LIVE digest - a mail to every active office contact and the baseline rewritten (run below against v7's
+   reading: ON_V7_LINES put back over v8's, which leaves v7's code line for line plus the unused officeBody). v8 reads the text
+   through officeBody: a JSON object with a string mode and that mode's keys only - every other body a 400 before any read or
+   send. ---- */
+const ON_URL = "https://fake-office.supabase.test";
+const ON_KEY = "service-role-key-for-tests";
+const ON_NOW = "2026-11-30T11:00:05Z";   // Monday 05:00 CST - the weekly digest's minute (silvis-office-digest-weekly, 0 11 * * 1)
+const ON_V7_LINES = "    const body = await req.json().catch(() => ({}));\n    const mode: string = typeof body?.mode === \"string\" ? body.mode : \"digest\";\n";
+const ON_V8_LINES = /    \/\/ the body as text, failing closed \(officeBody\)[^\n]*\n[^\n]*\n    const parsed = officeBody\(await req\.text\(\)\.catch\(\(\) => null\)\);\n    if \(parsed\.error\) return json\(400, \{ error: parsed\.error \}\);\n    const body = parsed\.body;\n    const mode: string = body\.mode;\n/;
+const ON_GATE_READS = ["GET /auth/v1/user", "GET user_profiles"];
+const onJsCache = {};
+function onHandlerJs(which) {
+  if (onJsCache[which]) return onJsCache[which];
+  const { stripTypeScriptTypes } = require("node:module");
+  const imp = /^import \{ serve \} from "https:\/\/deno\.land\/std@[0-9.]+\/http\/server\.ts";$/m;
+  assert.ok(imp.test(onSrc) && (onSrc.match(/^import /mg) || []).length === 1, "office-notifications: the one import is the std serve");
+  let src = onSrc.replace(imp, "");
+  if (which === "v7") {
+    assert.ok(ON_V8_LINES.test(src), "v8's body lines stand where v7's did (v7's reading puts its own back over them)");
+    src = src.replace(ON_V8_LINES, ON_V7_LINES);
+  }
+  const orig = process.emitWarning;
+  process.emitWarning = function (w, ...rest) { const t = typeof rest[0] === "string" ? rest[0] : rest[0] && rest[0].type; if (t === "ExperimentalWarning") return; return orig.call(process, w, ...rest); };
+  try { onJsCache[which] = stripTypeScriptTypes(src); } finally { process.emitWarning = orig; }
+  return onJsCache[which];
+}
+// today (Central) is Mon 2026-11-30; Tue 12/1's primary moved from Khan to Burchett since the last digest - one change to report
+function onWorld(over) {
+  const w = Object.assign({
+    roster: [["s1", "Khan", "FAK"], ["s2", "Burchett", "MAB"], ["s3", "Acton", "BDA"], ["s4", "Philip", "AFP"], ["s5", "Fierce", "NF"], ["s6", "Sarkar", "SRK"]].map(([id, name, code]) => ({ id, name, code, active: true })),
+    days: [{ day: "2026-12-01", primary_id: "s2", backup_id: "s3", external_cover: null }, { day: "2026-12-02", primary_id: "s4", backup_id: "s1", external_cover: null }],
+    timeOff: [{ person_id: "s3", start_date: "2026-12-20", end_date: "2026-12-27" }],
+    baseline: { v: 2, days: { "2026-12-01": { p: "s1", b: "s3", x: null }, "2026-12-02": { p: "s4", b: "s1", x: null } }, vacations: { s3: [["2026-12-20", "2026-12-27"]] }, vacSource: "time_off", window: { from: "2026-11-23", to: "2027-12-28" }, captured_at: "2026-11-23T11:00:04.000Z" },
+    contacts: [{ id: "c1", name: "Office One", email: "office1@example.org" }, { id: "c2", name: "Office Two", email: "office2@example.org" }],
+    // a bearer token -> its GoTrue user and that user's user_profiles role
+    users: { "jwt-scheduler": { id: "u-sched", email: "scheduler@example.org", role: "scheduler" }, "jwt-viewer": { id: "u-view", email: "viewer@example.org", role: "viewer" } },
+  }, over || {});
+  w.calls = []; w.mails = []; w.states = []; w.logs = []; w.bodyReads = 0;
+  return w;
+}
+function onFetch(w) {
+  return async (url, init) => {
+    const o = init || {}, u = new URL(String(url)), method = String(o.method || "GET").toUpperCase();
+    const hdr = (k) => { const h = o.headers || {}; const key = Object.keys(h).find((x) => x.toLowerCase() === k.toLowerCase()); return key ? h[key] : null; };
+    w.calls.push(method + " " + (u.origin === ON_URL ? "" : u.origin + " ") + u.pathname.replace(/^\/rest\/v1\//, ""));
+    const out = (x, status) => new Response(x === null ? null : JSON.stringify(x), { status: status || 200, headers: { "Content-Type": "application/json" } });
+    if (u.href === ON_URL + "/auth/v1/user") {
+      const usr = w.users[String(hdr("Authorization") || "").replace(/^Bearer\s+/i, "")];
+      return usr ? out({ id: usr.id, email: usr.email }) : out({ code: 401, msg: "invalid JWT" }, 401);
+    }
+    if (u.href === "https://api.resend.com/emails") { const b = JSON.parse(o.body); w.mails.push({ to: b.to[0], subject: b.subject }); return out({ id: "mail-" + w.mails.length }); }
+    if (u.origin === ON_URL && u.pathname.indexOf("/rest/v1/") === 0) {
+      assert.ok(hdr("apikey") === ON_KEY && hdr("Authorization") === "Bearer " + ON_KEY, "every PostgREST call with the service role: " + u.pathname);
+      const table = u.pathname.slice(9), q = u.searchParams;
+      if (method === "GET" && table === "user_profiles") { const id = String(q.get("id") || "").replace(/^eq\./, ""); const usr = Object.values(w.users).find((x) => x.id === id); return out(usr ? [{ role: usr.role }] : []); }
+      if (method === "GET" && table === "call_schedule_data") return out([{ data: { roster: w.roster, surgeonRules: {} } }]);
+      if (method === "GET" && table === "schedule_days") return out(w.days);
+      if (method === "GET" && table === "time_off") return out(w.timeOff);
+      if (method === "GET" && table === "office_notification_state") return out(w.baseline ? [{ snapshot: w.baseline, last_digest_at: "2026-11-23T11:00:05Z" }] : []);
+      if (method === "POST" && table === "office_notification_state") { w.states.push(JSON.parse(o.body)); return new Response(null, { status: 201 }); }
+      if (method === "GET" && table === "office_contacts") return out(w.contacts);
+    }
+    throw new Error("the fake does not serve " + method + " " + u.href);
+  };
+}
+// raw: a string goes on the wire as it is (a mangled PowerShell body, a byte-order mark), anything else as its JSON. opts: jwt (a
+// session token instead of the cron secret), secret (null = no header), env, v7 (v7's reading), method, now
+async function onCall(w, raw, opts) {
+  const o = opts || {};
+  const env = Object.assign({ SUPABASE_URL: ON_URL, SUPABASE_SERVICE_ROLE_KEY: ON_KEY, RESEND_API_KEY: "resend-key-for-tests", NOTIFICATION_FROM_EMAIL: "Silvis Test <sender@example.org>", CRON_SECRET: SECRET }, o.env || {});
+  let handler = null;
+  const say = (...a) => w.logs.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+  const Deno = { env: { get: (k) => (Object.prototype.hasOwnProperty.call(env, k) ? env[k] : undefined) } };
+  new Function("Deno", "serve", "fetch", "console", "Date", onHandlerJs(o.v7 ? "v7" : "v8"))(Deno, (h) => { handler = h; }, onFetch(w), { log: say, warn: say, error: say, info: say }, erFakeDate(o.now || ON_NOW));
+  assert.strictEqual(typeof handler, "function", "the handler registered with serve");
+  const headers = new Headers({ "content-type": "application/json" });
+  if (o.jwt) headers.set("authorization", "Bearer " + o.jwt);
+  else if (o.secret !== null) headers.set("x-cron-secret", o.secret === undefined ? SECRET : o.secret);
+  // the runtime's Request.text() is a UTF-8 decode, which drops ONE leading byte-order mark: so does this (json() is v7's reader)
+  const decoded = new TextDecoder().decode(new TextEncoder().encode(typeof raw === "string" ? raw : JSON.stringify(raw)));
+  const req = { method: o.method || "POST", url: ON_URL + "/functions/v1/office-notifications", headers, text: async () => { w.bodyReads++; return decoded; }, json: async () => { w.bodyReads++; return JSON.parse(decoded); } };
+  const res = await handler(req);
+  const text = await res.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch (e) { body = null; }
+  return { status: res.status, text, body };
+}
+const onNothing = (w, label, reads) => assert.deepStrictEqual([w.calls, w.mails.length, w.states.length], [reads || [], 0, 0], label + ": nothing read past the gate, nothing sent, no baseline write - " + JSON.stringify(w.calls).slice(0, 200));
+// jsonb's text form, what pg_net sends: keys shorter first, then in byte order; ": " and ", " between
+const onJsonbText = (v) => (v && typeof v === "object" && !Array.isArray(v)) ? "{" + Object.keys(v).sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0)).map((k) => JSON.stringify(k) + ": " + onJsonbText(v[k])).join(", ") + "}" : Array.isArray(v) ? "[" + v.map(onJsonbText).join(", ") + "]" : JSON.stringify(v);
+// the app's publish POST (index-source.html triggerPublishNotify): the keys of its body literal, in order
+function onAppPublishKeys() {
+  const at = appSrc.indexOf("const res = await authFetch(`${EDGE_FN_BASE}/office-notifications`, {");
+  const b0 = appSrc.indexOf("body: JSON.stringify({", at), b1 = appSrc.indexOf("\n        }),\n", b0);
+  assert.ok(at > 0 && b0 > at && b0 - at < 200 && b1 > b0, "index-source.html: the publish POST and its body literal");
+  return appSrc.slice(b0 + "body: JSON.stringify({".length, b1).split("\n").map((l) => (l.match(/^\s+([A-Za-z_$][\w$]*):/) || [])[1]).filter(Boolean);
+}
+// README section 4: the weekly digest job's body
+function onCronBody() {
+  const s4 = readme.slice(readme.indexOf("## 4. pg_cron schedules"), readme.indexOf("## 5. Verification"));
+  const i = s4.indexOf("'silvis-office-digest-weekly',"), blk = s4.slice(i, s4.indexOf("$$\n);", i));
+  assert.ok(i > 0 && blk.includes("/functions/v1/office-notifications',"), "section 4: the weekly digest job posts to office-notifications");
+  const m = blk.match(/body\s+:= '([^']*)'::jsonb/);
+  assert.ok(m, "section 4: the job's body");
+  return m[1];
+}
+// README section 3: the v8 record
+function onRecord() {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i = s3.indexOf("### 2026-11-28 - the body fails closed (office-notifications v8)"), j = s3.indexOf("\n### ", i + 10);
+  assert.ok(i > 0, "section 3 has the record");
+  return s3.slice(i, j < 0 ? undefined : j);
+}
+check("11/28 (the body fails closed): office-notifications v8 reads its body through officeBody over req.text() - defined once, called once, between the gate and the mode checks, its error a 400; no req.json in the code; one leading byte-order mark stripped through the six-character ASCII escape (the file stays ASCII); the keys are mode and dryRun, and for publish also exactly the app's (index-source.html's publish body literal)", () => {
+  const code = onSrc.replace(/\/\/[^\n]*/g, "");
+  assert.ok(!/req\.json/.test(code), "no req.json anywhere in the code (comments stripped)");
+  assert.strictEqual(code.split("officeBody(").length - 1, 2, "officeBody defined once and called once");
+  const h = onSrc.slice(onSrc.indexOf("serve(async (req) =>"));
+  assert.ok(ON_V8_LINES.test(h), "the handler: the body read as text through officeBody, its error a 400, then the mode from the body");
+  const iAuth = h.indexOf("const caller = await authorize(req);"), iBody = h.indexOf("officeBody(await req.text()"), iDry = h.indexOf("\"dryRun\" in body"), iWork = h.indexOf("const today = centralYmd();");
+  assert.ok(iAuth > 0 && iBody > iAuth && iDry > iBody && iWork > iDry, "the gate, then the body, then the mode checks, then the work");
+  const a = onSrc.indexOf("function officeBody("), fb = onSrc.slice(a, onSrc.indexOf("\n}\n", a) + 2);
+  assert.ok(a > 0 && fb.includes("JSON.parse(text.replace(/^" + String.fromCharCode(92) + "uFEFF/, \"\"))"), "one leading byte-order mark stripped (the ASCII escape)");
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(onSrc), "the file is ASCII (a raw U+FEFF must never stand in for the escape)");
+  const list = (name) => { const m = onSrc.match(new RegExp("^const " + name + " = (\\[[^\\]\\n]*\\]);$", "m")); assert.ok(m, name + " is one array literal"); return JSON.parse(m[1]); };
+  const appKeys = onAppPublishKeys();
+  assert.deepStrictEqual(appKeys, ["mode", "period_label", "changes", "change_lines", "groups"], "the app's publish body carries these keys");
+  assert.deepStrictEqual(list("OFFICE_BODY_KEYS"), ["mode", "dryRun"], "digest / rebaseline / test: mode and dryRun");
+  assert.deepStrictEqual(list("OFFICE_PUBLISH_KEYS"), ["mode", "dryRun"].concat(appKeys.filter((k) => k !== "mode")), "publish: mode, dryRun and the app's keys - exactly");
+  assert.ok(fb.includes("const keys = body.mode === \"publish\" ? OFFICE_PUBLISH_KEYS : OFFICE_BODY_KEYS;"), "the publish keys for mode publish only");
+  assert.ok(appSrc.includes("const res = await authFetch(`${EDGE_FN_BASE}/office-notifications`, { method: \"POST\", body: JSON.stringify({ mode: \"digest\" }) });"), "index-source.html: the digest button's body is { mode: \"digest\" }");
+  assert.strictEqual(appSrc.split("${EDGE_FN_BASE}/office-notifications`").length - 1, 2, "the app calls office-notifications from those two places only");
+});
+acheck("11/28 (the body fails closed): the REAL office-notifications handler (v8) answers 400 before any read or send for every body that is not a JSON object with a string mode and that mode's keys only - text that does not parse (Windows PowerShell 5.1's {mode:digest,dryRun:true}), an empty body, null, an array, a scalar, no mode ({} - v7's live digest), a mode that is not a string, a key its mode does not take (a typo: dryrun; a publish key on a digest; __proto__); on the cron path nothing is fetched, on a scheduler session only the gate's two reads; no mail, no baseline write; each 400 says why. The gate still comes first (401, the body unread); v7's reading ran the LIVE digest on six of these bodies", async () => {
+  const BOM = String.fromCharCode(0xfeff);
+  const BAD = [
+    ["PS 5.1's {mode:digest,dryRun:true}", "{mode:digest,dryRun:true}", "it is not JSON"],
+    ["PS 5.1's {mode:digest}", "{mode:digest}", "it is not JSON"],
+    ["PS 5.1's {mode:rebaseline}", "{mode:rebaseline}", "it is not JSON"],
+    ["truncated JSON", "{\"mode\":\"dig", "it is not JSON"],
+    ["an empty body", "", "it is not JSON"],
+    ["white space only", " \r\n", "it is not JSON"],
+    ["a byte-order mark only", BOM, "it is not JSON"],
+    ["null", "null", "got null"],
+    ["an array", "[]", "got an array"],
+    ["an array holding a good body", "[{\"mode\":\"digest\",\"dryRun\":true}]", "got an array"],
+    ["a string", "\"digest\"", "got string"],
+    ["a number", "1", "got number"],
+    ["true", "true", "got boolean"],
+    ["{} (v7: the live digest)", "{}", "no mode"],
+    ["dryRun without a mode", "{\"dryRun\":true}", "no mode"],
+    ["mode null", "{\"mode\":null,\"dryRun\":true}", "mode is null"],
+    ["mode a number", "{\"mode\":1}", "mode is number"],
+    ["mode true", "{\"mode\":true}", "mode is boolean"],
+    ["mode an array", "{\"mode\":[\"digest\"],\"dryRun\":true}", "mode is an array"],
+    ["mode an object", "{\"mode\":{\"digest\":true}}", "mode is object"],
+    ["a typo of dryRun", "{\"mode\":\"digest\",\"dryrun\":true}", "unknown key \"dryrun\" for mode \"digest\""],
+    ["dry_run", "{\"mode\":\"digest\",\"dry_run\":true}", "unknown key \"dry_run\" for mode \"digest\""],
+    ["a key beside a good dry run (the README's proof)", "{\"mode\":\"digest\",\"dryRun\":true,\"proof\":\"v8\"}", "unknown key \"proof\" for mode \"digest\""],
+    ["a publish key on a digest", "{\"mode\":\"digest\",\"changes\":[]}", "unknown key \"changes\" for mode \"digest\""],
+    ["a publish key on rebaseline", "{\"mode\":\"rebaseline\",\"period_label\":\"Dec\"}", "unknown key \"period_label\" for mode \"rebaseline\""],
+    ["a publish key on test", "{\"mode\":\"test\",\"groups\":[]}", "unknown key \"groups\" for mode \"test\""],
+    ["a typo of a publish key", "{\"mode\":\"publish\",\"period_lable\":\"Dec\"}", "unknown key \"period_lable\" for mode \"publish\""],
+    ["__proto__ as a key", "{\"mode\":\"digest\",\"__proto__\":{\"dryRun\":true}}", "unknown key \"__proto__\" for mode \"digest\""],
+  ];
+  for (const [label, raw, why] of BAD) {
+    for (const via of ["cron", "session"]) {
+      const w = onWorld(), tag = label + " (" + via + ")";
+      const r = await onCall(w, raw, via === "session" ? { jwt: "jwt-scheduler" } : {});
+      assert.strictEqual(r.status, 400, tag + ": " + r.status + " " + r.text.slice(0, 200));
+      assert.deepStrictEqual(r.body, { error: "the body must be a JSON object with a mode and that mode's keys only (" + why + "); nothing was sent or written" }, tag);
+      assert.strictEqual(w.bodyReads, 1, tag + ": the body read once");
+      onNothing(w, tag, via === "session" ? ON_GATE_READS : []);
+    }
+  }
+  // the gate stays first: without the secret or a scheduler session the answer is the 401, the body unread, whatever it holds
+  for (const [label, opts, reads] of [["no header", { secret: null }, []], ["a wrong secret", { secret: "b-32-character-secret-for-tests!" }, []], ["an empty secret header", { secret: "" }, []],
+    ["CRON_SECRET unset", { env: { CRON_SECRET: "" } }, []], ["a viewer session", { jwt: "jwt-viewer" }, ON_GATE_READS], ["a token GoTrue refuses", { jwt: "jwt-nobody" }, ["GET /auth/v1/user"]]]) {
+    for (const raw of ["{mode:digest,dryRun:true}", "{}", "{\"mode\":\"digest\"}"]) {
+      const w = onWorld(), tag = label + " + " + raw;
+      const r = await onCall(w, raw, opts);
+      assert.deepStrictEqual([r.status, r.body], [401, { error: "unauthorized" }], tag);
+      assert.strictEqual(w.bodyReads, 0, tag + ": the body never read");
+      onNothing(w, tag, reads);
+    }
+  }
+  // v7's reading (its two body lines put back): six of the bodies above ran the LIVE digest - a mail per active contact, the
+  // baseline rewritten - which is what v8 stops
+  for (const raw of ["{mode:digest,dryRun:true}", "", "[]", "{}", "{\"mode\":1}", "{\"mode\":\"digest\",\"dryrun\":true}"]) {
+    const w = onWorld(), tag = "v7 + " + JSON.stringify(raw);
+    const r = await onCall(w, raw, { v7: true });
+    assert.ok(r.status === 200 && r.body && r.body.mode === "digest" && r.body.sent === 2 && !("dryRun" in r.body), tag + ": the live digest - " + r.text.slice(0, 160));
+    assert.deepStrictEqual([w.mails.length, w.states.length], [2, 1], tag + ": two mails, the baseline rewritten");
+  }
+});
+acheck("11/28 (the body fails closed): every real caller's body passes the REAL v8 handler - the weekly cron's {\"mode\":\"digest\"} (README section 4) in jsonb's text form (the live digest: one mail per active contact, the baseline rewritten once), the app's \"Test the weekly digest now\" ({ mode: \"digest\" }) and its publish (exactly the keys index-source.html sends), the README's dry run (as typed; through PowerShell's pipe with a byte-order mark and CRLF; with a double byte-order mark; in jsonb's text form), rebaseline and test; the checks after the body answer as in v7 (dryRun not a boolean 400, dryRun outside digest 400, publish / test / an unknown mode on the cron path 403, an unknown mode on a session 400), each with nothing read past the gate", async () => {
+  const BOM = String.fromCharCode(0xfeff);
+  // the weekly cron: section 4's body, which pg_net sends as jsonb's text form (a space after the colon)
+  const cron = onCronBody();
+  assert.strictEqual(cron, "{\"mode\":\"digest\"}", "README section 4: the weekly job sends mode digest");
+  assert.strictEqual(onJsonbText(JSON.parse(cron)), "{\"mode\": \"digest\"}", "its jsonb text form");
+  let w = onWorld();
+  let r = await onCall(w, onJsonbText(JSON.parse(cron)));
+  assert.ok(r.status === 200 && r.body.mode === "digest" && r.body.total_day_changes === 1 && r.body.sent === 2 && r.body.failed === 0 && r.body.snapshot_updated === true, "the cron's live digest: " + r.text.slice(0, 300));
+  assert.deepStrictEqual(w.mails, [{ to: "office1@example.org", subject: "Silvis Call Schedule - Weekly Update" }, { to: "office2@example.org", subject: "Silvis Call Schedule - Weekly Update" }], "one mail per active contact");
+  assert.strictEqual(w.states.length, 1, "the baseline rewritten once");
+  // the app's Settings > "Test the weekly digest now": { mode: "digest" } on the scheduler's session - a live digest, as in v7
+  w = onWorld();
+  r = await onCall(w, { mode: "digest" }, { jwt: "jwt-scheduler" });
+  assert.ok(r.status === 200 && r.body.sent === 2 && w.mails.length === 2 && w.states.length === 1, "the button's live digest: " + r.text.slice(0, 200));
+  assert.deepStrictEqual(w.calls.slice(0, 2), ON_GATE_READS, "the gate's two reads first");
+  // the app's publish (Publish dialog > Send): a body with exactly the keys of its literal in index-source.html
+  const pub = { mode: "publish", period_label: "Dec 1 - Dec 2", changes: [{ day: "2026-12-01", role: "primary", from: "s1", to: "s2", from_name: "Khan", to_name: "Burchett", text: "12/1 P Khan -> Burchett" }], change_lines: ["12/1 P Khan -> Burchett"], groups: [{ label: "December 2026", lines: ["12/1 P Khan -> Burchett"] }] };
+  assert.deepStrictEqual(Object.keys(pub), onAppPublishKeys(), "the body below carries exactly the app's keys, in its order");
+  w = onWorld();
+  r = await onCall(w, pub, { jwt: "jwt-scheduler" });
+  assert.ok(r.status === 200 && r.body.mode === "publish" && r.body.changes_rendered === 1 && r.body.changes_dropped === 0 && r.body.sent === 2, "the publish: " + r.text.slice(0, 200));
+  assert.deepStrictEqual(w.mails.map((m) => m.subject), ["New Silvis Call Schedule Published - Dec 1 - Dec 2", "New Silvis Call Schedule Published - Dec 1 - Dec 2"], "one publish notice per active contact");
+  assert.strictEqual(w.states.length, 1, "the baseline rewritten after the publish");
+  // the README's dry run: as typed (Invoke-RestMethod passes it as written), through PowerShell's pipe (a byte-order mark, CRLF),
+  // with a double byte-order mark (the runtime's decode drops one, officeBody the other) and in jsonb's text form (pg_net)
+  for (const [label, raw] of [["as typed", "{\"mode\":\"digest\",\"dryRun\":true}"], ["a byte-order mark and CRLF", BOM + "{\"mode\":\"digest\",\"dryRun\":true}\r\n"], ["a double byte-order mark", BOM + BOM + "{\"mode\":\"digest\",\"dryRun\":true}"], ["jsonb's text form", "{\"mode\": \"digest\", \"dryRun\": true}"]]) {
+    w = onWorld();
+    r = await onCall(w, raw);
+    assert.ok(r.status === 200 && r.text.startsWith("{\"mode\":\"digest\",\"dryRun\":true,") && r.body.would_send === 2 && r.body.sent === 0, label + ": the dry run - " + r.text.slice(0, 160));
+    assert.deepStrictEqual([w.mails.length, w.states.length], [0, 0], label + ": a dry run sends and writes nothing");
+  }
+  // rebaseline (the cron secret): the baseline written, nothing sent; test (a session): one mail, to the caller only
+  w = onWorld();
+  r = await onCall(w, { mode: "rebaseline" });
+  assert.ok(r.status === 200 && r.body.mode === "rebaseline" && r.body.snapshot_updated === true && r.body.sent === 0 && w.mails.length === 0 && w.states.length === 1, "rebaseline: " + r.text.slice(0, 160));
+  w = onWorld();
+  r = await onCall(w, { mode: "test" }, { jwt: "jwt-scheduler" });
+  assert.ok(r.status === 200 && r.body.mode === "test" && r.body.sent === 1, "test: " + r.text.slice(0, 160));
+  assert.deepStrictEqual(w.mails, [{ to: "scheduler@example.org", subject: "Silvis Call Schedule - office notifications test" }], "test: one mail, to the calling scheduler");
+  assert.deepStrictEqual(w.calls, ON_GATE_READS.concat(["POST https://api.resend.com /emails"]), "test: the gate's two reads, then the one mail");
+  // the checks after the body are v7's, unchanged - each answered with nothing read past the gate
+  for (const [label, raw, opts, status, error] of [
+    ["dryRun a string", { mode: "digest", dryRun: "yes" }, {}, 400, "dryRun must be a boolean; nothing was sent or written"],
+    ["dryRun null", { mode: "digest", dryRun: null }, {}, 400, "dryRun must be a boolean; nothing was sent or written"],
+    ["dryRun with rebaseline", { mode: "rebaseline", dryRun: true }, {}, 400, "dryRun is only supported for mode=digest (got mode=rebaseline); nothing was sent or written"],
+    ["dryRun with publish (dryRun is a publish key, so this stays v7's own 400)", { mode: "publish", dryRun: true }, { jwt: "jwt-scheduler" }, 400, "dryRun is only supported for mode=digest (got mode=publish); nothing was sent or written"],
+    ["publish on the cron path", { mode: "publish" }, {}, 403, "mode=publish requires a scheduler session, not the cron secret"],
+    ["test on the cron path", { mode: "test" }, {}, 403, "mode=test requires a scheduler session, not the cron secret"],
+    ["an unknown mode on the cron path", { mode: "nope" }, {}, 403, "mode=nope requires a scheduler session, not the cron secret"],
+    ["an unknown mode on a session", { mode: "nope" }, { jwt: "jwt-scheduler" }, 400, "Unknown mode: nope"],
+  ]) {
+    const w2 = onWorld();
+    const r2 = await onCall(w2, raw, opts);
+    assert.deepStrictEqual([r2.status, r2.body], [status, { error }], label);
+    onNothing(w2, label, opts.jwt ? ON_GATE_READS : []);
+  }
+});
+acheck("11/28 (the body fails closed): the README's pg_net proof binds - its first body (a key its mode does not take beside a good dry run) is refused by v8 (400, the first read-back's pattern) while v7's reading answers it as a plain dry run (nothing sent, nothing written - safe whichever version answers); its second body is the dry run on both (the second pattern); neither pattern matches a live digest's answer; section 5's v8 line sends that same first body", async () => {
+  const rec = onRecord();
+  const bodies = [...rec.matchAll(/body := '([^']*)'::jsonb/g)].map((m) => m[1]);
+  assert.deepStrictEqual(bodies, ["{\"mode\":\"digest\",\"dryRun\":true,\"proof\":\"v8\"}", "{\"mode\":\"digest\",\"dryRun\":true}"], "the proof's two bodies");
+  const likes = [...rec.matchAll(/content::text like '([^']*)'/g)].map((m) => m[1]);
+  assert.deepStrictEqual(likes, ["{\"error\":\"the body must be a JSON object with a mode%", "{\"mode\":\"digest\",\"dryRun\":true,%"], "the two read-back patterns");
+  const [first, second] = bodies.map((b) => onJsonbText(JSON.parse(b)));
+  let w = onWorld(), r = await onCall(w, first);
+  assert.ok(r.status === 400 && zLike(likes[0], r.text) && !zLike(likes[1], r.text) && r.body.error.endsWith("(unknown key \"proof\" for mode \"digest\"); nothing was sent or written"), "v8 refuses the first body: " + r.text.slice(0, 200));
+  onNothing(w, "v8 + the first body");
+  w = onWorld(); r = await onCall(w, first, { v7: true });
+  assert.ok(r.status === 200 && zLike(likes[1], r.text) && !zLike(likes[0], r.text), "v7 answers the first body as a plain dry run: " + r.text.slice(0, 160));
+  assert.deepStrictEqual([w.mails.length, w.states.length], [0, 0], "v7 + the first body: nothing sent, nothing written");
+  for (const v7 of [false, true]) {
+    w = onWorld(); r = await onCall(w, second, { v7 });
+    assert.ok(r.status === 200 && zLike(likes[1], r.text) && !zLike(likes[0], r.text) && w.mails.length === 0 && w.states.length === 0, (v7 ? "v7" : "v8") + ": the second body is the dry run - " + r.text.slice(0, 160));
+  }
+  for (const world of [onWorld(), onWorld({ baseline: null })]) {
+    r = await onCall(world, onJsonbText(JSON.parse(onCronBody())));
+    assert.ok(r.status === 200 && !zLike(likes[0], r.text) && !zLike(likes[1], r.text), "a live digest's answer matches neither pattern: " + r.text.slice(0, 120));
+  }
+  {
+    // with no change since the last notice the live digest answers "No changes" - no pattern either
+    const quiet = onWorld({ days: [{ day: "2026-12-01", primary_id: "s1", backup_id: "s3", external_cover: null }, { day: "2026-12-02", primary_id: "s4", backup_id: "s1", external_cover: null }] });
+    r = await onCall(quiet, onJsonbText(JSON.parse(onCronBody())));
+    assert.ok(r.status === 200 && r.body.message === "No changes since last digest" && !zLike(likes[0], r.text) && !zLike(likes[1], r.text) && quiet.mails.length === 0, "a quiet live digest: " + r.text.slice(0, 120));
+  }
+  const s5 = readme.slice(readme.indexOf("### office-notifications\n```powershell"), readme.indexOf("### send-notification"));
+  assert.ok(s5.split("\n").some((l) => l.startsWith("try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri \"$URL/office-notifications\" -Headers @{ \"x-cron-secret\" = $SECRET } -ContentType \"application/json\" -Body '" + bodies[0] + "').StatusCode }") && l.endsWith("# 400 (v7: 200)")), "section 5's v8 line sends the proof's first body and expects 400 (v7: 200)");
+});
+check("11/28 (the body fails closed): edge-functions/README.md - section 3's '2026-11-28 - the body fails closed (office-notifications v8)' (after the v12 record) is PREPARED, NOT deployed and names why (v7's req.json with a {} fallback, the bodies that ran the live digest), the change (officeBody, the keys per mode, the 400's words, the gate first), the callers, the order (daily-reminder v12 deployed, not Monday 10:50-12:05 UTC), the deploy script and what it checks (the deployed v7's bytes, DEPLOY, --no-verify-jwt --use-api), the proof (pg_net, the Vault secret) and the rollback; the slug row names v7 deployed and v8 prepared; section 5's office warning names v7 and v8; section 7 the rollback; ASCII", () => {
+  const rec = onRecord(), flat = rec.replace(/\s+/g, " ");
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  assert.ok(s3.indexOf("### 2026-11-28 - the body fails closed (office-notifications v8)") > s3.indexOf("### 2026-11-27 - the close summary as text"), "the record follows the v12 record");
+  assert.ok(flat.includes("*Status: PREPARED, NOT deployed - `office-notifications` v8 on base v7.") && !/Status: DEPLOYED/.test(flat), "Status: PREPARED, NOT deployed");
+  [
+    "v7 reads its body with `req.json()` and a `{}` fallback, and a missing or non-string `mode` as `digest`",
+    "`{mode:digest,dryRun:true}`", "`{}`, `{\"mode\":1}` and a typo of `dryRun`",
+    "(`officeBody`, the rule of east-feed-refresh's `refreshBody` and daily-reminder's `reminderBody`)",
+    "`mode` and `dryRun` for `digest`, `rebaseline` and `test`; for `publish` also the app's four, `period_label`, `changes`, `change_lines` and `groups`",
+    "answers 400 `{\"error\":\"the body must be a JSON object with a mode and that mode's keys only (<why>); nothing was sent or written\"}`",
+    "the gate stays ahead of the body",
+    "`silvis-office-digest-weekly` (section 4: `'{\"mode\":\"digest\"}'::jsonb`; pg_net sends jsonb's text form, `{\"mode\": \"digest\"}`)",
+    "`daily-reminder` v12 is deployed (2026-11-28 15:41:28 UTC, the record above)", "not on a Monday from 10:50 to 12:05 UTC",
+    "`deploy-office-body.sh`", "`--no-verify-jwt --use-api`", "DEPLOY in capital letters",
+    "`" + RETRY_DEPLOYED_SHA256["office-notifications"].slice(0, 12) + "...`",
+    "vault.decrypted_secrets where name = 'silvis_cron_secret'", "never a `curl.exe -d` body from PowerShell 5.1",
+    "Rollback: section 7 (the backup the script took is the deployed v7",
+  ].forEach((s) => assert.ok(flat.includes(s), "the record names " + s));
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
+  const row = readme.split("\n").find((l) => l.startsWith("| `office-notifications` |")) || "";
+  assert.ok(row.includes("v7 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:15 UTC") && row.includes("v8 (the body fails closed, section 3's \"2026-11-28 - the body fails closed\") PREPARED, NOT deployed"), "the slug row: v7 deployed, v8 prepared");
+  const s5 = readme.slice(readme.indexOf("### office-notifications\n```powershell"), readme.indexOf("### send-notification"));
+  assert.ok(s5.includes("# !! ({mode:digest,dryRun:true}). v7 (live until the v8 deploy) reads a body it cannot parse as {} - mode digest, LIVE: a real") && s5.includes("v8 answers it 400 (it fails closed - section 3, \"2026-11-28 - the body fails closed\")") && !s5.includes("and office-notifications reads a body it cannot parse as {}"), "section 5's office warning: v7 until the deploy, v8 answers 400");
+  const s7 = readme.slice(readme.indexOf("## 7.")), s7f = s7.replace(/\s+/g, " ");
+  assert.ok(s7f.includes("The body fails closed (section 3, \"2026-11-28 - the body fails closed\"; `office-notifications` v8): `deploy-office-body.sh`") && s7.includes("backup-office-body-<UTC stamp>\\office-notifications\\index.ts") && s7f.includes("The backup is the deployed v7 (the retry stays)"), "section 7: the rollback of the v8 deploy");
 });
 
 (async () => {
