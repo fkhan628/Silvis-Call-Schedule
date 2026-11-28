@@ -1281,8 +1281,11 @@ function tradeRowStatus(status, give) {
 // predicate) or when one of the give's own audit rows (kind 'give') names it in trade_id / trade_ids - so the apply row
 // still reads as a give once its trade row has scrolled out of the last 100.
 function auditGiveTradeIds(entries, tradeRows, isGive) {
-  const out = [];
-  const add = (id) => { if (id === null || id === undefined || id === "") return; const s = String(id); if (out.indexOf(s) < 0) out.push(s); };
+  const out = [], seen = new Set();
+  // Prompt 38 (review): an id is a string or a finite number - never String() of a jsonb object, which throws for one that
+  // carries its own non-function toString key ({"toString":"x"}), here inside the app's own render (a useMemo); a Set keeps a
+  // crafted row's huge trade_ids list linear (indexOf made it quadratic: 100k ids would stall the render for seconds)
+  const add = (id) => { const s = displayText(id); if (s === "" || seen.has(s)) return; seen.add(s); out.push(s); };
   (Array.isArray(tradeRows) ? tradeRows : []).forEach(r => { if (r && typeof isGive === "function" && isGive(r)) add(r.id); });
   (Array.isArray(entries) ? entries : []).forEach(en => {
     const d = en && en.detail;
@@ -1292,24 +1295,65 @@ function auditGiveTradeIds(entries, tradeRows, isGive) {
   });
   return out;
 }
+// Prompt 38 (Faraz 11/27): what the app prints from an audit_log or notifications row is TEXT, never an object. On
+// 11/27 one audit row whose detail.summary was an object (the morning run's period.close of 11/23) reached
+// Settings > Activity log as a React child - minified error #31 - and the app-wide error boundary replaced the whole
+// app. displayText(v, fallback) -> v when it is a string, String(v) for a finite number, else the fallback ("" when it
+// is absent or not a string): never an object or an array.
+function displayText(v, fallback) {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" && isFinite(v)) return String(v);
+  return typeof fallback === "string" ? fallback : "";
+}
+// The morning run's period.close rows written before Prompt 38 (the first: 2026-11-23 13:00 UTC, "Jan 2027 - Jun
+// 2027") carry the roll call as an OBJECT summary { painted, added_vacations, following_rules } (roster ids). The
+// Activity log words such a row: "Offers for <label> closed by the morning run - painted: <names>; added vacations:
+// <names>; following their rules: <names>" (Faraz 11/27). nameOf(id) -> the display name (absent, or no name: the id);
+// "none" for an empty or missing list; "the period" without a label. Since Prompt 38 the server writes a text summary
+// (daily-reminder offersClosedLine - the close e-mail's own words), which the log shows as it is.
+function auditCloseLine(label, lists, nameOf) {
+  const l = lists && typeof lists === "object" && !Array.isArray(lists) ? lists : {};
+  const nm = typeof nameOf === "function" ? nameOf : (id) => id;
+  const names = (v) => {
+    const out = (Array.isArray(v) ? v : []).filter(id => typeof id === "string" && id !== "").map(id => { const n = nm(id); return typeof n === "string" && n !== "" ? n : id; });
+    return out.length ? out.join(", ") : "none";
+  };
+  return "Offers for " + (typeof label === "string" && label !== "" ? label : "the period") + " closed by the morning run - painted: " + names(l.painted) + "; added vacations: " + names(l.added_vacations) + "; following their rules: " + names(l.following_rules);
+}
+// The object form of a period.close summary (the morning run before Prompt 38): an object holding at least one of the
+// three id lists. Anything else is not that form.
+function auditCloseLists(d) {
+  const s = d && typeof d === "object" ? d.summary : null;
+  if (!s || typeof s !== "object" || Array.isArray(s)) return null;
+  return ["painted", "added_vacations", "following_rules"].some(k => Array.isArray(s[k])) ? s : null;
+}
+// The longest give summary auditEntryText re-words (Prompt 38 review); the client's tradeGiveMsg lines are far shorter.
+const AUDIT_GIVE_LINE_MAX = 1000;
 // One Activity log line -> { summary, action, give }. A give's trade.apply summary is re-worded ("Give applied: ...,
 // nothing in return)"); a give's trade.propose summary - the receiver-addressed tradeGiveMsg ("<giver> offers you ...
 // (a give to <receiver>)") - reads neutral in the log ("Give offered: <giver> -> <receiver>, <what> - nothing in return",
 // S4 review); a give's other trade.* rows keep their (already give-worded) summary; the action reads "<action> (give)".
-// Everything else is the row as before: detail.summary, else the action.
-function auditEntryText(en, giveIds) {
-  const action = String(en && en.action || "");
-  const d = en && en.detail && typeof en.detail === "object" ? en.detail : {};
-  const base = d.summary || action;
+// Everything else is the row as before: detail.summary, else the action. Prompt 38: detail.summary is read only when it is
+// a non-empty STRING; a period.close row with the object form reads auditCloseLine(label, lists, nameOf) (nameOf(id) ->
+// the display name; absent -> the id); any other non-string summary (an object, an array, a number, a boolean) reads as
+// the action. summary and action are always strings - never something a view could render as a React child.
+function auditEntryText(en, giveIds, nameOf) {
+  const action = displayText(en && en.action);
+  const d = en && en.detail && typeof en.detail === "object" && !Array.isArray(en.detail) ? en.detail : {};
+  const closeLists = action === "period.close" ? auditCloseLists(d) : null;
+  const base = typeof d.summary === "string" && d.summary !== "" ? d.summary : closeLists ? auditCloseLine(d.label, closeLists, nameOf) : action;
   const ids = Array.isArray(giveIds) ? giveIds : [];
-  const give = action.indexOf("trade.") === 0 && (d.kind === "give" || (action === "trade.apply" && d.trade_id !== undefined && d.trade_id !== null && ids.indexOf(String(d.trade_id)) >= 0));
+  const tid = displayText(d.trade_id); // Prompt 38 (review): never String() of a jsonb value (see auditGiveTradeIds)
+  const give = action.indexOf("trade.") === 0 && (d.kind === "give" || (action === "trade.apply" && tid !== "" && ids.indexOf(tid) >= 0));
   if (!give) return { summary: base, action, give: false };
   let summary = base;
   if (action === "trade.apply") {
     summary = typeof d.summary === "string" && /^Trade applied: /.test(d.summary)
       ? d.summary.replace(/^Trade applied: /, "Give applied: ").replace(/, one-way\)$/, ", nothing in return)")
       : "Give applied";
-  } else if (action === "trade.propose" && typeof d.summary === "string") {
+  } else if (action === "trade.propose" && typeof d.summary === "string" && d.summary.length <= AUDIT_GIVE_LINE_MAX) {
+    // Prompt 38 (review): the pattern backtracks cubically, so a crafted long summary would freeze the open Activity log
+    // on every render; the client's give lines are one short sentence - a longer one is shown as it is
     const m = /^(.+?) offers you (.+) - nothing in return [(]a give to (.+)[)]$/.exec(d.summary);
     if (m) summary = "Give offered: " + m[1] + " -> " + m[3] + ", " + m[2] + " - nothing in return";
   }
@@ -5151,8 +5195,11 @@ function eastRefreshStatus(rows, fmtTs) {
     const d = r.detail && typeof r.detail === "object" ? r.detail : {};
     const server = d.source === "cron" || r.actor_id === "cron";
     const ok = typeof d.ok === "boolean" ? d.ok : true;
-    const who = server ? "Server refresh (daily)" : "In-app refresh" + (r.actor_name ? " by " + r.actor_name : "");
-    const err = String(d.error || (Array.isArray(d.errors) && d.errors.length ? d.errors[0] : "") || "").slice(0, 200);
+    // Prompt 38: only TEXT is printed - an error held as anything but a string (an object, a number, a boolean) reads 'see the
+    // Activity log', never '[object Object]' (and never String() of a jsonb value)
+    const who = server ? "Server refresh (daily)" : "In-app refresh" + (displayText(r.actor_name) ? " by " + displayText(r.actor_name) : "");
+    const errText = (v) => (typeof v === "string" ? v : "");
+    const err = (errText(d.error) || (Array.isArray(d.errors) && d.errors.length ? errText(d.errors[0]) : "")).slice(0, 200);
     const text = who + " " + ts(r.created_at) + ": " + (ok ? "ok - " + (typeof d.weeks === "number" ? d.weeks : 0) + " published week(s) cached" : "FAILED - " + (err || "see the Activity log") + " - the cached weeks were kept");
     return { at: r.created_at, server, ok, text };
   };
@@ -7572,7 +7619,7 @@ if (typeof module !== "undefined" && module.exports) {
     LOAD_FAIL_ORDER, LOAD_FAIL_SHORT, combinedLoadToast,
     POLL_MS, EAST_POLL_MS, pollTickMode, pollCatchUpDue, eastPollDue, pollFullRecent,
     BLOB_KEYS, canonicalJson, blobSignature, adoptBlobState,
-    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
+    tradeLegsText, tradeProposeMsg, tradeAcceptMsg, tradeDeclineMsg, tradeGiveMsg, tradeGiveEmail, tradeProposalRows, tradeIsGive, tradeGroupIsGive, tradeProposalOf, tradeProposalIsGive, tradeGiveLine, tradeGiveAcceptMsg, tradeGiveDeclineMsg, tradeGiveCancelMsg, tradeGiveAppliedLine, tradeAppliedTargets, giveAcceptedNotes, giveAppliedNotes, tradeListTitle, tradeListEmpty, tradeRowStatus, auditGiveTradeIds, displayText, auditCloseLine, auditCloseLists, auditEntryText, labelGiveChanges, slotLabel, suggestTradePartners, tradeDayShort,
     tradeAppliedMsg, tradeCancelMsg, vacationLoggedMsg, manualEditMsg, schedulePublishedMsg,
     ttTotalsFor, ttRunThrough, ttDaysIn, ttRangeFor, ttDeviation, ttRound1, ttWeightedLoad, ttWeightedShare, backupTargetNote, ttCsvText, ttIsIso, ttOutsideSurgeons,
     overSoftLimitWords, overSoftLimitLine, overSoftLimitTitle, overSoftLimitIndex, overSoftLimitForChanges, overSoftLimitAudit, overSoftLimitLegend, overSoftLimitMonthsText,

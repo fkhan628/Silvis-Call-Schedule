@@ -577,6 +577,20 @@ const p31aDerivedServed = []; // { page, auth, at } per answered silvis_derived_
 // the daily server refresh's audit row the harness serves with the in-app ones (Setup > East feed's last-refresh line): a
 // successful run six hours before the smoke started - older than every in-app Refresh the run makes
 const P31A_CRON_ROW = { id: "harness-east-refresh-cron", actor_id: "cron", actor_name: "east-feed-refresh (cron)", action: "east.refresh", created_at: new Date(Date.now() - 6 * 3600000).toISOString(), detail: { summary: "Server refresh of the East feed (cron): harness row", source: "cron", ok: true, error: null, errors: [], weeks: 30 } };
+// Prompt 38 (Faraz 11/27): the Activity log's own read (audit_log, newest first, limit 150 - no action filter) is answered by the
+// harness (routeSupabase), never by the live table, where an anon read is RLS's silent []. P38_CLOSE_ROW is the SHAPE of the live
+// row the morning run wrote on 2026-11-23 13:00 UTC (daily-reminder v11, offers mode) - its summary an OBJECT of roster-id lists -
+// with harness ids and made-up lists and roll call (the live ones are signed-in data; the repo is public): before Prompt 38 the
+// scheduler's Settings rendered that summary as a React child (minified error #31) and the
+// app-wide boundary replaced the whole app. It now reads P38_CLOSE_SENTENCE. P38_COORD_ROW is the coordinator's OWN row (RLS gives
+// a coordinator nothing else - never the cron row) whose summary is an object carrying its own toString key, so String() of it
+// throws: it reads as its action.
+const P38_CLOSE_ROW = { id: "harness-p38-close-1123", actor_id: "cron", actor_name: "daily-reminder (offers)", action: "period.close", created_at: "2026-11-23T13:00:05.939506+00:00",
+  detail: { label: "Jan 2027 - Jun 2027", today: "2026-11-23", offers_close_at: "2026-11-23", period_id: "harness-p38-period",
+    summary: { painted: ["s3", "s5"], added_vacations: ["s4"], following_rules: ["s1", "s2", "s4", "s6"] },
+    rollcall: [{ id: "s1", status: "not_started", offered: 0 }, { id: "s2", status: "rules_only", offered: 0 }, { id: "s3", status: "submitted", offered: 3 }, { id: "s4", status: "not_started", offered: 0 }, { id: "s5", status: "submitted", offered: 2 }, { id: "s6", status: "not_started", offered: 0 }] } };
+const P38_CLOSE_SENTENCE = "Offers for Jan 2027 - Jun 2027 closed by the morning run - painted: Acton, Fierce; added vacations: Philip; following their rules: Khan, Burchett, Philip, Sarkar";
+const P38_COORD_ROW = { id: "harness-p38-coord-object", actor_id: COORD_UID, actor_name: "Office (harness)", action: "timeoff.add", created_at: new Date(Date.now() - 2 * 3600000).toISOString(), detail: { summary: { toString: "x" }, person_id: "s3" } };
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 // The tokens minted here, at the start, live 4 h (review of the merge of main into fix/do-first-6-9, 10/2): with 1 h a run
 // slowed past an hour by memory pressure (72 min on the 8 GB machine) failed late steps on an expired session (the
@@ -1256,6 +1270,12 @@ const tradeStore = []; // Slice G: shift_trade_requests rows the app wrote this 
 const tradeGets = [];  // datalayer-001: every GET on shift_trade_requests with the Authorization it carried
 const offerGets = [];  // U3c review: every GET on call_offers / call_periods ({ table, auth, at }) - the stale-offers step watches the re-read
 const forcedConsoleErrors = []; // the browser's own "500" line for the snapshot insert the harness forced to fail
+const p38GuardConsole = [];      // Prompt 38 (review): every console error line of the guard step's page (tag p38-guard) - its step checks each one
+// Prompt 38 (review, 11/27): the page / console errors ONE page added since a mark - that page's tag only (another page's line is
+// the run's final triage's) and never a line EXPECTED_CONSOLE_ERRORS accepts (the final triage accepts it too)
+const p38Mark = () => ({ pe: pageErrors.length, ce: consoleErrorWhere.length });
+const p38NewErrs = (mark, tag) => pageErrors.slice(mark.pe).filter(t => t.startsWith(tag + ": "))
+  .concat(consoleErrorWhere.slice(mark.ce).filter(e => e.where.startsWith(tag + " @ ") && !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(e.text))).map(e => e.text));
 const watchPage = (pg, tag) => {
   pg.on("pageerror", (e) => pageErrors.push(`${tag}: ` + String(e && e.message || e)));
   pg.on("console", (msg) => {
@@ -1276,6 +1296,7 @@ const watchPage = (pg, tag) => {
       else if (daysFailAppLines > 0 && /Supabase load error \(schedule_days\)/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); daysFailAppLines--; } // 9/28: the app's console.error for that forced 500 (one per 500 served)
       else if (df4Forced500Lines > 0 && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); df4Forced500Lines--; } // review 9/27 Do first 4: a time_off / availability read the startup page's route answered 500
       else if (ctForced500Lines > 0 && tag === "call-totals" && /status of 500/.test(msg.text())) { forcedConsoleErrors.push(msg.text()); ctForced500Lines--; } // Prompt 31 Part B (B4): an east_feed read the call-totals page's route answered 500 (the fail-loud step)
+      else if (tag === "p38-guard") p38GuardConsole.push(msg.text()); // Prompt 38 (review): the guard step's page - its step reads every line (a caught error is logged by design; nothing else may be)
       else { consoleErrors.push(msg.text()); consoleErrorWhere.push({ text: msg.text(), where: tag + " @ " + (((msg.location() || {}).url) || "?") }); } // Prompt 29: where each line came from (printed with the unexpected ones)
     }
     if (msg.type() === "warning") consoleWarns.push(msg.text());
@@ -1507,6 +1528,9 @@ const U3C = (() => {
   // "not offered". null when he holds no second in-period day in the live rows (the step logs a skip).
   let other = null;
   for (let d = isoPlus(day, 1); d <= offerPeriod.end_day && !other; d = isoPlus(d, 1)) {
+    // 11/27 (a date bomb found by Prompt 38's smoke): never the day after's own day - with today 11/27 the day after (12/4) was
+    // also the next day s3 holds, so this offer made the day after read "offered backup only" where the step needs "not offered"
+    if (d === next) continue;
     const r = liveEarlyByDay[d];
     if (r && r.primary_id === "s3") other = { day: d, heldRole: "primary", offeredRole: "backup" };
     else if (r && r.backup_id === "s3") other = { day: d, heldRole: "backup", offeredRole: "primary" };
@@ -2077,7 +2101,7 @@ const routeSupabaseAs = (profile, extra) => async (route) => {
   if (url.pathname.startsWith("/auth/v1/user") && req.method() === "GET") return json(200, { id: profile.id, email: authEmail || "office@example.com", aud: "authenticated", role: "authenticated" });
   if (url.pathname.startsWith("/rest/v1/user_profiles") && req.method() === "GET") return json(200, /role=in\./.test(url.search) ? [{ person_id: FAKE_PROFILE.person_id, role: FAKE_PROFILE.role }] : [row]);
   if (extra && await extra({ route, req, url, json })) return;
-  return routeSupabase(route);
+  return routeSupabase(route, null, profile); // Prompt 38: the profile, for the Activity log's RLS picture
 };
 // Prompt 30 (phone push): fake push material generated HERE for this run - a P-256 public key in the VAPID shape (65-byte
 // uncompressed point, base64url) the mocked ?vapid=public answers, and a subscription's p256dh / auth in the DB's shapes.
@@ -2105,9 +2129,10 @@ const p30SharedAnswer = (url, method) => {
   if (url.pathname.endsWith("/push_subscription_status")) return { status: 200, body: { ok: true, saved: false, devices: 0 } };
   return { status: 200, body: [] }; // the *_push column probes: both revision w columns and revision z's shift_reminders_push exist
 };
-const routeSupabase = async (route, scope) => {
+const routeSupabase = async (route, scope, asProfile) => {
   // scope: "session" when installed by the A3 session scenario's context (its blob stamp is kept apart); Playwright
   // passes the Request as the second argument when the handler is registered bare, which reads as the main scope.
+  // asProfile (Prompt 38): the profile routeSupabaseAs serves its page as; absent = the main page's FAKE_PROFILE.
   const sessionScope = scope === "session";
   const req = route.request();
   const url = new URL(req.url());
@@ -2187,6 +2212,23 @@ const routeSupabase = async (route, scope) => {
     const rows = writes.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/audit_log"))
       .map(w => { let b = null; try { b = JSON.parse(w.body); } catch (e) { b = null; } return b && b.action === "east.refresh" ? { id: "harness-east-refresh-" + w.at, actor_id: b.actor_id, actor_name: b.actor_name, action: b.action, detail: b.detail, created_at: new Date(w.at || Date.now()).toISOString() } : null; })
       .filter(Boolean).concat([P31A_CRON_ROW])
+      .sort((a, b) => a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0);
+    return json(200, rows.slice(0, Number(url.searchParams.get("limit") || rows.length)));
+  }
+  // Prompt 38 (Faraz 11/27): the Activity log's own read (no action filter) - the audit rows this run wrote, newest first, plus the
+  // fixtures above, cut like PostgREST cuts them (order created_at desc, the request's limit), as RLS reads them: the scheduler /
+  // admin (audit_read) every row, P38_CLOSE_ROW, P31A_CRON_ROW and P38_COORD_ROW included; anyone else (audit_read_own /
+  // audit_read_coord) only the rows whose actor_id is its roster id or its account id - for the coordinator P38_COORD_ROW too, and
+  // never a 'cron' row. A write the table never took is not served (review, 11/27): one answered 401 (forced401) and one a page's
+  // own route swallowed (public). A row a server function writes (trade.apply, schedule.claim ...) is not in this picture.
+  if (method === "GET" && url.pathname === "/rest/v1/audit_log" && !url.searchParams.get("action")) {
+    const who = asProfile || FAKE_PROFILE;
+    const sched = who.role === "admin" || who.role === "scheduler";
+    const own = (r) => (who.person_id && r.actor_id === who.person_id) || r.actor_id === who.id;
+    const written = writes.filter(w => w.method === "POST" && w.path.startsWith("/rest/v1/audit_log") && !w.forced401 && !w.public)
+      .map((w, i) => { let b = null; try { b = JSON.parse(w.body); } catch (e) { b = null; } return b && typeof b.action === "string" ? { id: "harness-audit-" + i + "-" + (w.at || 0), actor_id: b.actor_id, actor_name: b.actor_name, action: b.action, detail: b.detail, created_at: new Date(w.at || Date.now()).toISOString() } : null; })
+      .filter(Boolean);
+    const rows = (sched ? written.concat([P31A_CRON_ROW, P38_CLOSE_ROW, P38_COORD_ROW]) : written.filter(own).concat(who.id === COORD_UID ? [P38_COORD_ROW] : []))
       .sort((a, b) => a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0);
     return json(200, rows.slice(0, Number(url.searchParams.get("limit") || rows.length)));
   }
@@ -2785,6 +2827,7 @@ try {
     if (pageErrors.length > before) fail(`tab ${t}: pageerror ${pageErrors.slice(before).join(" | ")}`); else ok(`tab ${t}: rendered, screenshot ${path.relative(ROOT, path.join(OUT, t + ".png"))}`);
   }
   // Settings: open the collapsible cards so their render paths run too.
+  const p38Errs = p38Mark(); // Prompt 38: what Settings' render adds on this page is read below
   await clickTab(page, "settings");
   for (const title of ["Activity log", "Client versions", "Office notifications", "Restore from snapshot"]) {
     const el = await page.$(`text=${title}`);
@@ -2793,6 +2836,115 @@ try {
   if (!(await openNotifSettings(page))) fail("Settings: Notification settings did not open");
   await page.screenshot({ path: path.join(OUT, "settings-open.png"), fullPage: true });
   ok("settings cards expanded without error");
+  // Prompt 38 (Faraz 11/27): the scheduler's Activity log with the morning run's 11/23 period.close row present (P38_CLOSE_ROW, its
+  // summary an OBJECT - before the fix: minified React error #31 and the whole app replaced by the error card, on every Settings
+  // visit with the card open). It must render as P38_CLOSE_SENTENCE (display names) beside the run's own rows, every row as text,
+  // with no card / row error, no error card and no new page / console error since Settings opened.
+  try {
+    if (await page.$("[data-testid=card-settings_audit][data-open='0']")) { await page.click("[data-testid=card-toggle-settings_audit]"); await page.waitForTimeout(300); }
+    await page.waitForSelector("[data-testid=audit-row][data-action='period.close']", { timeout: 8000 }).catch(() => {});
+    const al = await page.evaluate(() => ({
+      rows: Array.from(document.querySelectorAll("[data-testid=audit-row]")).map(r => ({ action: r.getAttribute("data-action"), summary: ((r.querySelector("[data-testid=audit-summary]") || {}).textContent || "").trim() })),
+      cardErrors: Array.from(document.querySelectorAll("[data-testid^=card-error-]")).map(e => e.getAttribute("data-testid") + ": " + (e.textContent || "").trim().slice(0, 160)),
+      crashed: /The app hit an unexpected error and stopped rendering/.test(document.body.innerText || ""), // the app-wide card's own words (review: "Something went wrong" is also the push box's message)
+      settingsTab: !!document.querySelector("button[data-tab=settings]"),
+    }));
+    const close = al.rows.find(r => r.action === "period.close");
+    const newErrs = p38NewErrs(p38Errs, "main");
+    if (al.crashed || !al.settingsTab) fail("Prompt 38 (scheduler): the app-wide error card replaced the app - the 11/23 row crashed Settings: " + newErrs.join(" | ").slice(0, 300));
+    else if (al.cardErrors.length) fail("Prompt 38 (scheduler): a card / row error shows in Settings: " + al.cardErrors.join(" | "));
+    else if (!close) fail("Prompt 38 (scheduler): the 11/23 period.close row is not in the Activity log (" + al.rows.length + " rows): " + JSON.stringify(al.rows.slice(0, 4)));
+    else if (close.summary !== P38_CLOSE_SENTENCE) fail("Prompt 38 (scheduler): the 11/23 row reads '" + close.summary + "' - expected '" + P38_CLOSE_SENTENCE + "'");
+    else if (al.rows.some(r => !r.summary || /\[object Object\]/.test(r.summary))) fail("Prompt 38 (scheduler): an Activity log row prints no text or an object's words: " + JSON.stringify(al.rows.filter(r => !r.summary || /\[object Object\]/.test(r.summary)).slice(0, 3)));
+    else if (newErrs.length) fail("Prompt 38 (scheduler): new page / console errors while Settings rendered: " + newErrs.join(" | ").slice(0, 300));
+    else ok(`Prompt 38 (scheduler): Settings > Activity log renders the 11/23 period.close row as the morning run's sentence ('${close.summary.slice(0, 60)}...') among ${al.rows.length} rows - no card / row error, no error card, no new page / console error`);
+  } catch (e) { fail("Prompt 38 (scheduler): the Activity log check threw: " + String((e && e.message) || e).split("\n")[0].replace(/\u001b\[[0-9;]*m/g, "").slice(0, 300)); }
+  // Prompt 38 (review, 11/27): a CardGuard CATCHING inside the real React (the vendored React 18.3.1 production build), on a page in
+  // its OWN context (tag p38-guard: its console lines go to p38GuardConsole, read here, never to the run's triage). Its Activity
+  // log is served four rows: an ordinary row, the 11/23 period.close row, a row whose summary the page's displayText - patched
+  // after load (a writable global of helpers.js, resolved at call time) - turns into an OBJECT (the 11/23 failure class: an object
+  // child, React's minified #31, thrown while React reconciles the row's summary div), and a row whose auditEntryText - patched
+  // too - THROWS (the row's own computation, in GuardedRow's render one fiber below its guard). Each of the two costs its own
+  // row's line ('This entry could not be shown.' with the error's words); the ordinary row and the 11/23 sentence render; the app
+  // stays (the tab bar, no app-wide error card, the Calendar opens); no page error; the page's console holds only CardGuard's line
+  // per caught row (one names #31, one the throw) and React's own lines for the same two errors.
+  {
+    const G = "Prompt 38 (guard step, real React)";
+    const GROWS = [
+      { id: "p38-guard-ok", actor_id: "s1", actor_name: "Khan", action: "schedule.day_edit", created_at: new Date(Date.now() - 3600000).toISOString(), detail: { summary: "Guard step: an ordinary row" } },
+      { id: "p38-guard-object", actor_id: "s1", actor_name: "Khan", action: "schedule.note_rename", created_at: new Date(Date.now() - 2 * 3600000).toISOString(), detail: { summary: "P38-GUARD-OBJECT" } },
+      { id: "p38-guard-throw", actor_id: "s1", actor_name: "Khan", action: "schedule.day_edit", created_at: new Date(Date.now() - 3 * 3600000).toISOString(), detail: { summary: "Guard step: never shown" } },
+      P38_CLOSE_ROW,
+    ];
+    const gMark = p38Mark(), gc0 = p38GuardConsole.length;
+    let gCtx = null, gp = null, settleG = null;
+    try {
+      gCtx = await browser.newContext({ viewport: { width: 1180, height: 900 } });
+      await gCtx.addInitScript(({ token, version }) => { try { localStorage.setItem("silvis-auth-token", token); localStorage.setItem("silvis-auth-refresh", "fake-refresh"); localStorage.setItem("silvis-app-version", version); } catch (e) {} }, { token: FAKE_JWT, version: APP_VERSION });
+      await gCtx.route(cdnMatcher, routeCdn);
+      await gCtx.route((url) => url.hostname === EAST_HOST, routeEast);
+      gp = await gCtx.newPage();
+      watchPage(gp, "p38-guard");
+      settleG = restReadsSettled(gp);
+      await gp.routeWebSocket((url) => String(url).includes("/realtime/v1/websocket"), () => {});
+      await gp.route((url) => url.hostname === SUPABASE_HOST, async (route) => {
+        const req = route.request(), url = new URL(req.url());
+        if (req.method() === "GET" && url.pathname === "/rest/v1/audit_log" && !url.searchParams.get("action")) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(GROWS) });
+        return routeSupabase(route);
+      });
+      await loadWithRetry(gp, BASE, "h1:has-text('Silvis Call Schedule')", 30000, "Prompt 38 guard page");
+      await gp.waitForSelector("text=Synced", { timeout: 30000 });
+      const patched = await gp.evaluate(() => {
+        if (typeof window.displayText !== "function" || typeof window.auditEntryText !== "function") return "helpers.js's displayText / auditEntryText are not globals";
+        const dt = window.displayText, aet = window.auditEntryText;
+        window.__p38g = { object: 0, thrown: 0 };
+        window.displayText = function (v) { if (v === "P38-GUARD-OBJECT") { window.__p38g.object++; return { boom: 1 }; } return dt.apply(this, arguments); };
+        window.auditEntryText = function (en) { if (en && en.id === "p38-guard-throw") { window.__p38g.thrown++; throw new Error("p38-guard: this row's own computation threw on purpose"); } return aet.apply(this, arguments); };
+        // a free reference - what the app's compiled block makes - must reach the patched global
+        const seen = typeof displayText("P38-GUARD-OBJECT") === "object";
+        window.__p38g.object = 0;
+        return seen ? "ok" : "a free reference does not reach the patched displayText";
+      });
+      if (patched !== "ok") throw new Error("the guard page's helpers could not be patched: " + patched);
+      await clickTab(gp, "settings");
+      if (await gp.$("[data-testid=card-settings_audit][data-open='0']")) await gp.click("[data-testid=card-toggle-settings_audit]");
+      await gp.waitForSelector("[data-testid=card-error-settings_audit_row]", { timeout: 10000 }).catch(() => {});
+      await gp.waitForTimeout(500);
+      const g = await gp.evaluate(() => ({
+        rows: Array.from(document.querySelectorAll("[data-testid=audit-row]")).map(r => ({ action: r.getAttribute("data-action"), summary: ((r.querySelector("[data-testid=audit-summary]") || {}).textContent || "").trim() })),
+        errs: Array.from(document.querySelectorAll("[data-testid=card-error-settings_audit_row]")).map(e => (e.textContent || "").trim()),
+        otherErrs: Array.from(document.querySelectorAll("[data-testid^=card-error-]")).map(e => e.getAttribute("data-testid")).filter(t => t !== "card-error-settings_audit_row"),
+        crashed: /The app hit an unexpected error and stopped rendering/.test(document.body.innerText || ""),
+        tabs: document.querySelectorAll("button[data-tab]").length,
+        counts: window.__p38g,
+      }));
+      await gp.screenshot({ path: path.join(OUT, "p38-guard-activity-log.png"), fullPage: true });
+      const e31 = g.errs.filter(t => t.startsWith("This entry could not be shown.") && /Minified React error #31[\s\S]*boom/.test(t));
+      const eThrow = g.errs.filter(t => t.startsWith("This entry could not be shown.") && t.includes("p38-guard: this row's own computation threw on purpose"));
+      const rowsOk = g.rows.length === 2 && ["Guard step: an ordinary row", P38_CLOSE_SENTENCE].every(w => g.rows.some(r => r.summary === w));
+      // the app stays: the Calendar opens on the same page
+      await clickTab(gp, "calendar");
+      const calOk = await gp.waitForSelector("[data-testid=cal-grid]", { timeout: 8000 }).then(() => true).catch(() => false);
+      const alive = await gp.evaluate(() => !/The app hit an unexpected error and stopped rendering/.test(document.body.innerText || ""));
+      await settleG();
+      const lines = p38GuardConsole.slice(gc0).filter(t => !EXPECTED_CONSOLE_ERRORS.some(x => x.rx.test(t)));
+      const guardLines = lines.filter(t => t.startsWith("Silvis: a card could not be shown (settings_audit_row):"));
+      const stray = lines.filter(t => !/Minified React error #31[\s\S]*boom/.test(t) && !t.includes("p38-guard: this row's own computation threw on purpose"));
+      const pErr = p38NewErrs(gMark, "p38-guard"); // its page errors (its console lines are p38GuardConsole's)
+      if (g.crashed || !alive || !g.tabs) fail(`${G}: the app-wide error card replaced the app - a row's error was not caught by its own guard: ` + lines.join(" | ").slice(0, 300));
+      else if (g.errs.length !== 2 || e31.length !== 1 || eThrow.length !== 1) fail(`${G}: expected two row lines 'This entry could not be shown.' - one with React's #31 for the object summary, one with the thrown error: ` + JSON.stringify(g.errs).slice(0, 400));
+      else if (g.otherErrs.length) fail(`${G}: another guard caught something: ` + g.otherErrs.join(", "));
+      else if (!rowsOk) fail(`${G}: the ordinary row and the 11/23 sentence should render beside the two lines: ` + JSON.stringify(g.rows).slice(0, 400));
+      else if (!g.counts || g.counts.object < 1 || g.counts.thrown < 1) fail(`${G}: the rows' render never reached the patched helpers: ` + JSON.stringify(g.counts));
+      else if (!calOk) fail(`${G}: the Calendar did not open after the caught errors`);
+      else if (pErr.length) fail(`${G}: page errors on the guard page: ` + pErr.join(" | ").slice(0, 300));
+      else if (stray.length) fail(`${G}: console lines other than the two caught errors' own: ` + stray.join(" | ").slice(0, 300));
+      else if (guardLines.length < 2 || !guardLines.some(t => /Minified React error #31/.test(t)) || !guardLines.some(t => t.includes("threw on purpose"))) fail(`${G}: CardGuard's console line (settings_audit_row) should name each caught error: ` + lines.join(" | ").slice(0, 400));
+      else ok(`${G}: an object summary (React's #31) and a throwing row computation each cost their own row's line ('This entry could not be shown.' x2) beside the ordinary row and the 11/23 sentence; the tab bar stays, the Calendar opens, no page error; console: ${guardLines.length} CardGuard line(s) + ${lines.length - guardLines.length} of React's own, nothing else - screenshot test/ui/out/p38-guard-activity-log.png`);
+    } catch (e) { fail(`${G}: the step threw: ` + String((e && e.message) || e).split("\n")[0].replace(/\u001b\[[0-9;]*m/g, "").slice(0, 300)); try { if (gp) await gp.screenshot({ path: path.join(OUT, "failure-p38-guard.png"), fullPage: true }); } catch (e2) {} }
+    try { if (settleG) await settleG(); } catch (e) {}
+    try { if (gCtx) await gCtx.close(); } catch (e) {}
+  }
 
   // Settings declutter (9/27): the scheduler's Settings is two quiet groups - 'Your preferences' above Appearance and
   // 'Scheduler tools' above the Activity log - the three in-memory toggles carry the Collapsible chevron, the Pop-ups
@@ -17027,6 +17179,7 @@ try {
       await pc.click("[data-testid=ofp-close]");
       await pc.waitForTimeout(300);
       // (e) Settings: the Activity log card (own entries) + its audit_log read; no export / snapshots / client versions
+      const p38C = p38Mark(); // Prompt 38: what the coordinator's Settings render adds on its page
       await clickTab(pc, "settings");
       await pc.waitForTimeout(1000);
       const auditCard = await pc.$("[data-testid=card-settings_audit]");
@@ -17035,6 +17188,30 @@ try {
       const logTitle = auditCard ? (await auditCard.innerText()).replace(/\s+/g, " ").slice(0, 80) : "";
       if (!auditCard || exportBtn || cvCard || !auditGets.length || !/your entries/i.test(logTitle)) fail(`coordinator: Settings should show the Activity log ('your entries') with one audit_log read and nothing of the scheduler's (export / client versions): card=${!!auditCard} export=${!!exportBtn} cv=${!!cvCard} reads=${auditGets.length} title='${logTitle}'`);
       else ok(`coordinator: Settings = Activity log '${logTitle.slice(0, 50)}' (audit_log read ${auditGets.length}x); no export, no client versions`);
+      // Prompt 38 (Faraz 11/27): the coordinator's Activity log. RLS gives it only its own rows - never the morning run's 11/23 row -
+      // so the harness serves its rows of this run plus P38_COORD_ROW, an own row whose summary is an object String() cannot
+      // convert. The card (opened by the main page's Settings loop: one localStorage) renders every row as text, the fixture row
+      // reads its action, nothing of the 11/23 close shows, and no card / row error, error card or new page / console error appears.
+      try {
+        if (await pc.$("[data-testid=card-settings_audit][data-open='0']")) { await pc.click("[data-testid=card-toggle-settings_audit]"); await pc.waitForTimeout(300); }
+        await pc.waitForSelector(`[data-testid=audit-row][data-action='${P38_COORD_ROW.action}']`, { timeout: 8000 }).catch(() => {});
+        const cl = await pc.evaluate(() => ({
+          rows: Array.from(document.querySelectorAll("[data-testid=audit-row]")).map(r => ({ action: r.getAttribute("data-action"), summary: ((r.querySelector("[data-testid=audit-summary]") || {}).textContent || "").trim() })),
+          cardErrors: Array.from(document.querySelectorAll("[data-testid^=card-error-]")).map(e => e.getAttribute("data-testid") + ": " + (e.textContent || "").trim().slice(0, 160)),
+          crashed: /The app hit an unexpected error and stopped rendering/.test(document.body.innerText || ""),
+        }));
+        const fx = cl.rows.find(r => r.action === P38_COORD_ROW.action && r.summary === P38_COORD_ROW.action);
+        const newErrs = p38NewErrs(p38C, "coordinator");
+        if (cl.crashed) fail("Prompt 38 (coordinator): the app-wide error card replaced the app: " + newErrs.join(" | ").slice(0, 300));
+        else if (cl.cardErrors.length) fail("Prompt 38 (coordinator): a card / row error shows in Settings: " + cl.cardErrors.join(" | "));
+        else if (!fx) fail("Prompt 38 (coordinator): its own row with an object summary should read its action '" + P38_COORD_ROW.action + "': " + JSON.stringify(cl.rows.slice(0, 5)));
+        // a HARNESS self-check (review, 11/27): the office's rows are what the harness's RLS stand-in serves (routeSupabase), not
+        // the database - the policies themselves are scripts/verify-rls.sh's
+        else if (cl.rows.some(r => r.action === "period.close" || /closed by the morning run/.test(r.summary))) fail("Prompt 38 (coordinator, harness self-check): the harness served the morning run's row to the office's log (its RLS stand-in gives the office only its own rows): " + JSON.stringify(cl.rows.filter(r => r.action === "period.close")));
+        else if (cl.rows.some(r => !r.summary || /\[object Object\]/.test(r.summary))) fail("Prompt 38 (coordinator): a row prints no text or an object's words: " + JSON.stringify(cl.rows.slice(0, 5)));
+        else if (newErrs.length) fail("Prompt 38 (coordinator): new page / console errors while Settings rendered: " + newErrs.join(" | ").slice(0, 300));
+        else ok(`Prompt 38 (coordinator): Settings > Activity log renders its ${cl.rows.length} own row(s) as text - the object-summary row reads '${fx.summary}', no period.close row, no card / row error, no new page / console error`);
+      } catch (e) { fail("Prompt 38 (coordinator): the Activity log check threw: " + String((e && e.message) || e).split("\n")[0].replace(/\u001b\[[0-9;]*m/g, "").slice(0, 300)); }
       // Settings declutter (9/27): the office (no roster link, following nobody) gets no group heading and no empty
       // calendar-sync card (it used to render a sentence and no URL); opening Notification settings shows ONE e-mail line.
       try {

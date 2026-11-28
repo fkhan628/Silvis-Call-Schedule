@@ -148,6 +148,16 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
 - Data-loss safeguards (inherited from two Davenport wipe incidents): `payloadLooksWiped`, one-shot
   `intentionalScheduleWipeRef`, snapshots to `call_schedule_snapshots` before destructive actions (capture failure
   BLOCKS the action), scheduler restore UI in Settings. Preserve all of it.
+- **What the app prints from jsonb is TEXT (Prompt 38, Faraz 11/27):** `audit_log.detail` and `notifications.data` are jsonb
+  and no check constrains them - the morning run's 11/23 `period.close` row held an object `summary`, which the Activity log
+  rendered as a React child (#31) and Settings crashed for the scheduler. Every printed jsonb field goes through
+  `helpers.displayText` / `auditEntryText` (typeof-gated; never `String()` of a jsonb value - an object with its own `toString`
+  key makes it throw). Every Activity log / Alerts row sits under its own `CardGuard` with its own computation one fiber down
+  (`GuardedRow`), and every `Collapsible` body under one: a render error there - an object child, a helper throwing on a row -
+  costs that row or card. What still runs in CallSchedule's own render reaches the app-wide boundary - the memos over all rows
+  (`auditGiveTradeIds`, `notifVisibleTo`), a `Collapsible`'s children built by its parent, the row keys - so those must stay
+  total. `daily-reminder` v12 (the close's summary as text, the ids under `rollcall_summary`) is prepared, NOT deployed -
+  Faraz's `deploy-close-summary.sh` (`edge-functions/README.md` section 3).
 - East feed (`east-feed.js`) reads the Davenport project's `schedule_weeks` **read-only** with its public anon key and
   caches into `east_feed`. Fetch failure keeps the cache and warns — never "no East call". Its Davenport `time_off` read is
   guarded the same way (`eastVacationReadGuard`: a failed or suspiciously empty read keeps the cached ranges and resets no
@@ -238,3 +248,6 @@ send-notification v12 deployed on 2026-10-03; phone push works from the build th
   Prompt 37 (Khan's monthly backup target and the East-day switch, Faraz 11/22): the engine reads `monthlyTarget { backup }` and
   `eastFeed.backupFreeOnEastDays`; the seed carries neither - Faraz enters the number (Setup > Rules > Limits > Backup target) and the
   switch (Setup > Rules > East) after the preview, and the seed and its pins follow in a record change; readings to confirm: §8 item 32.
+  Prompt 38 (the Activity log crash, Faraz 11/27): the client fix ships first and ends the crash; Faraz's own step after it is the
+  `daily-reminder` v12 deploy (`deploy-close-summary.sh`, private apply-scripts) and its offers dry-run proof (`edge-functions/README.md`
+  §3, "2026-11-27 - the close summary as text") - v12 is prepared and waits for it.

@@ -10,7 +10,7 @@ retargeted from the Davenport (DSG) functions on 2026-09-22
 | `calendar-sync` | `edge-functions/calendar-sync/index.ts` | calendar apps + the Settings "subscribe" URLs (unauthenticated GET); since Item D (2026-09-24) also `?surgeon=<CODE>&east=1`, the combined Silvis + Davenport feed for office staff (all-day Davenport events from `east_feed` + `east_vacation_reviews`, read with the service role) | never |
 | `office-notifications` | `edge-functions/office-notifications/index.ts` | app (publish / digest buttons, scheduler JWT) + weekly pg_cron (`x-cron-secret`) | yes - `publish`, live `digest`, `test` |
 | `send-notification` | `edge-functions/send-notification/index.ts` | app `sendEmailNotif` (verified user JWT whose `user_profiles.role` is admin / scheduler, or a linked surgeon for his own targeted categories - audit RLS-1, 2026-09-23); since Prompt 30 (phone push - v12, deployed 2026-10-03 16:37:59 UTC; record in section 3) also the Settings "Phone notifications" box: `GET ?vapid=public` (the VAPID public key, no auth) and `POST ?push=test` (any verified session, its own devices) | yes - any non-empty send the gate lets through; since Prompt 30 each such send also pushes to the same people's phones (Web Push / VAPID, `push_subscriptions`) on their `*_push` switches |
-| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts. Revision z (v10, deployed 2026-10-22 23:18:10 UTC; its first live push not observed yet - section 3's "Deploy record - push reminders (revision z)"): v10 also pushes the day-before reminder to the same people's phones, and their followers', on `shift_reminders_push` (the hourly default mode only) |
+| `daily-reminder` | `edge-functions/daily-reminder/index.ts` | hourly pg_cron (`x-cron-secret`, default mode) + Monday pg_cron (`silvis-open-shifts-weekly`, section 4 - active; first observed run 2026-09-28 12:00Z) with body `{"mode":"open-shifts"}` (same gate) + daily pg_cron (`silvis-offers-daily`) with body `{"mode":"offers"}` (same gate) | yes - at a matching reminder hour; mode `open-shifts`: every linked surgeon with `schedule_updates_email` on, while any published slot in the next 30 days is open; mode `offers`: on a reminder day the heads-up before a freeze to every pool surgeon with `schedule_updates_email` on (the office coordinators too on the first reminder), on the freeze day the roll call to the scheduler / admin accounts. Revision z (v10, deployed 2026-10-22 23:18:10 UTC; its first live push not observed yet - section 3's "Deploy record - push reminders (revision z)"): v10 also pushes the day-before reminder to the same people's phones, and their followers', on `shift_reminders_push` (the hourly default mode only); v11 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:19 UTC; v12 (the close summary as text - Prompt 38, section 3's "2026-11-27 - the close summary as text") PREPARED, NOT deployed |
 | `east-feed-refresh` | `edge-functions/east-feed-refresh/index.ts` | daily pg_cron `silvis-east-feed-daily` (`x-cron-secret`, 10:30 UTC) - Prompt 31 Part A, v1 deployed 2026-10-20 01:42:59 UTC, the job created the same day (jobid 8; its first scheduled run 2026-10-20 10:30 UTC, its audit row `ok` `true`); record in section 3's "Deploy record - Prompt 31 Part A"; v2 (the PGRST303 retry, section 3's "2026-10-26 - the PGRST303 retry") deployed 2026-10-27 03:30:13 UTC (its first scheduled run 2026-10-27 10:30 UTC, its audit row `ok` `true`); v3 (the East week lists - Prompt 34, section 3's "2026-11-11 - the East week lists") PREPARED, NOT deployed | never |
 
 These are deployed BY HAND with the Supabase CLI. A `git push` never deploys a
@@ -997,6 +997,66 @@ upcoming week with its source (published / DSG list / stated).
 Rollback: section 7 (the backup the script took is the deployed v2; with v2 back the lists leave the cache at its next run and the
 app says so - nothing else to undo).
 
+### 2026-11-27 - the close summary as text (daily-reminder v12; Prompt 38)
+
+*Status: PREPARED, NOT deployed - `daily-reminder` v12 on base v11. Prepared 2026-11-27 by Claude Code on branch
+`fix/audit-summary` (Faraz 11/27, Prompt 38: Settings crashed for the scheduler on every open). The paragraphs below are the plan
+as prepared; the observed paragraph is added at the deploy's record step. "v12" is the next version after the v11 listed on 11/27:
+a `supabase secrets set` before the deploy re-versions every function (the Prompt 30 record above), so the record step takes the
+number the script observes.*
+
+Why: v11's offers close (mode `offers`, the 13:00 UTC run) writes its `period.close` audit row with the roll call as an OBJECT
+`detail.summary` - `{ painted, added_vacations, following_rules }`, roster ids. The first close ("Jan 2027 - Jun 2027",
+2026-11-23 13:00 UTC) wrote the first such row; Settings > Activity log rendered that summary as a React child, React refused it
+(minified error #31, "object with keys {painted, added_vacations, following_rules}"), and from then on Settings crashed for every
+scheduler / admin account with the Activity log open. The client half of Prompt 38 - live before this deploy - prints a summary
+only when it is text and words that object form from its lists, so the crash is gone whatever this function writes; this change
+stops the object form at its source.
+
+The change, in `daily-reminder` only (v11 -> v12): the close writes `detail.summary` as TEXT - `offersClosedLine(words)`, new in
+the plain-JS `@offersMail` block: the close e-mail's own words (`offersClosedText`'s lead, then each section's heading and items,
+`-` for an empty section) in one line - its form "<label> (<Dy M/D> to <Dy M/D>) froze on <Dy M/D>. Painted days: <name> - <N>
+days; .... Added vacations: <name> - <M/D-M/D>; .... Following their rules: <name>; ...." (every pool surgeon lands in at least one
+of the three) - and the three id lists under `detail.rollcall_summary`. The run's answer carries the same two keys (`results[].summary` is that line, `results[].rollcall_summary`
+the lists). Nothing else moves: the e-mail, the compare-and-swap, the reminder days, the hourly reminder and the open-shifts mode
+are as in v11; no new secret, table, RPC or cron change. The 11/23 row stays as it is (the audit log is history).
+
+The order: the client first (it is what ends the crash), this deploy any day after it. Until v12 runs, a close writes the object
+form again - harmless once the client fix is live - and the next close is the next period's (none is upcoming on 11/27).
+
+The deploy: `deploy-close-summary.sh` in the private apply-scripts folder (machine paths keep it out of this repo), run from a clean
+`main` that carries this change - `deploy-east-lists.sh` cut down to `daily-reminder`. `--dry-run` first: it checks the CLI and the
+`supa-silvis` link, reads `functions list` (`daily-reminder` ACTIVE, `verify_jwt` false - pg_cron's calls carry no JWT), downloads
+the live function into a fresh backup folder and stops unless it is the deployed v11 byte for byte (CRLF-normalised `ad3dbc5a5bae...`,
+"2026-10-26 - the PGRST303 retry" above - anything else was deployed outside these records: stop), and stages the new file against
+the hash it pins (`test/edge-functions.test.js` pins the same bytes); nothing is deployed. The real run reads the clock (not from :50
+to :05 of any hour - the hourly reminder, the offers run at 13:00 UTC and the Monday open-shifts run all start at :00), asks for
+DEPLOY in capital letters at the terminal, reads the clock again, deploys the one function (`--no-verify-jwt --use-api`), reads
+`functions list` again (one version up, `verify_jwt` still false), re-downloads it and compares it with the staged file, and checks
+that an unauthenticated POST still answers 401. Then its PASTE THIS BACK block, for the record step.
+
+The proof after it (Faraz, the SQL editor - the secret is read from Vault, never typed; never a `curl.exe -d` body from PowerShell
+5.1, which drops the quotes, so the function reads `{}` and runs the LIVE hourly reminder): the offers dry run -
+```sql
+select net.http_post(
+  url := 'https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1/daily-reminder',
+  headers := jsonb_build_object('Content-Type','application/json','x-cron-secret',
+    coalesce((select decrypted_secret from vault.decrypted_secrets where name = 'silvis_cron_secret' limit 1), 'unset')),
+  body := '{"mode":"offers","dryRun":true}'::jsonb,
+  timeout_milliseconds := 60000);
+-- pg_net answers asynchronously: wait 20-30 s, then (the dry run's OWN answer - the live 13:00 UTC offers run answers
+-- '{"mode":"offers","dry_run":false,...', which this never reads)
+select status_code, created, content::jsonb->'periods' as periods, content::jsonb->'results' as results
+from net._http_response where content::text like '{"mode":"offers","dry_run":true,%' order by created desc limit 1;
+```
+[`200`, a `created` of a minute ago, and `periods` the number of upcoming periods - `0` while none is upcoming; on a close day
+`results[].summary` is the one line and `results[].rollcall_summary` the lists. No row, or an old `created`: the dry run did not
+answer 200 - read `select status_code, created, content from net._http_response order by created desc limit 3;`.] The first live
+text summary is the next close's; read it in Settings > Activity log that day.
+
+Rollback: section 7 (the backup the script took is the deployed v11; with v11 back a close writes the object form again, which the
+app's Activity log words from its lists since Prompt 38 - nothing else to undo).
+
 ## 4. pg_cron schedules (pg_net; the secret comes from Vault at run time)
 
 Both jobs were created 2026-09-22, AFTER the secret was set and the functions
@@ -1268,6 +1328,10 @@ is one real e-mail to himself - it is listed in section 6 as the live proof of t
 
 ### daily-reminder
 ```powershell
+# !! WINDOWS POWERSHELL 5.1 (review of Prompt 38, 11/27): a curl.exe -d '<json>' body arrives with its inner quotes stripped
+# !! ({mode:offers,dryRun:true}); daily-reminder reads a body it cannot parse as {} - the LIVE hourly reminder, a real send at a
+# !! matching hour, and the 'nope' line below runs it too instead of answering 400. Run these lines from Git Bash only; from
+# !! PowerShell use the pg_net dry run in the SQL editor (section 3's records) instead.
 # no secret -> 401 before any work
 curl.exe -s -i -X POST "$URL/daily-reminder" -H "Content-Type: application/json" -d '{}' | Select-Object -First 1
 # a WRONG secret -> the same 401 (Prompt 16 B5: constant-time compare, SHA-256 both sides - a near miss costs what a miss costs; nothing read, nothing sent)
@@ -1299,7 +1363,8 @@ curl.exe -s -X POST "$URL/daily-reminder" -H "x-cron-secret: $SECRET" -H "Conten
 #       "results":[{"period":"Nov 2026 - Jan 2027","id":"<uuid>","action":"none"|"remind"|"close","reason":"no-trigger"|"remind:14"|"remind:3"|"close:today"|"close:overdue",
 #                   "days_to_close":N,"offers_close_at":"YYYY-MM-DD", ...on a remind/close day also "rollcall":[{"id":"s?","status":"submitted"|"rules_only"|"not_started","offered":N}],
 #                   "recipients":[{"person_id":"s?"|"coordinator-<id8>","status":"dry_run_composed"|"skipped_pref_off"|"skipped_no_email"}], on a reminder day "reminder":"first"|"middle"|"last"
-#                   (and "coordinators_error" if their read failed), and on the close day "summary":{"painted":["s?"],"added_vacations":["s?"],"following_rules":["s?"]},
+#                   (and "coordinators_error" if their read failed), and on the close day "summary":"<the close e-mail's words in one line>",
+#                   "rollcall_summary":{"painted":["s?"],"added_vacations":["s?"],"following_rules":["s?"]} (v12, Prompt 38 - v11 answered the lists as "summary"),
 #                   "period_status":"unchanged_dry_run","audit":"skipped_dry_run"}]}
 #   an ordinary morning: every period "action":"none" and "sent":0; "periods":0 when no row is upcoming.
 #   (Prompt 26: the rollcall statuses are the offer_status() keys, unchanged - not_started is what a person reads as
@@ -1315,16 +1380,16 @@ Central IS a real send. Use `dryRun` for verification. A LIVE
 `{"mode":"open-shifts"}` call IS a real send to every opted-in linked surgeon
 whenever `open` is non-zero, and it inserts the `notifications` row the board's
 "last announced" column reads - the Monday cron in section 4 is the intended caller.
-Proof after deploying: one dryRun POST through pg_net from the SQL editor (or the
-curl above) and quote the 200 body.
+Proof after deploying: one dryRun POST through pg_net from the SQL editor (the curl
+above from Git Bash only - see the warning at its top) and quote the 200 body.
 A LIVE
 `{"mode":"offers"}` call IS a real send on a reminder day (the heads-up to every
 pool surgeon with `schedule_updates_email` on, whatever his offer status, and on the
 first reminder to the office coordinators) and on the close day (it flips the
 period to `closed`, writes the `period.close` audit row and mails the scheduler /
 admin accounts); on any other day it reads and answers `sent: 0`. Proof after
-deploying: one dryRun POST through pg_net from the SQL editor (or the curl above)
-and quote the 200 body in the deploy record (section 3).
+deploying: one dryRun POST through pg_net from the SQL editor (the curl above from Git
+Bash only) and quote the 200 body in the deploy record (section 3).
 
 ### east-feed-refresh (Prompt 31 Part A - v1, deployed 2026-10-20 01:42:59 UTC)
 ```powershell
@@ -1435,6 +1500,13 @@ deploy line (`--no-verify-jwt --use-api`). The backup is the deployed v2 (the re
 main-window weeks without `data.eastLists`: the lists leave the cache until an in-app Refresh from Davenport, the app derives from
 published and stated weeks and Setup says the lists are not in the cache. No data and no database change is involved; the client
 needs no rollback.
+
+The close summary as text (section 3, "2026-11-27 - the close summary as text"; `daily-reminder` v12): `deploy-close-summary.sh`
+downloads the live function before it deploys, into `$env:USERPROFILE\projects\supa-silvis\backup-close-summary-<UTC stamp>\daily-reminder\index.ts`,
+and prints the rollback lines - copy that backup over the workdir's `supabase\functions\daily-reminder\index.ts`, then the deploy line
+(`--no-verify-jwt --use-api`). The backup is the deployed v11 (the retry stays). With v11 back, the next close writes its roll call
+as an object summary again, which the app's Activity log words from its lists (Prompt 38's client half). No data and no database
+change is involved; the client needs no rollback.
 
 `east-feed-refresh` (Prompt 31 Part A), in this order. Stop the job first, in the SQL editor:
 `select cron.unschedule('silvis-east-feed-daily');`. Then leave the function (it is gated and nothing else calls it)

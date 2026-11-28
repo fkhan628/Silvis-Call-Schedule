@@ -1235,6 +1235,7 @@ function CallSchedule() {
       // review of Do first 8 (10/2): the previous account's Recent errors go too (names, override reasons, HTTP bodies) -
       // the in-place card is a sign-in without a sign-out
       setErrorLog([]); setShowErrorLog(false);
+      setAuditEntries([]); setEastRefreshAudit({ state: "unread", rows: [] }); // Prompt 38: and its Activity log / East refresh rows
       // Prompt 30: the previous account's phone notifications on this device stop - its subscription is unsubscribed locally
       // (its token is dead, so its row cannot be deleted; the server drops it on the next 404 / 410) and other accounts'
       // flags go. Fire and forget; the re-arm for the new account runs on its own.
@@ -1421,6 +1422,8 @@ function CallSchedule() {
     setBiometricEnrolled(false); setBiometricPending(false);
     setIsScheduler(false);
     setErrorLog([]); setShowErrorLog(false); // review 9/27 Do first 8: the next person on this device never reads this one's errors
+    // Prompt 38 (review, 11/27): nor this account's Activity log rows / East refresh rows (only a load set them before)
+    setAuditEntries([]); setEastRefreshAudit({ state: "unread", rows: [] });
     dismissToast(); // review of Do first 8 (10/2): an error toast (up to 22 s now) does not stay over the sign-in card
     setSessionUnreached(""); // review of Do first 7 (10/2): a stale "Still couldn't reach" notice does not greet the next sign-in
   };
@@ -1516,7 +1519,8 @@ function CallSchedule() {
           actor_id: userProfile?.person_id || authUser?.id || null,
           actor_name: userProfile?.display_name || surgeons.find(s => s.id === userProfile?.person_id)?.name || "Unknown",
           action: action,
-          detail: { summary: summary, ...(details || {}) },
+          // Prompt 38 (Faraz 11/27): the summary is TEXT and comes last, so a details key cannot replace it with an object
+          detail: { ...(details || {}), summary: typeof summary === "string" ? summary : "" },
         }, { returning: "minimal" });
         if (error) { console.warn("audit log insert failed", error); return false; }
         return true;
@@ -1837,10 +1841,14 @@ function CallSchedule() {
   // through readAuthOnlyTable: without a fresh session token it answers null ("not read") and the current entries stay -
   // db.query's anon fallback would answer 200 + [] and show "No activity recorded yet" for a failed read.
   const loadAudit = async () => {
+    // Prompt 38 (review, 11/27): sign-out and the account switch empty the list, so an answer for the account that was
+    // signed in when the read started is dropped once another one (or nobody) is (refreshOwnProfile's rule)
+    const uid = authUserRef.current && authUserRef.current.id;
     setAuditLoading(true);
     try {
       const rows = await readAuthOnlyTable("audit_log", { order: "created_at.desc", limit: 150 });
-      if (rows === null) showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");
+      if (!authUserRef.current || authUserRef.current.id !== uid) { /* the account changed while the read ran: not its rows */ }
+      else if (rows === null) showToast("Couldn't load the activity log - your session token is missing or expired. Sign in again; the list was not refreshed.", "error");
       else setAuditEntries(rows);
     } catch (e) { console.warn("audit load failed", e); showToast("Couldn't load the activity log - check your connection.", "error"); }
     setAuditLoading(false);
@@ -1897,15 +1905,17 @@ function CallSchedule() {
     if (/Mac/i.test(ua)) return "Mac";
     return "other";
   };
+  // Prompt 38 (review, 11/27): also when the account or its role changes - sign-out empties the Activity log, and signing back
+  // in on Settings (the view stays) must read it again, never show "No activity recorded yet" for a list nobody read
   useEffect(() => {
     if (view === "settings" && isScheduler) { loadAudit(); loadSnapshots(); loadClientVersions(); }
-  }, [view]);
+  }, [view, isScheduler, authUser && authUser.id]);
   // Prompt 16 A7: a coordinator's Activity log = its own vacation / offer / availability rows (RLS audit_read_coord);
   // nothing else of the scheduler's Settings loads for it (no snapshots, no client versions - those reads would be a
   // silent 200 + [] under RLS).
   useEffect(() => {
     if (view === "settings" && isCoordinator) loadAudit();
-  }, [view, isCoordinator]);
+  }, [view, isCoordinator, authUser && authUser.id]); // Prompt 38 (review): the account too (see the scheduler's effect above)
 
   // --- Toast (non-blocking notifications) ---
   // Review 9/27 Do first 8: ONE visible slot and the newest shows at once (helpers.toastNext - an identical repeat of
@@ -2166,8 +2176,10 @@ function CallSchedule() {
   // readAuthOnlyTable: null (no fresh token) keeps what was read; a failure is marked, never an empty list.
   const loadEastRefreshAudit = async () => {
     if (!isScheduler || isPublicMode) return;
+    const uid = authUserRef.current && authUserRef.current.id; // Prompt 38 (review): a late answer for another account is dropped
     try {
       const rows = await readAuthOnlyTable("audit_log", { eq: { action: "east.refresh" }, order: "created_at.desc", limit: 10 });
+      if (!authUserRef.current || authUserRef.current.id !== uid) return;
       if (rows === null) { setEastRefreshAudit(s => ({ ...s, state: s.state === "ok" ? "ok" : "skipped" })); return; }
       setEastRefreshAudit({ state: "ok", rows });
     } catch (e) {
@@ -6672,7 +6684,7 @@ function CallSchedule() {
   };
   // Prompt 31 Part A (A3, decision 5): Setup > East feed's last-refresh line is read when the scheduler opens Setup (and after
   // each in-app refresh) - never on the poll.
-  useEffect(() => { if (view === "setup" && isScheduler && !isPublicMode) loadEastRefreshAudit(); }, [view, isScheduler, isPublicMode]);
+  useEffect(() => { if (view === "setup" && isScheduler && !isPublicMode) loadEastRefreshAudit(); }, [view, isScheduler, isPublicMode, authUser && authUser.id]); // Prompt 38 (review): + the account
   // Settings / Setup declutter review (9/27): Setup now opens with the (open) Generate card near the top, so the East
   // card sits screens below the fold - a one-shot scroll brings the deep link's target into view once Setup mounts.
   const scrollToCardRef = useRef(null);
@@ -7957,25 +7969,29 @@ function CallSchedule() {
             </div>
             {myNotifications.length === 0 ? (
               <p data-testid="notif-empty" data-read={notifsRead} style={{color:"#8a94a0",fontSize:13,textAlign:"center",padding:20}}>{notifsRead === "ok" ? "No notifications yet" : notifsRead === "failed" ? "Couldn't load the notifications - they are retried every minute." : "Notifications not loaded yet."}</p>
-            ) : myNotifications.map(n => {
+            ) : myNotifications.map(n => (
+              <CardGuard key={n.id} ck="alerts_row" css={css} line="This notification could not be shown.">
+              <GuardedRow render={() => {
+              // Prompt 38 (review): the row's own computation runs one fiber below its CardGuard (GuardedRow) - a throw here costs this row only
               const tabMap = {schedule_published:"calendar",schedule_changed:"calendar",manual_edit:"calendar",trade_submitted:"timeoff",trade_proposed:"timeoff",trade_accepted:"timeoff",trade_declined:"timeoff",trade_cancelled:"timeoff",trade_applied:"timeoff",vacation_logged:"timeoff",shift_reminder:"myschedule",open_shifts:"openshifts",shift_claimed:"calendar"};
-              const targetTab = tabMap[n.type] || null;
+              // Prompt 38: the map's OWN keys only - a row whose type is "constructor" / "valueOf" ... is no tab
+              const targetTab = typeof n.type === "string" && Object.prototype.hasOwnProperty.call(tabMap, n.type) ? tabMap[n.type] : null;
               const giveT = notifGiveTrade(n);                      // Prompt 19 S3: a pending give this account may answer
               const giveN = giveT ? tradeGroupOf(giveT).length : 0;
               const tradeT = giveT ? null : notifTradeProposal(n);   // a pending two-way trade this account is asked to answer
               const tradeN = tradeT ? tradeGroupOf(tradeT).length : 0;
               return (
-              <div key={n.id} data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();if(tabBarShown)scrollTopNow();}}}
+              <div data-testid="notif-row" data-type={n.type} onClick={()=>{if(targetTab && setView(targetTab)){setShowNotifs(false);markNotifsSeen();if(tabBarShown)scrollTopNow();}}}
                 style={{padding:"8px 10px",marginBottom:6,borderRadius:6,cursor:targetTab?"pointer":"default",background:n.created_at > notifLastSeen ? T.accentTint : "#f8f9fb",border:`1px solid ${n.created_at > notifLastSeen ? T.accent : "#e8ecf0"}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span style={{fontSize:12,fontWeight:600,color:"#1F2A3A"}}>{n.title}</span>
+                  <span style={{fontSize:12,fontWeight:600,color:"#1F2A3A"}}>{displayText(n.title)}</span>
                   <span style={{fontSize:10,color:"#a0a8b0"}}>{new Date(n.created_at).toLocaleDateString()}</span>
                 </div>
                 {/* Item E3 (Faraz 9/25): an open_shifts row posted before 9/25 may name 'East feed busy' / 'East-derived week' in
                     a slot's reason - read through helpers.openSlotsMessageCurrent it says 'not available' (the row is not rewritten) */}
                 {giveT
                   ? <p data-testid="notif-give-line" style={{fontSize:12,color:"#5B6B82",margin:"3px 0 0",lineHeight:1.4}}>{tradeGiveLine(tradeNamed(giveT), tradeUnitTag(giveT), mySurgeon)}</p>
-                  : <p style={{fontSize:12,color:"#5B6B82",margin:"3px 0 0",lineHeight:1.4}}>{n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message}</p>}
+                  : <p style={{fontSize:12,color:"#5B6B82",margin:"3px 0 0",lineHeight:1.4}}>{displayText(n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message)}</p>}
                 {giveT && (
                   <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
                     <button data-testid="notif-give-accept" disabled={!!tradeBusy} onClick={(e)=>{ e.stopPropagation(); acceptTrade(giveT); }} style={{...css.btn(true),padding:"6px 14px",fontSize:12,minHeight:36}}>{tradeBusy === giveT.id ? "Working" : giveN > 1 ? `Accept (${giveN} days)` : "Accept"}</button>
@@ -7991,7 +8007,9 @@ function CallSchedule() {
                 {targetTab && <span style={{fontSize:10,color:T.accentText,marginTop:3,display:"inline-block"}}>Tap to view</span>}
               </div>
               );
-            })}
+              }}/>
+              </CardGuard>
+            ))}
           </div>
         )}
 
@@ -9407,20 +9425,27 @@ function CallSchedule() {
                 <div style={{fontSize:12,color:"#8a94a0",padding:"6px 0"}}>No activity recorded yet.</div>
               ) : (
                 <div style={{maxHeight:420,overflowY:"auto"}}>
-                  {auditEntries.map(en => {
+                  {auditEntries.map(en => (
+                    <CardGuard key={en.id} ck="settings_audit_row" css={css} line="This entry could not be shown.">
+                    <GuardedRow render={() => {
                     const si = surgeons.findIndex(s => s.id === en.actor_id);
                     const c = si >= 0 ? rosterColors(surgeons[si], si) : null;
-                    const at = auditEntryText(en, auditGiveIds); // Prompt 19 S4: a give's rows read as a give
+                    // Prompt 19 S4: a give's rows read as a give. Prompt 38 (Faraz 11/27): summary / action are always text -
+                    // the morning run's object-form close of 11/23 in names - and each row has its own CardGuard, the row's
+                    // own computation (this function) one fiber below it in GuardedRow, so a throw here costs this row only.
+                    const at = auditEntryText(en, auditGiveIds, nameOf);
                     return (
-                      <div key={en.id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"7px 2px",borderBottom:"1px solid "+(dk?"#243240":"#eef1f4")}}>
-                        <span style={{flexShrink:0,fontSize:10,fontWeight:700,letterSpacing:0.4,padding:"2px 7px",borderRadius:5,background:c?c.tg:(dk?"#243240":"#eef1f4"),color:c?c.tx:"#5B6B82",border:`1px solid ${c?c.bd:(dk?"#2a3a48":"#DCE3EC")}`,minWidth:38,textAlign:"center"}}>{en.actor_name || "?"}</span>
+                      <div data-testid="audit-row" data-action={at.action} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"7px 2px",borderBottom:"1px solid "+(dk?"#243240":"#eef1f4")}}>
+                        <span style={{flexShrink:0,fontSize:10,fontWeight:700,letterSpacing:0.4,padding:"2px 7px",borderRadius:5,background:c?c.tg:(dk?"#243240":"#eef1f4"),color:c?c.tx:"#5B6B82",border:`1px solid ${c?c.bd:(dk?"#2a3a48":"#DCE3EC")}`,minWidth:38,textAlign:"center"}}>{displayText(en.actor_name) || "?"}</span>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:12.5,color:dk?"#c8d2dc":"#3a4a58",lineHeight:1.35}}>{at.summary}</div>
-                          <div style={{fontSize:10,color:"#9aa4ae",marginTop:1,fontFamily:mono}}>{fmtAuditTime(en.created_at)} - {at.action}</div>
+                          <div data-testid="audit-summary" style={{fontSize:12.5,color:dk?"#c8d2dc":"#3a4a58",lineHeight:1.35}}>{displayText(at.summary, at.action)}</div>
+                          <div style={{fontSize:10,color:"#9aa4ae",marginTop:1,fontFamily:mono}}>{fmtAuditTime(en.created_at)} - {displayText(at.action)}</div>
                         </div>
                       </div>
                     );
-                  })}
+                    }}/>
+                    </CardGuard>
+                  ))}
                 </div>
               )}
             </Collapsible>
@@ -10387,10 +10412,47 @@ function Collapsible({ title, ck, defaultOpen = false, summary = null, children,
       </div>
       {/* summary: a one-line status under the title while closed, aligned with the title text (chevron 10 + gap 8) */}
       {!open && summary != null && <div data-testid={"card-summary-" + ck} style={{ marginTop: 4, paddingLeft: 18 }}>{summary}</div>}
-      {open && <div style={{ marginTop: 12 }}>{children}</div>}
+      {open && <CardGuard ck={ck} css={css}><div style={{ marginTop: 12 }}>{children}</div></CardGuard>}
     </div>
   );
 }
+
+// Prompt 38 (Faraz 11/27): a render error stays in its own card or row. On 11/27 one audit row whose summary was an
+// object (the morning run's period.close of 11/23) threw React error #31 in Settings > Activity log, and the only
+// boundary - the app-wide one at the end of this file - replaced the WHOLE app ("Something went wrong"): every view,
+// and Settings' own Refresh / Export / Restore with it. CardGuard catches what its children throw while rendering and
+// shows one line in their place; the tab bar, the view and every other card stay usable. It wraps each Collapsible's
+// body (close the card and open it again to retry: the body mounts afresh) and each row of the two lists read from
+// jsonb rows (the Activity log, Alerts). React hands an error thrown while a component reconciles its OWN children to
+// the boundary ABOVE that component, so what a guard protects always sits one element down (the card's body div, the
+// row's div). line: the words shown in place (default: the card's); css: the app's styles (its errBox reads in both
+// themes - a light box with its own background); the message is read only when it is text, never coerced.
+const CARD_GUARD_BOX = { fontSize: 12, color: "#8a3030", background: "#fdeaea", border: "1px solid #e0a8a8", borderRadius: 6, padding: "8px 10px", lineHeight: 1.5 };
+// failed, not error, decides (review): a falsy thrown value (throw undefined / null / 0 / "") must show the line too, never
+// re-render the children that threw.
+class CardGuard extends React.Component {
+  constructor(props) { super(props); this.state = { failed: false, error: null }; }
+  static getDerivedStateFromError(error) { return { failed: true, error: error }; }
+  componentDidCatch(error, info) { try { console.error("Silvis: a card could not be shown (" + String(this.props.ck || "") + "):", error, info); } catch (e) { /* console unavailable */ } }
+  render() {
+    if (this.state.failed) {
+      const e = this.state.error;
+      const msg = e && typeof e.message === "string" ? e.message : (typeof e === "string" && e ? e : "unexpected error");
+      const box = this.props.css && this.props.css.errBox ? this.props.css.errBox : CARD_GUARD_BOX;
+      return (
+        <div data-testid={"card-error-" + String(this.props.ck || "")} role="alert" style={{ ...box, margin: "4px 0" }}>
+          {typeof this.props.line === "string" ? this.props.line : "This section could not be shown - it holds an entry of an unexpected shape. The rest of the app works; close this section and open it again to retry."}
+          <div style={{ fontFamily: (typeof mono !== "undefined" ? mono : "monospace"), fontSize: 10.5, marginTop: 3, wordBreak: "break-word", opacity: 0.85 }}>{msg.slice(0, 240)}</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+// A list row whose OWN computation (the helpers that read a jsonb row) runs one fiber below its CardGuard: render() is called in
+// GuardedRow's render, so what it throws reaches the guard above - not the app-wide boundary, as code in CallSchedule's own
+// render does (the Activity log and Alerts rows, Prompt 38 review). Usage: <CardGuard ...><GuardedRow render={() => ...}/></CardGuard>.
+function GuardedRow({ render }) { return render(); }
 
 // --- Rules-context helpers shared by the app and the day editor ---
 // buildContext never throws on well-formed data; on anything else the UI
@@ -14363,12 +14425,13 @@ function SeedImportCard({ css, state, onPick, onApply, nameOf }) {
 // A render exception anywhere in the tree would otherwise white-screen the
 // whole app - the worst possible failure for someone checking who's on call.
 class ErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(error) { return { error: error }; }
+  // Prompt 38 (review): failed decides, not error - a falsy thrown value must show this card too, never re-render the app
+  constructor(props) { super(props); this.state = { failed: false, error: null }; }
+  static getDerivedStateFromError(error) { return { failed: true, error: error }; }
   componentDidCatch(error, info) { try { console.error("App crashed:", error, info); } catch (e) { /* console unavailable */ } }
   render() {
-    if (this.state.error) {
-      var msg = (this.state.error && this.state.error.message) ? this.state.error.message : String(this.state.error);
+    if (this.state.failed) {
+      var msg = (this.state.error && typeof this.state.error.message === "string" && this.state.error.message) ? this.state.error.message : (typeof this.state.error === "string" && this.state.error ? this.state.error : "unexpected error");
       return React.createElement(
         "div",
         { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: (typeof font !== "undefined" ? font : "system-ui, sans-serif"), background: "#F6F8FB", boxSizing: "border-box" } },

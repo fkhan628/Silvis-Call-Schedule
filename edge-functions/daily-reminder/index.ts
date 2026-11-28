@@ -62,10 +62,17 @@
 //      endpoint is read); nothing is sent or written. The modes open-shifts
 //      and offers do not push (D8).
 //
-// TOKEN RACE RETRY (2026-10-26; v11 on base v10 - prepared, NOT deployed; edge-functions/README.md
+// TOKEN RACE RETRY (2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz; edge-functions/README.md
 // section 3 "2026-10-26 - the PGRST303 retry"): rest() sends the same call again after 1 s, then 3 s, when
 // PostgREST answers 401 PGRST303 ("JWT issued at future" - the platform's token race) - the @restRetry block
 // above rest(); every other answer as before.
+//
+// THE CLOSE SUMMARY AS TEXT (Prompt 38, Faraz 2026-11-27; v12 on base v11 - prepared, NOT deployed; edge-functions/README.md
+// section 3 "2026-11-27 - the close summary as text"): the offers close's period.close audit row carries a TEXT summary -
+// offersClosedLine(words), the close e-mail's own words (offersClosedText's lead and sections) in one line - and the three
+// roster-id lists under rollcall_summary; the run's answer the same. v11 wrote the lists as an OBJECT summary, which the
+// app's Activity log rendered as a React child (minified error #31): Settings crashed for the scheduler from the 11/23
+// close on. That row stays as it is (the app words it from its lists since Prompt 38).
 //
 // Dropped from Davenport on purpose: OneSignal (send-push does not exist in
 // the Silvis project - the reminder's phone push is Silvis's own Web Push, 6.
@@ -118,7 +125,9 @@
 // and the close summary are the plain-JS @offersMail block (unit-tested by
 // test/edge-functions.test.js). From offers_close_at on it flips the row to
 // 'closed' (compare-and-swap on status = upcoming), writes the audit row
-// period.close and e-mails the scheduler / admin accounts the roll call: who
+// period.close (its summary TEXT - the close e-mail's words in one line - and
+// the roster ids under rollcall_summary; Prompt 38, 11/27) and e-mails the
+// scheduler / admin accounts the roll call: who
 // PAINTED DAYS (offered days inside the period, with the count), who ADDED
 // VACATIONS (a time_off row overlapping the period, read with the service role
 // for the period's range, ranges clipped to it), and everyone else as
@@ -1718,6 +1727,19 @@ function offersClosedText(p, summary, nameOf) {
     tail: "Nothing was generated or published - open Setup, Generate, Periods when you are ready. A late vacation is entered under Time off; a late painted day can still be entered by the scheduler.",
   };
 }
+// The close's ONE line for its period.close audit row (Prompt 38, Faraz 11/27): the close e-mail's own words -
+// offersClosedText's lead, then each section's heading and items - as plain TEXT, which the app's Activity log shows as it
+// is ("-" for an empty section, the e-mail's own mark). w = offersClosedText(...); never anything but a string.
+function offersClosedLine(w) {
+  const o = w && typeof w === "object" ? w : {};
+  const text = function (v) { return typeof v === "string" ? v : ""; };
+  const secs = Array.isArray(o.sections) ? o.sections : [];
+  const parts = secs.map(function (s) {
+    const items = s && Array.isArray(s.items) ? s.items.filter(function (x) { return typeof x === "string" && x !== ""; }) : [];
+    return text(s && s.heading) + ": " + (items.length ? items.join("; ") : "-");
+  });
+  return (text(o.lead) || "Offers closed") + (parts.length ? ". " + parts.join(". ") : "") + ".";
+}
 // @offersMail-end
 
 // The two frames - the same title / colour / CTA as send-notification's offers_reminder / offers_closed categories
@@ -1889,8 +1911,11 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
     // BEFORE anything is written, and the period stays upcoming for the next run.
     const vacRows = await rest(`time_off?select=person_id,start_date,end_date&start_date=lte.${t.end_day}&end_date=gte.${t.start_day}&order=start_date.asc`);
     const summary = offersCloseSummary(roll, offersVacationRanges(Array.isArray(vacRows) ? vacRows : [], t.start_day, t.end_day, poolIds));
-    entry.summary = { painted: summary.painted.map((r: any) => r.id), added_vacations: summary.vacations.map((r: any) => r.id), following_rules: summary.following };
+    // Prompt 38 (Faraz 11/27): the roster-id lists ride under rollcall_summary; the summary is TEXT - the close e-mail's words
+    // in one line (offersClosedLine). v11's object summary crashed the app's Activity log (React #31).
+    entry.rollcall_summary = { painted: summary.painted.map((r: any) => r.id), added_vacations: summary.vacations.map((r: any) => r.id), following_rules: summary.following };
     const closedWords = offersClosedText({ label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at }, summary, nameOf);
+    entry.summary = offersClosedLine(closedWords);
     // Then flip the row (compare-and-swap on status), then the audit row, then
     // the summary. A dry run does none of the writes.
     let periodStatus = "unchanged_dry_run";
@@ -1914,7 +1939,7 @@ async function runOffers(now: { ymd: string; hour: number; weekday: string }, dr
           method: "POST", headers: { Prefer: "return=minimal" },
           body: JSON.stringify({
             actor_id: "cron", actor_name: "daily-reminder (offers)", action: "period.close",
-            detail: { period_id: period.id, label: period.label, offers_close_at: plan.offers_close_at, today, rollcall: roll, summary: entry.summary },
+            detail: { period_id: period.id, label: period.label, offers_close_at: plan.offers_close_at, today, rollcall: roll, summary: entry.summary, rollcall_summary: entry.rollcall_summary },
           }),
         });
         entry.audit = "inserted";

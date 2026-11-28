@@ -744,7 +744,8 @@ check("obUnitMates(slots, slot): the other OPEN days of the same unit in the sam
     assert.ok(ann.includes("reasons: boardReasons"), "5a composes from boardReasons");
     // review 9/25: an Alerts row posted before 9/25 (any origin - the app's 5a / 5b or the cron's feed row) is read through
     // openSlotsMessageCurrent in the feed and in the browser notification; the row itself is never rewritten
-    assert.ok(appSrc.includes('{n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message}</p>}'), "the Alerts feed reads an open_shifts message through openSlotsMessageCurrent");
+    // pin moved deliberately 11/27 (Prompt 38): the line prints through helpers.displayText (text only, never an object)
+    assert.ok(appSrc.includes('{displayText(n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message)}</p>}'), "the Alerts feed reads an open_shifts message through openSlotsMessageCurrent");
     assert.ok(appSrc.includes('newOnes.forEach(n => sendBrowserNotif(n.title || "Silvis Call Schedule", (n.type === "open_shifts" ? openSlotsMessageCurrent(n.message) : n.message) || "", `silvis-${n.id}`));'), "the browser notification reads it the same way");
     const daily = fs.readFileSync(path.join(ROOT, "edge-functions", "daily-reminder", "index.ts"), "utf8");
     assert.ok(!/OPEN_SLOT_REASON|openSlotReason\(|East feed busy|East-derived week|not available/.test(daily), "daily-reminder must not carry its own reason table or category words - it relays the stored sentence");

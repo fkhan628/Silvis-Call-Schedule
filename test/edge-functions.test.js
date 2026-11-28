@@ -54,6 +54,13 @@ const sha256Of = (rel) => require("crypto").createHash("sha256").update(fs.readF
 // stages (its NEW hash) - a source change moves this pin and that script's hash together. It becomes the deployed pin at the
 // deploy's record step.
 const EAST_LISTS_PREPARED_SHA256 = "0291ed8628defb4abc666b8093cdbf0705a6c3ef0011a9eba655eeedcbda461c";
+// 2026-11-27 (Prompt 38, the close summary as text - README section 3, "2026-11-27 - the close summary as text"): daily-reminder's
+// source changed, so it is no longer the deployed v11 (RETRY_DEPLOYED_SHA256 above stays the record of v11's bytes - the README
+// quotes it, and the deploy script's backup must equal it). Its header's retry wording flipped to deployed, as the flip rule says,
+// and the new paragraph reads "v12 on base v11 - prepared, NOT deployed". This is the PREPARED v12, raw bytes: the file the deploy
+// script stages (its NEW hash) - a source change moves this pin and that script's hash together. It becomes the deployed pin at
+// the deploy's record step.
+const CLOSE_TEXT_PREPARED_SHA256 = "2d95d090145d6c22d8a39eae499420e010b4e423ea5cc8c82d8c8096424cc8ca";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -1698,7 +1705,7 @@ check("P26: daily-reminder carries ONE plain-JS '@offersMail' block (beside the 
   const block = offersMailBlock();
   plainJs(block, "daily-reminder @offersMail");
   assert.strictEqual((drSrc.match(/^\/\/ @offersMail-start[ \t]*$/gm) || []).length, 1, "one block");
-  OFM = new Function(block + "\nreturn { offersReminderKind, offersCoordinators, offersHeadsUpPlan, offersHeadsUpText, offersVacationRanges, offersCloseSummary, offersClosedText, ofmDayLabel };")();
+  OFM = new Function(block + "\nreturn { offersReminderKind, offersCoordinators, offersHeadsUpPlan, offersHeadsUpText, offersVacationRanges, offersCloseSummary, offersClosedText, offersClosedLine, ofmDayLabel };")(); // + Prompt 38's offersClosedLine
   Object.keys(OFM).forEach((k) => assert.strictEqual(typeof OFM[k], "function", k + " is a function"));
   OTM = new Function(blockOf(drSrc, "daily-reminder", "offerTimeline") + "\nreturn { otmPoolIds, otmCronPlan, otmTimeline, otmRollcall, otmDaysBetween };")();
   assert.ok(drSrc.indexOf("// @offersMail-start") > drSrc.indexOf("// @offerTimeline-mirror-end"), "the words block sits after the mirror block (the mirror is untouched)");
@@ -1899,15 +1906,38 @@ check("P26 close summary words: subject 'Silvis call - <period> frozen <freeze>:
   assert.strictEqual(empty.subject, "Silvis call - Jan 2027 - Jun 2027 frozen Mon 11/23: 0 surgeons painted days, 0 added vacations, 2 following their rules");
 });
 
-check("P26 runOffers close source pins: time_off is read (service role, the period's range, select person_id,start_date,end_date) BEFORE the compare-and-swap, never written; the summary is offersCloseSummary(roll, offersVacationRanges(...)) rendered by buildOffersClosed from offersClosedText; entry.summary and the audit detail carry roster ids only; buildOffersClosed has no 'Never answered' / 'Submitted' / 'Go by my rules' section left", () => {
+// Prompt 38 (Faraz 11/27): v11 wrote the close's roll call into the period.close audit row as an OBJECT summary; the app's
+// Activity log rendered it as a React child (minified error #31) and Settings crashed for the scheduler from the 11/23 close.
+check("Prompt 38: offersClosedLine(words) - the period.close row's summary is the close e-mail's own words as ONE line of TEXT: offersClosedText's lead, then each section's heading and items ('-' for an empty section, the e-mail's mark); junk in, a string out (never an object's words, never String() of a jsonb value)", () => {
+  if (!OFM) throw new Error("@offersMail block did not load");
+  const s = { painted: [{ id: "s1", offered: 2 }, { id: "s2", offered: 1 }], vacations: [{ id: "s1", ranges: ["1/4-1/12"] }, { id: "s5", ranges: ["3/1-3/10", "6/29-6/30"] }, { id: "s6", ranges: ["2/14"] }], following: ["s3", "s4"] };
+  const w = OFM.offersClosedText(P26_PERIOD, s, (id) => P26_NAMES[id] || id);
+  assert.strictEqual(OFM.offersClosedLine(w), "Jan 2027 - Jun 2027 (Mon 1/4 to Wed 6/30) froze on Mon 11/23. Painted days: Khan - 2 days; Burchett - 1 day. Added vacations: Khan - 1/4-1/12; Fierce - 3/1-3/10, 6/29-6/30; Sarkar - 2/14. Following their rules: Acton; Philip.");
+  const empty = OFM.offersClosedText(P26_PERIOD, { painted: [], vacations: [], following: ["s1", "s2"] }, (id) => P26_NAMES[id]);
+  assert.strictEqual(OFM.offersClosedLine(empty), "Jan 2027 - Jun 2027 (Mon 1/4 to Wed 6/30) froze on Mon 11/23. Painted days: -. Added vacations: -. Following their rules: Khan; Burchett.", "an empty section reads '-'");
+  const BAD = () => JSON.parse('{"toString":"x"}'); // String() of it throws
+  [null, undefined, 5, "x", [], {}, { lead: BAD(), sections: BAD() }, { lead: "L", sections: [null, { heading: BAD(), items: [BAD(), 7, "ok"] }, { heading: "H", items: "nope" }] }].forEach((v, i) => {
+    let line;
+    assert.doesNotThrow(() => { line = OFM.offersClosedLine(v); }, "input " + i + " must not throw");
+    assert.ok(typeof line === "string" && !line.includes("[object Object]"), "input " + i + " -> text: " + line);
+  });
+  assert.strictEqual(OFM.offersClosedLine({ lead: "L", sections: [null, { heading: BAD(), items: [BAD(), 7, "ok"] }, { heading: "H", items: "nope" }] }), "L. : -. : ok. H: -.", "only string headings and items are printed");
+  assert.strictEqual(OFM.offersClosedLine(null), "Offers closed.", "no words -> a plain line, never empty");
+});
+
+check("P26 runOffers close source pins: time_off is read (service role, the period's range, select person_id,start_date,end_date) BEFORE the compare-and-swap, never written; the summary is offersCloseSummary(roll, offersVacationRanges(...)) rendered by buildOffersClosed from offersClosedText; entry.rollcall_summary and the audit detail's rollcall_summary carry roster ids only, entry.summary / the detail's summary is the close e-mail's words as TEXT (Prompt 38); buildOffersClosed has no 'Never answered' / 'Submitted' / 'Go by my rules' section left", () => {
   const i = drSrc.indexOf("async function runOffers("), j = drSrc.indexOf("\n// ------", i);
   const r = drSrc.slice(i, j);
   const iVac = r.indexOf("const vacRows = await rest(`time_off?select=person_id,start_date,end_date&start_date=lte.${t.end_day}&end_date=gte.${t.start_day}&order=start_date.asc`);");
   assert.ok(iVac > 0 && iVac < r.indexOf('method: "PATCH"'), "the time_off read sits before the CAS");
   assert.ok(iVac > r.indexOf('if (plan.action === "remind") {'), "and only on the close path (after the reminder branch's continue)");
   assert.ok(r.includes("const summary = offersCloseSummary(roll, offersVacationRanges(Array.isArray(vacRows) ? vacRows : [], t.start_day, t.end_day, poolIds));"), "summary = painted / vacations / following");
-  assert.ok(r.includes("entry.summary = { painted: summary.painted.map((r: any) => r.id), added_vacations: summary.vacations.map((r: any) => r.id), following_rules: summary.following };"), "entry.summary = roster ids only");
-  assert.ok(/detail: \{ period_id: period\.id, label: period\.label, offers_close_at: plan\.offers_close_at, today, rollcall: roll, summary: entry\.summary \}/.test(r), "the audit detail adds the ids-only summary");
+  // pins moved deliberately 11/27 (Prompt 38): the ids ride under rollcall_summary; the summary is TEXT - an object summary in
+  // the audit row crashed the app's Activity log (React #31) on the 11/23 close
+  assert.ok(r.includes("entry.rollcall_summary = { painted: summary.painted.map((r: any) => r.id), added_vacations: summary.vacations.map((r: any) => r.id), following_rules: summary.following };"), "entry.rollcall_summary = roster ids only");
+  assert.ok(r.includes("entry.summary = offersClosedLine(closedWords);") && r.indexOf("entry.summary = offersClosedLine(closedWords);") > r.indexOf("const closedWords = offersClosedText("), "entry.summary = the close e-mail's words in one line, built after the words");
+  assert.ok(!/entry\.summary = \{/.test(r) && r.split("entry.summary =").length - 1 === 1, "ONE entry.summary assignment, never an object");
+  assert.ok(/detail: \{ period_id: period\.id, label: period\.label, offers_close_at: plan\.offers_close_at, today, rollcall: roll, summary: entry\.summary, rollcall_summary: entry\.rollcall_summary \}/.test(r), "the audit detail: the text summary, and the ids under rollcall_summary");
   assert.ok(r.includes("const closedWords = offersClosedText({ label: period.label, start_day: t.start_day, end_day: t.end_day, offers_close_at: t.offers_close_at }, summary, nameOf);") && r.includes("buildOffersClosed(s.pid ? nameOf(s.pid) : \"scheduler\", closedWords, "), "the close mail is offersClosedText's words");
   const bc = drSrc.slice(drSrc.indexOf("function buildOffersClosed("), drSrc.indexOf("async function runOffers("));
   assert.ok(/words\.sections\.map\(/.test(bc) && /escHtml\(s\.heading\)/.test(bc) && /escHtml\(t\)/.test(bc), "buildOffersClosed renders the sections, escaped");
@@ -3797,7 +3827,10 @@ check("P34 edge-functions/README.md: the east-feed-refresh row names v3 as PREPA
   const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
   const i = s3.indexOf("### 2026-11-11 - the East week lists (east-feed-refresh v3; Prompt 34)");
   assert.ok(i > s3.indexOf("### 2026-10-26 - the PGRST303 retry") && s3.indexOf("### 2026-10-26 - the PGRST303 retry") > 0, "the subsection follows the retry's");
-  const rec = s3.slice(i), flat = rec.replace(/\s+/g, " ");
+  // bounded deliberately 11/27 (Prompt 38): section 3 has a later subsection now (the close summary as text) - this record ends at
+  // the next ### heading, so that subsection's own Status line (DEPLOYED once its record step lands) is not read as this one's
+  const j3 = s3.indexOf("\n### ", i + 10);
+  const rec = s3.slice(i, j3 < 0 ? undefined : j3), flat = rec.replace(/\s+/g, " ");
   assert.ok(flat.includes("*Status: PREPARED, NOT deployed - `east-feed-refresh` v3 on base v2.") && !/Status: DEPLOYED/.test(flat), "Status: PREPARED, NOT deployed");
   ["`backupMondays` (Fierce East primary -> Silvis backup all week)", "`fierceBackup` (Fierce East backup -> Silvis primary all week)", "no request is added",
     "`efIsMonday`, `eastListsFromBlob`, `eastCachedLists`, `eastListsGuard`, `eastListsGuardText`, `eastListsPlan` and `eastAttachLists`",
@@ -3815,6 +3848,28 @@ check("P34 edge-functions/README.md: the east-feed-refresh row names v3 as PREPA
   assert.ok(s5.includes("\"lists\":{\"trusted\":true,\"eastPrimary\":N,\"eastBackup\":N"), "section 5's dry-run sample names the lists block");
   const s7 = readme.slice(readme.indexOf("## 7."));
   assert.ok(s7.includes("The East week lists (section 3, \"2026-11-11 - the East week lists\"; `east-feed-refresh` v3)") && s7.includes("backup-east-lists-<UTC stamp>") && s7.includes("The backup is the deployed v2 (the retry stays)"), "section 7: the rollback of the lists deploy");
+  assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
+});
+// Prompt 38 (review, 11/27): the v12 records are pinned the way the v3 ones above are - the README cannot drift from
+// RETRY_DEPLOYED_SHA256 / CLOSE_TEXT_PREPARED_SHA256, the script or the record step's flip without a failure
+check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 deployed and v12 PREPARED, NOT deployed; section 3's '2026-11-27 - the close summary as text' says why, the change (offersClosedLine, the text summary, detail.rollcall_summary), the order (the client first), the deploy script and what it checks (the live copy = the deployed v11's bytes; not from :50 to :05; DEPLOY; --no-verify-jwt --use-api), the proof (the dry run's OWN pg_net row, the secret from Vault, never typed; never a curl.exe -d body from PowerShell 5.1) and the rollback; section 5's sample and warning and section 7's rollback name it; ASCII", () => {
+  const s3 = readme.slice(readme.indexOf("## 3."), readme.indexOf("## 4."));
+  const i = s3.indexOf("### 2026-11-27 - the close summary as text (daily-reminder v12; Prompt 38)");
+  assert.ok(i > 0 && i > s3.indexOf("### 2026-11-11 - the East week lists"), "the subsection follows the East lists'");
+  const j = s3.indexOf("\n### ", i + 10);
+  const rec = s3.slice(i, j < 0 ? undefined : j), flat = rec.replace(/\s+/g, " ");
+  assert.ok(flat.includes("*Status: PREPARED, NOT deployed - `daily-reminder` v12 on base v11.") && !/Status: DEPLOYED/.test(flat), "Status: PREPARED, NOT deployed");
+  ["`offersClosedLine(words)`", "`detail.rollcall_summary`", "The order: the client first", "`deploy-close-summary.sh`", "`--no-verify-jwt --use-api`", "DEPLOY in capital letters", "not from :50 to :05", "`" + RETRY_DEPLOYED_SHA256["daily-reminder"].slice(0, 12) + "...`", "The 11/23 row stays as it is"].forEach((s) => assert.ok(flat.includes(s), "the record names " + s));
+  assert.ok(flat.includes("body := '{\"mode\":\"offers\",\"dryRun\":true}'::jsonb") && flat.includes("vault.decrypted_secrets where name = 'silvis_cron_secret'") && flat.includes("like '{\"mode\":\"offers\",\"dry_run\":true,%'"), "the proof: the offers dry run through pg_net, the secret from Vault, read back by the dry run's OWN row");
+  assert.ok(!/like '\{"mode":"offers"%'/.test(rec), "never the old read-back that also matches the live 13:00 run's answer");
+  assert.ok(flat.includes("never a `curl.exe -d` body from PowerShell 5.1"), "the PowerShell 5.1 warning");
+  const row = readme.split("\n").find((l) => l.startsWith("| `daily-reminder` |")) || "";
+  assert.ok(row.includes("v11 (the PGRST303 retry, section 3's \"2026-10-26 - the PGRST303 retry\") deployed 2026-10-27 03:30:19 UTC") && row.includes("v12 (the close summary as text - Prompt 38, section 3's \"2026-11-27 - the close summary as text\") PREPARED, NOT deployed"), "the slug row: v11 deployed, v12 prepared");
+  const s5 = readme.slice(readme.indexOf("### daily-reminder\n```powershell"), readme.indexOf("### east-feed-refresh (Prompt 31 Part A"));
+  assert.ok(s5.includes("\"rollcall_summary\":{\"painted\":[\"s?\"],\"added_vacations\":[\"s?\"],\"following_rules\":[\"s?\"]}") && s5.includes("!! WINDOWS POWERSHELL 5.1"), "section 5: the sample's rollcall_summary and the PowerShell warning at the block's top");
+  assert.ok(!s5.includes("(or the curl above)") && !s5.includes("(or the\ncurl above)"), "no 'or the curl above' left without the warning");
+  const s7 = readme.slice(readme.indexOf("## 7."));
+  assert.ok(s7.includes("The close summary as text (section 3, \"2026-11-27 - the close summary as text\"; `daily-reminder` v12)") && s7.includes("backup-close-summary-<UTC stamp>\\daily-reminder\\index.ts") && s7.includes("The backup is the deployed v11 (the retry stays)"), "section 7: the rollback of the v12 deploy");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(rec), "the record is ASCII");
 });
 acheck("A2 handler (critic A7): Davenport answers NO vacation for FAK while the cache holds his ranges in the window (an RLS-blocked read looks the same) - the cache keeps every list (the in-app plan would have cleared them), no review is reset, the weeks and the extra leg still refresh, ok:false names FAK; a cached range only BEFORE the window is a real 'none' (trusted, the reset runs)", async () => {
@@ -4475,6 +4530,7 @@ function zWorld(over) {
     profiles: Z_PROFILES(), prefs: Z_PREFS(), subs: [], pushStatus: {}, mailStatus: 200, subsRead: 200,
   }, over || {});
   w.calls = []; w.mails = []; w.pushes = []; w.patches = []; w.deletes = []; w.subSelects = []; w.logs = [];
+  w.periodPatches = []; w.auditPosts = []; // Prompt 38: the offers world's writes
   return w;
 }
 function zFetch(w) {
@@ -4491,6 +4547,13 @@ function zFetch(w) {
       assert.strictEqual(hdr("Authorization"), "Bearer service-role-key-for-tests", "every read and write uses the service role");
       const table = u.pathname.slice(9), q = u.searchParams, sel = q.get("select");
       if (method === "GET") {
+        // Prompt 38: the offers mode's reads - answered only in an offers world (w.periods set), so the hourly tests are untouched
+        if (w.periods && table === "call_periods" && q.get("status") === "eq.upcoming") return ok(w.periods.filter((p) => p.status === "upcoming").map((p) => ({ ...p })));
+        if (w.periods && table === "call_offers") return ok(w.offerRows || []);
+        if (w.periods && table === "time_off") return ok(w.timeOff || []);
+        if (w.periods && table === "user_profiles" && q.get("person_id") === "not.is.null") return ok(w.profiles.filter((p) => p.person_id).map((p) => pick(p, sel)));
+        if (w.periods && table === "user_profiles" && q.get("role") === "in.(scheduler,admin)") return ok(w.profiles.filter((p) => p.role === "scheduler" || p.role === "admin").map((p) => pick(p, sel)));
+        if (w.periods && table === "notification_preferences" && sel === "person_id,schedule_updates_email") return ok(w.prefs.filter((p) => p.person_id).map((p) => pick(p, sel)));
         if (table === "schedule_days") return ok(w.day && q.get("day") === "eq." + w.day.day ? [w.day] : []);
         if (table === "call_schedule_data") return ok([{ data: { roster: w.roster } }]);
         if (table === "notification_preferences" && sel === "*") { const l = ids(q.get("person_id")); return ok(l ? w.prefs.filter((p) => p.person_id && l.indexOf(p.person_id) >= 0) : w.prefs); }
@@ -4503,6 +4566,17 @@ function zFetch(w) {
           w.subSelects.push(sel);
           return ok(w.subs.filter((s) => l.indexOf(s.profile_id) >= 0).map((s) => pick(s, sel)));
         }
+      } else if (w.periods && table === "call_periods" && method === "PATCH") {
+        // Prompt 38: the close's compare-and-swap (id + status=eq.upcoming, return=representation) - the rows it moved
+        const b = JSON.parse(o.body);
+        w.periodPatches.push({ query: decodeURIComponent(u.search), prefer: hdr("Prefer"), body: b });
+        const id = (q.get("id") || "").replace(/^eq\./, "");
+        const hit = w.periods.filter((p) => p.id === id && "eq." + p.status === q.get("status"));
+        hit.forEach((p) => Object.assign(p, b));
+        return ok(hit.map((p) => ({ ...p })));
+      } else if (w.periods && table === "audit_log" && method === "POST") {
+        w.auditPosts.push({ prefer: hdr("Prefer"), row: JSON.parse(o.body) });
+        return new Response(null, { status: 201 });
       } else if (table === "push_subscriptions") {
         const l = ids(q.get("id"));
         assert.ok(l && hdr("Prefer") === "return=minimal", "bookkeeping by row id, return=minimal");
@@ -4602,6 +4676,45 @@ function zOldEmail(w, hour, dryRun) {
 const zEmailPart = (b) => { const c = Object.assign({}, b); delete c.push; return c; };
 const Z_AT17 = "2026-10-20T22:00:00Z";   // Tue 10/20 17:00 CDT - the default reminder hour; tomorrow = Wed 10/21
 const zDecoded = async (w, keys, token) => Promise.all(w.pushes.filter((p) => p.endpoint === p30Fcm(token)).map(async (p) => JSON.parse(Buffer.from((await p30Decrypt(p.body, keys[p.endpoint])).plain.slice(0, -1)).toString("utf8"))));
+// Prompt 38 (Faraz 11/27): v11's offers close POSTed its period.close row with an OBJECT detail.summary, which the app's Activity
+// log rendered as a React child (#31). The close path run for real - the handler, types stripped, on the freeze day's clock,
+// against the fake PostgREST's offers world (call_periods, call_offers, time_off, the recipients, the CAS, the audit POST).
+acheck("Prompt 38: the REAL daily-reminder handler, mode offers on the freeze day - the dry run answers the close entry's summary as TEXT (offersClosedLine over offersClosedText's words) and the three id lists under rollcall_summary, writing and sending nothing; the live run makes ONE compare-and-swap PATCH and ONE audit_log POST whose detail.summary is that same string and detail.rollcall_summary the lists - never an object summary; the app's auditEntryText prints that row's summary as it is", async () => {
+  const { env } = await zEnv();
+  const NOW = "2026-11-23T13:00:05Z"; // 07:00 Central on the freeze day: the 13:00 UTC offers run
+  const P = () => ({ id: "p38-period-id", label: "Jan 2027 - Apr 2027", start_day: "2027-01-04", end_day: "2027-04-04", offers_close_at: "2026-11-23", publish_by: "2026-12-07", status: "upcoming", rules_only_ids: ["s5"] });
+  const OFFERS = [{ person_id: "s2", day: "2027-01-05", role_pref: "either" }, { person_id: "s3", day: "2027-02-01", role_pref: "primary" }, { person_id: "s3", day: "2027-02-02", role_pref: "backup" }];
+  const TOFF = [{ person_id: "s3", start_date: "2027-02-10", end_date: "2027-02-12" }];
+  const mk = () => zWorld({ periods: [P()], offerRows: OFFERS.map((r) => ({ ...r })), timeOff: TOFF.map((r) => ({ ...r })) });
+  const LISTS = { painted: ["s2", "s3"], added_vacations: ["s3"], following_rules: ["s1", "s4", "s5", "s6"] };
+  // the dry run
+  const w1 = mk();
+  const r1 = await zCall(zHandler(env, w1, NOW), { mode: "offers", dryRun: true });
+  assert.strictEqual(r1.status, 200, r1.text);
+  const e1 = (r1.body && Array.isArray(r1.body.results) ? r1.body.results : []).find((x) => x && x.id === "p38-period-id");
+  assert.ok(e1 && e1.action === "close", "the period closes today: " + r1.text.slice(0, 400));
+  assert.strictEqual(typeof e1.summary, "string", "the close entry's summary is TEXT: " + JSON.stringify(e1.summary));
+  assert.deepStrictEqual(e1.rollcall_summary, LISTS, "the three id lists ride under rollcall_summary");
+  assert.ok(e1.summary.startsWith("Jan 2027 - Apr 2027 (Mon 1/4 to Sun 4/4) froze on Mon 11/23. Painted days: Burchett - 1 day; Acton - 2 days. Added vacations: Acton - ") && e1.summary.endsWith(". Following their rules: Khan; Philip; Fierce; Sarkar."), "the close e-mail's words in one line: " + e1.summary);
+  assert.deepStrictEqual([w1.periodPatches.length, w1.auditPosts.length, w1.mails.length], [0, 0, 0], "a dry run writes and sends nothing");
+  // the live run
+  const w2 = mk();
+  const r2 = await zCall(zHandler(env, w2, NOW), { mode: "offers" });
+  assert.strictEqual(r2.status, 200, r2.text);
+  assert.strictEqual(w2.periodPatches.length, 1, "ONE compare-and-swap PATCH: " + JSON.stringify(w2.periodPatches));
+  assert.ok(/id=eq\.p38-period-id/.test(w2.periodPatches[0].query) && /status=eq\.upcoming/.test(w2.periodPatches[0].query) && w2.periodPatches[0].body.status === "closed", "the CAS on id + status upcoming -> closed");
+  assert.strictEqual(w2.auditPosts.length, 1, "ONE audit_log row");
+  const a = w2.auditPosts[0].row;
+  assert.deepStrictEqual([a.actor_id, a.actor_name, a.action], ["cron", "daily-reminder (offers)", "period.close"]);
+  assert.strictEqual(typeof a.detail.summary, "string", "detail.summary is TEXT - v11 POSTed an object here (React #31 in the app)");
+  assert.strictEqual(a.detail.summary, e1.summary, "the same words as the dry run's answer");
+  assert.deepStrictEqual(a.detail.rollcall_summary, LISTS, "the lists under detail.rollcall_summary");
+  assert.ok(Array.isArray(a.detail.rollcall) && a.detail.label === "Jan 2027 - Apr 2027" && a.detail.period_id === "p38-period-id", "the rest of the detail as before");
+  assert.ok(w2.mails.length >= 1 && w2.mails.every((m) => /^Silvis call - Jan 2027 - Apr 2027 frozen Mon 11\/23: /.test(m.subject)), "the close mail goes out as before: " + JSON.stringify(w2.mails));
+  // the app reads that row's summary as it is
+  const HP = require(path.join(ROOT, "helpers.js"));
+  assert.deepStrictEqual(HP.auditEntryText({ action: a.action, actor_id: a.actor_id, detail: a.detail }, [], (id) => Z_NAMES[id] || id), { summary: a.detail.summary, action: "period.close", give: false }, "the Activity log prints v12's row as it is");
+});
 acheck("revision z (3) handler: a live hourly run at 17:00 Central - the e-mail part of the answer and the e-mails sent equal the pre-z logic; the pushes: s2 (e-mail off, push on) on both his accounts, s1 (push off, e-mail on) not pushed, f1 / f2 at their hour (f2: no address, e-mail off - pushed, one notice per surgeon he follows), f3 (20:00) and f4 (push off) not; 201 sent, 410 deleted, 500 fail_count + 1; the decrypted payloads; a valid VAPID token; redirect manual; the answer's push lists; no endpoint / key / address / words out", async () => {
   if (!FOL) throw new Error("followers block did not load");
   const { v, env } = await zEnv();
@@ -4770,8 +4883,12 @@ check("revision z (4) source pins - daily-reminder: the push fan-out sits AFTER 
   // e7a345dab1b6ec2e68db2ed370c439a61a79484cec0078947bc582d2de22e82b) and the TOKEN RACE RETRY paragraph is the pending v11 on base v10 -
   // pin kept deliberately 10/27 (the deploy's record step): v11 is deployed (2026-10-27 03:30:19 UTC), the header kept as deployed
   assert.ok(/PHONE PUSH \(revision z, Faraz 10\/20[^)]*; v10 on base v9 - deployed 2026-10-22 23:18:10 UTC; README\n\/\/\s+section 3 "Deploy record - push reminders \(revision z\)"\)/.test(head), "the PHONE PUSH item records v10 as deployed 2026-10-22 23:18:10 UTC, the record named");
-  assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v11 on base v10 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(head), "the header keeps its as-deployed wording for the retry (v11 on base v10 - prepared, NOT deployed; v11 deployed 2026-10-27 03:30:19 UTC) until the next source change");
-  assert.strictEqual(sha256Of("edge-functions/daily-reminder/index.ts"), RETRY_DEPLOYED_SHA256["daily-reminder"], "edge-functions/daily-reminder/index.ts must stay byte-identical to the deployed v11 (the PGRST303 retry, deployed 2026-10-27 03:30:19 UTC - the staged file and the re-download) until the next deploy - a source change needs a new deploy and record, and this pin moves with it");
+  // pins moved deliberately 11/27 (Prompt 38, the next source change): the TOKEN RACE RETRY paragraph records v11 as deployed
+  // (2026-10-27 03:30:19 UTC), as the flip rule said; THE CLOSE SUMMARY AS TEXT paragraph is the pending v12 on base v11; the
+  // source is the PREPARED v12 (CLOSE_TEXT_PREPARED_SHA256) - RETRY_DEPLOYED_SHA256 keeps v11's bytes as the record
+  assert.ok(/^\/\/ TOKEN RACE RETRY \(2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz; edge-functions\/README\.md$/m.test(head), "the retry paragraph records v11 as deployed 2026-10-27 03:30:19 UTC (the flip at this source change)");
+  assert.ok(/^\/\/ THE CLOSE SUMMARY AS TEXT \(Prompt 38, Faraz 2026-11-27; v12 on base v11 - prepared, NOT deployed; edge-functions\/README\.md$/m.test(head), "the new paragraph: v12 on base v11 - prepared, NOT deployed");
+  assert.strictEqual(sha256Of("edge-functions/daily-reminder/index.ts"), CLOSE_TEXT_PREPARED_SHA256, "edge-functions/daily-reminder/index.ts is the prepared v12 (the close summary as text) - the file the deploy script stages; any source change moves this pin and that script's hash together");
   assert.ok(!/OneSignal push \(send-push/.test(head) && /shift_reminders_push/.test(head) && /VAPID_PUBLIC_KEY,\n\/\/ VAPID_PRIVATE_KEY, VAPID_SUBJECT/.test(head), "the header no longer says push was dropped; it names the switch and the three secrets");
   assert.ok(/^\/\/ Deploy: supabase functions deploy daily-reminder --workdir <linked dir> --project-ref bzhsroegtagqhutbnsrp --no-verify-jwt --use-api$/m.test(head), "the deploy line");
   assert.ok(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(drSrc), "the source is ASCII");
@@ -5035,12 +5152,15 @@ check("10/26 retry: no PostgREST call of this project bypasses rest() - each fun
     assert.strictEqual(s.split("restFetchWithRetry(").length - 1, 2, n + ": restFetchWithRetry defined once, called once (by rest())");
   });
 });
-check("10/26 retry (pins kept deliberately 10/27 - the deploy's record step): each header keeps its as-deployed wording, the retry as 'prepared, NOT deployed' on its base (calendar-sync v8 on v7, daily-reminder v11 on v10, east-feed-refresh v2 on v1, office-notifications v7 on v6, send-notification v13 on v12 - all five deployed 2026-10-27 03:30 UTC), and each source is the deployed file RETRY_DEPLOYED_SHA256 pins (raw bytes)", () => {
+check("10/26 retry (pins kept deliberately 10/27; flipped for east-feed-refresh 11/11 and daily-reminder 11/27): the three untouched functions (calendar-sync v8 on v7, office-notifications v7 on v6, send-notification v13 on v12 - deployed 2026-10-27 03:30 UTC) keep the as-deployed 'prepared, NOT deployed' wording and are the deployed files RETRY_DEPLOYED_SHA256 pins (raw bytes); east-feed-refresh and daily-reminder (FLIPPED) record the retry as deployed and are their prepared next version (PREPARED)", () => {
   const V = { "calendar-sync": [8, 7], "daily-reminder": [11, 10], "east-feed-refresh": [2, 1], "office-notifications": [7, 6], "send-notification": [13, 12] };
   // pin moved deliberately 11/11 (Prompt 34): east-feed-refresh met its next source change (the East week lists, v3 prepared), so
   // ITS header flipped to the deployed wording and its source is the prepared v3 (EAST_LISTS_PREPARED_SHA256); the other four are
   // untouched - still their deployed bytes, still the as-deployed wording
-  const FLIPPED = { "east-feed-refresh": "TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz;" };
+  // pin moved deliberately 11/27 (Prompt 38): daily-reminder met its next source change too (the close summary as text, v12
+  // prepared) - its header flipped the same way and its source is the prepared v12 (CLOSE_TEXT_PREPARED_SHA256)
+  const FLIPPED = { "east-feed-refresh": "TOKEN RACE RETRY (2026-10-26; v2 - deployed 2026-10-27 03:30:13 UTC by Faraz;", "daily-reminder": "TOKEN RACE RETRY (2026-10-26; v11 - deployed 2026-10-27 03:30:19 UTC by Faraz;" };
+  const PREPARED = { "east-feed-refresh": EAST_LISTS_PREPARED_SHA256, "daily-reminder": CLOSE_TEXT_PREPARED_SHA256 };
   Object.entries(RETRY_FNS).forEach(([n, s]) => {
     const head = s.slice(0, s.indexOf("\nimport "));
     const [v, base] = V[n];
@@ -5049,7 +5169,7 @@ check("10/26 retry (pins kept deliberately 10/27 - the deploy's record step): ea
     if (FLIPPED[n]) {
       assert.strictEqual(head.split(FLIPPED[n]).length - 1, 1, n + ": the header records the retry (v" + v + ") as deployed - once");
       assert.strictEqual(head.split(pending).length - 1, 0, n + ": the as-deployed 'prepared, NOT deployed' wording for the retry is gone (the flip)");
-      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), EAST_LISTS_PREPARED_SHA256, n + ": the source is the prepared v3 (the East week lists) - RETRY_DEPLOYED_SHA256 keeps the deployed v2's bytes as the record");
+      assert.strictEqual(sha256Of("edge-functions/" + n + "/index.ts"), PREPARED[n], n + ": the source is its prepared next version (east-feed-refresh v3, the East week lists; daily-reminder v12, the close summary as text) - RETRY_DEPLOYED_SHA256 keeps the deployed bytes as the record");
       return;
     }
     assert.strictEqual(head.split(pending).length - 1, 1, n + ": the header names v" + v + " on base v" + base + ", prepared, NOT deployed - once");

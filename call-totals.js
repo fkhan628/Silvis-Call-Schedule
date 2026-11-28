@@ -326,7 +326,7 @@ function callTotalsCardModel(totals, inputs) {
 }
 
 // callTotalsCardFor(args) -> the card's model, the ONE call the Mine card makes (args: callTotalsInputs'). Crash-safe
-// by contract: it runs while the app renders and the only error boundary is the whole app's, so anything that throws
+// by contract: it runs while the app renders and the only error boundary above it is the whole app's, so anything that throws
 // on malformed data comes back { ok:false, error } - the card then says "Totals unavailable", never zeros.
 function callTotalsCardFor(args) {
   try {
