@@ -16323,6 +16323,18 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       assert.deepStrictEqual(plainA(m.st.v), { state: "unread", rows: [] }, "Prompt 38 review 2: a failure that lands after the account changed is dropped (never the new account's line marked failed)");
       m = make(true, false, ROW, { id: "u1" }); await m.fn();
       assert.deepStrictEqual(plainA(m.st.v), { state: "ok", rows: ROW }, "the same account re-read as a new object (same id) keeps its answer");
+      // the account is the render's authUser (fix-check of review 2): the two cases where it differs from the ref at the start
+      const makeE = (renderId, refStart, refDuring) => {
+        const st = { v: { state: "unread", rows: [] } };
+        const ref = { current: refStart };
+        const fn = new Function("isScheduler", "isPublicMode", "readAuthOnlyTable", "setEastRefreshAudit", "console", "authUserRef", "authUser", body + "\nreturn loadEastRefreshAudit;")(
+          true, false, async () => { if (refDuring !== undefined) ref.current = refDuring; return ROW; }, (v) => { st.v = typeof v === "function" ? v(st.v) : v; }, { warn: () => {} }, ref, { id: renderId });
+        return { st, fn };
+      };
+      let e2 = makeE("u2", { id: "u1" }, { id: "u2" }); await e2.fn();
+      assert.deepStrictEqual(plainA(e2.st.v), { state: "ok", rows: ROW }, "the render is u2, the ref says u1 then u2: kept");
+      e2 = makeE("u1", { id: "u2" }); await e2.fn();
+      assert.deepStrictEqual(plainA(e2.st.v), { state: "unread", rows: [] }, "the render is u1, the ref already says u2: dropped");
       for (const [sc, pb] of [[false, false], [true, true]]) { m = make(sc, pb, ROW); await m.fn(); assert.strictEqual(m.st.reads.length, 0, "no read for " + (sc ? "?public=1" : "a non-scheduler")); }
     });
     await acheckA("Prompt 38 review 2 loadAudit (lifted): the Activity log read through readAuthOnlyTable - an answer is adopted with auditState 'ok'; null (no fresh token) keeps the entries, toasts and marks 'skipped' (an 'ok' stays 'ok'); a failure toasts and marks 'failed' (never 'No activity recorded yet'); an answer OR a failure that lands after the account changed (or signed out) is dropped - no entries, no state, no toast; the account is the render's authUser", async () => {
@@ -16356,6 +16368,20 @@ check("snapshots.normalizePayload accepts the daily shape and rejects the rest w
       }
       m = make(ROWS, { id: "u1" }); await m.fn();
       assert.deepStrictEqual([m.st.entries, m.st.state], [ROWS, "ok"], "the same account as a new object (same id): kept");
+      // the account is the RENDER'S authUser, never the ref's value when the read starts (fix-check of review 2): a render of u2
+      // whose ref still says u1 (the mirror effect not yet run) and then u2 keeps its answer; a render of u1 whose ref already says
+      // u2 drops it - a loader that took its account from the ref would do the opposite both times
+      const make2 = (renderId, refStart, refDuring) => {
+        const st = { entries: "untouched", state: "unread", toasts: [] };
+        const ref = { current: refStart };
+        const fn = new Function("authUser", "authUserRef", "readAuthOnlyTable", "setAuditLoading", "setAuditEntries", "setAuditState", "showToast", "console", "auditReadSeqRef", body + "\nreturn loadAudit;")(
+          { id: renderId }, ref, async () => { if (refDuring !== undefined) ref.current = refDuring; return ROWS; }, () => {}, (v) => { st.entries = v; }, (v) => { st.state = typeof v === "function" ? v(st.state) : v; }, (msg, kind) => st.toasts.push([msg, kind]), { warn: () => {} }, { current: 0 });
+        return { st, fn };
+      };
+      let m2 = make2("u2", { id: "u1" }, { id: "u2" }); await m2.fn();
+      assert.deepStrictEqual([m2.st.entries, m2.st.state], [ROWS, "ok"], "the render is u2, the ref says u1 then u2: u2's answer is kept");
+      m2 = make2("u1", { id: "u2" }); await m2.fn();
+      assert.deepStrictEqual([m2.st.entries, m2.st.state, m2.st.toasts.length], ["untouched", "unread", 0], "the render is u1, the ref already says u2: dropped");
       // overlapping reads (two Refreshes): only the NEWEST lands and clears Loading - an older answer, or an older failure, landing last is dropped
       for (const late of [[{ id: "old" }], new Error("HTTP 500")]) {
         const st = { entries: "untouched", state: "unread", loading: [], toasts: [] };

@@ -1203,12 +1203,17 @@ Placeholders: `$URL = "https://bzhsroegtagqhutbnsrp.supabase.co/functions/v1"`,
 `$SECRET` = the CRON_SECRET value (from your password manager, never from a file
 in this repo), `$JWT` = a signed-in SCHEDULER session token (in the app,
 DevTools -> Application -> Local Storage -> `silvis-auth-token`). Use `curl.exe`
-in PowerShell (the `curl` alias is Invoke-WebRequest). A JSON body that passes a
-function's gate never goes as `curl.exe -d '<json>'`: Windows PowerShell 5.1 strips
-the inner double quotes of a native argument, so the function receives broken JSON
-(review of Prompt 38, 11/28) - such lines use `Invoke-RestMethod -Body '<json>'`
-(or `Invoke-WebRequest` when only the status is read), which passes the body as
-written; east-feed-refresh's lines pipe it through curl.exe's stdin.
+in PowerShell (the `curl` alias is Invoke-WebRequest). Windows PowerShell 5.1 strips
+the inner double quotes of a native argument, so a `curl.exe -d '<json>'` body
+arrives as broken JSON (review of Prompt 38, 11/28). The functions behind the CRON
+secret must never get one: daily-reminder v11 and office-notifications read a broken
+body as `{}` - a LIVE send - so their lines past the gate use `Invoke-RestMethod
+-Body '<json>'` (or `Invoke-WebRequest` when only the status is read), which passes
+the body as written, and east-feed-refresh's lines pipe it through curl.exe's stdin.
+send-notification answers a broken body 400 ("JSON body required") and sends nothing,
+so its lines below stay `curl.exe -d` - from Windows PowerShell 5.1 they answer that
+400 instead of what they test: run them from Git Bash (or send the body with
+`Invoke-WebRequest`).
 
 ### calendar-sync (unauthenticated GET)
 ```powershell

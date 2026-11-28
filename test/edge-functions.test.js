@@ -3876,8 +3876,11 @@ check("Prompt 38 edge-functions/README.md: the daily-reminder row names v11 depl
   // quotes and v11 daily-reminder / office-notifications read the broken body as {} (a LIVE send); those lines use
   // Invoke-RestMethod / Invoke-WebRequest (or east-feed-refresh's stdin)
   const s5all = readme.slice(readme.indexOf("## 5. Verification"), readme.indexOf("## 6. Invocations"));
-  const risky = s5all.split("\n").filter((l) => /^curl\.exe /.test(l) && l.includes("-H \"x-cron-secret: $SECRET\"") && / -d \x27/.test(l));
-  assert.deepStrictEqual(risky, [], "section 5: no curl.exe -d body past a gate: " + risky.join(" | ").slice(0, 300));
+  // daily-reminder v11 and office-notifications read a broken body as {} (a LIVE send): no curl.exe -d line reaches either past a
+  // gate - the cron secret or a JWT (fix-check of review 2); send-notification refuses a broken body (400) and keeps its lines
+  const risky = s5all.split("\n").filter((l) => /^curl\.exe /.test(l) && /\$URL\/(daily-reminder|office-notifications)\b/.test(l) && / -d \x27/.test(l) && (l.includes("-H \"x-cron-secret: $SECRET\"") || l.includes("Authorization: Bearer")));
+  assert.deepStrictEqual(risky, [], "section 5: no curl.exe -d body past a gate to daily-reminder / office-notifications: " + risky.join(" | ").slice(0, 300));
+  assert.ok(s5all.includes("send-notification answers a broken body 400 (\"JSON body required\") and sends nothing") && s5all.includes("The functions behind the CRON"), "the intro scopes the rule to the cron-gated functions and says what send-notification does");
   ["'{\"dryRun\":true}'", "'{\"mode\":\"open-shifts\",\"dryRun\":true}'", "'{\"mode\":\"offers\",\"dryRun\":true}'", "'{\"mode\":\"digest\",\"dryRun\":true}'", "'{\"mode\":\"rebaseline\"}'"].forEach((b) => assert.ok(s5all.split("\n").some((l) => l.startsWith("Invoke-RestMethod -Method Post -Uri \"$URL/") && l.includes("-Headers @{ \"x-cron-secret\" = $SECRET } -ContentType \"application/json\" -Body " + b)), "section 5: " + b + " goes through Invoke-RestMethod"));
   ["'{\"mode\":\"nope\"}'", "'{\"mode\":\"publish\"}'"].forEach((b) => assert.ok(s5all.split("\n").some((l) => l.startsWith("try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri \"$URL/") && l.includes("-Body " + b + ").StatusCode } catch { [int]$_.Exception.Response.StatusCode }")), "section 5: " + b + " reads only the status, through Invoke-WebRequest"));
   assert.ok(s5all.split("!! WINDOWS POWERSHELL 5.1").length - 1 === 2 && s5all.includes("v12 answers it 400 (it fails closed - section 3)"), "the warning at the top of both blocks (daily-reminder and office-notifications)");
@@ -4618,7 +4621,9 @@ async function zCall(handler, body, secret) {
   const headers = new Headers({ "content-type": "application/json" });
   if (secret !== null) headers.set("x-cron-secret", secret === undefined ? Z_SECRET : secret);
   const raw = typeof body === "string" ? body : JSON.stringify(body);
-  const res = await handler({ method: "POST", url: Z_URL + "/functions/v1/daily-reminder", headers, text: async () => raw, json: async () => JSON.parse(raw) });
+  // the runtime's Request.text() is a UTF-8 decode, which drops ONE leading byte-order mark (fix-check of review 2): so does this
+  const decoded = new TextDecoder().decode(new TextEncoder().encode(raw));
+  const res = await handler({ method: "POST", url: Z_URL + "/functions/v1/daily-reminder", headers, text: async () => decoded, json: async () => JSON.parse(decoded) });
   const text = await res.text();
   let parsed = null;
   try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
@@ -4738,7 +4743,7 @@ acheck("Prompt 38: the REAL daily-reminder handler, mode offers on the freeze da
 acheck("Prompt 38 review 2: the REAL daily-reminder handler fails closed on its body - text that does not parse (a curl.exe -d body from Windows PowerShell 5.1 arrives as {mode:offers,dryRun:true}), an empty body, null, an array, a scalar, an unknown key (a typo: dryrun) answers 400 before ANY read or send (v11 ran the LIVE hourly reminder on such a body); one byte-order mark and CRLF around the JSON (PowerShell's pipe) are accepted; the crons' bodies in jsonb's text form pass", async () => {
   const { env } = await zEnv();
   const BOM = String.fromCharCode(0xfeff);
-  const bad = ["{mode:offers,dryRun:true}", "{dryRun:true}", "", " ", "null", "[]", "\"x\"", "5", "true", "{\"dryrun\":true}", "{\"mode\":\"offers\",\"dryRun\":true,\"x\":1}", BOM + BOM + "{}"];
+  const bad = ["{mode:offers,dryRun:true}", "{dryRun:true}", "", " ", "null", "[]", "\"x\"", "5", "true", "{\"dryrun\":true}", "{\"mode\":\"offers\",\"dryRun\":true,\"x\":1}"]; // (no double byte-order mark here: the runtime's Request.text() already decodes one away - UTF-8 decode - and the function strips one more, so two pass in production; review 2)
   for (const b of bad) {
     const w = zWorld();
     const r = await zCall(zHandler(env, w, Z_AT17), b);
@@ -4749,6 +4754,10 @@ acheck("Prompt 38 review 2: the REAL daily-reminder handler fails closed on its 
   // the reasons name what was wrong
   const why = async (b) => (await zCall(zHandler(env, zWorld(), Z_AT17), b)).body.error;
   assert.ok(/\(it is not JSON\)/.test(await why("{mode:offers,dryRun:true}")) && /\(got null\)/.test(await why("null")) && /\(got an array\)/.test(await why("[]")) && /\(unknown key \"dryrun\"\)/.test(await why("{\"dryrun\":true}")), "the 400 says why");
+  // a DOUBLE byte-order mark: the runtime's decode drops one, the function the other - accepted, as deployed v12 accepts it
+  const wb = zWorld();
+  const rb = await zCall(zHandler(env, wb, Z_AT17), BOM + BOM + "{\"dryRun\":true}");
+  assert.ok(rb.status === 200 && rb.body && rb.body.dry_run === true && wb.mails.length === 0, "a double BOM: the dry run ran: " + rb.text.slice(0, 160));
   // PowerShell's pipe: one byte-order mark and CRLF around a good body - accepted (the dry run runs and sends nothing)
   const w1 = zWorld();
   const r1 = await zCall(zHandler(env, w1, Z_AT17), BOM + "{\"dryRun\":true}\r\n");

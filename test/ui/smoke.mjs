@@ -2943,16 +2943,17 @@ try {
       } else {
         // (2) the Alerts rows (the wide nav's Alerts button opens the panel over the page)
         await gp.click(ALERTS_BTN);
-        await gp.waitForSelector("[data-testid=notif-panel]", { timeout: 8000 });
+        // (the fix-check of review 2: an Alerts row that crashes the app leaves no panel - the waits never throw past the crash verdict)
+        await gp.waitForSelector("[data-testid=notif-panel], [data-testid=card-error-alerts_row], [data-testid=notif-row]", { timeout: 8000 }).catch(() => {});
         await gp.waitForSelector("[data-testid=card-error-alerts_row], [data-testid=notif-row]", { timeout: 8000 }).catch(() => {});
         await gp.waitForTimeout(400);
+        const c2 = await crashedNow();
         const n = await gp.evaluate(() => ({
           titles: Array.from(document.querySelectorAll("[data-testid=notif-panel] [data-testid=notif-row]")).map(r => (r.textContent || "").trim()),
           errs: Array.from(document.querySelectorAll("[data-testid=notif-panel] [data-testid=card-error-alerts_row]")).map(e => (e.textContent || "").trim()),
           otherErrs: Array.from(document.querySelectorAll("[data-testid^=card-error-]")).map(e => e.getAttribute("data-testid")).filter(t => t !== "card-error-settings_audit_row" && t !== "card-error-alerts_row"),
           counts: window.__p38g,
         }));
-        const c2 = await crashedNow();
         await gp.screenshot({ path: path.join(OUT, "p38-guard-alerts.png"), fullPage: false });
         if (!c2.crashed && c2.tabs) { await gp.keyboard.press("Escape").catch(() => {}); await gp.click('button[aria-label="Close notifications"]', { timeout: 2000 }).catch(() => {}); }
         // (3) the app stays: the Calendar opens on the same page (a short wait - a crashed page has no tab to click)
